@@ -1,4 +1,4 @@
-import type { RangeOption, SettingsResponse } from '../types'
+import type { RangeOption, SettingsResponse, SystemAboutResponse } from '../types'
 
 const retentionOptions: Array<{ value: RangeOption, label: string, detail: string }> = [
   { value: '6h', label: '6 小时', detail: '轻量测试环境，数据占用最少。' },
@@ -7,7 +7,7 @@ const retentionOptions: Array<{ value: RangeOption, label: string, detail: strin
   { value: '7d', label: '7 天', detail: '当前上限，保留一周趋势。' }
 ]
 
-export function SystemSettingsPage({ settings, selectedRetention, saving, message, error, onSelectRetention, onSave }: { settings?: SettingsResponse, selectedRetention: RangeOption, saving: boolean, message?: string, error?: string, onSelectRetention: (retention: RangeOption) => void, onSave: () => void }) {
+export function SystemSettingsPage({ settings, about, selectedRetention, saving, message, error, onSelectRetention, onSave }: { settings?: SettingsResponse, about?: SystemAboutResponse, selectedRetention: RangeOption, saving: boolean, message?: string, error?: string, onSelectRetention: (retention: RangeOption) => void, onSave: () => void }) {
   return (
     <section aria-label="系统设置" className="soft-panel">
       <div className="soft-panel-header px-5 py-5">
@@ -53,14 +53,36 @@ export function SystemSettingsPage({ settings, selectedRetention, saving, messag
           {error ? <p className="mt-3 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm font-black text-danger">{error}</p> : null}
         </section>
 
-        <aside className="soft-card p-4 text-sm font-bold leading-6 text-muted-foreground">
-          <p className="text-xs font-black tracking-[0.18em] text-muted-foreground">说明</p>
-          <ul className="mt-3 space-y-3">
-            <li className="rounded-2xl border border-border/80 bg-surface/70 px-4 py-3">最大保留时间目前限制为 7 天，避免 SQLite 指标表无限增长。</li>
-            <li className="rounded-2xl border border-border/80 bg-surface/70 px-4 py-3">历史记录页的可查询范围会跟随这个设置。</li>
-            <li className="rounded-2xl border border-border/80 bg-surface/70 px-4 py-3">配置文件仍作为首次启动默认值；后台保存后以数据库设置为准。</li>
-          </ul>
-        </aside>
+        <div className="space-y-4">
+          <aside className="soft-card p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-black tracking-[0.18em] text-primary">About</p>
+                <h3 className="mt-1 text-lg font-black text-foreground">关于 MizuPanel</h3>
+                <p className="mt-2 text-sm font-bold text-muted-foreground">当前版本</p>
+                <p className="mt-1 font-mono text-2xl font-black text-foreground">{about ? `v${about.version}` : '加载中'}</p>
+              </div>
+              <a
+                href={about?.github_url || 'https://github.com/LeoKon3/MizuPanel'}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="打开 GitHub 仓库"
+                className="soft-button inline-flex h-11 w-11 shrink-0 items-center justify-center border border-border bg-card text-foreground hover:bg-surface focus:outline-none focus:ring-4 focus:ring-primary/20"
+              >
+                <GitHubMark className="h-5 w-5" />
+              </a>
+            </div>
+          </aside>
+
+          <aside className="soft-card p-4 text-sm font-bold leading-6 text-muted-foreground">
+            <p className="text-xs font-black tracking-[0.18em] text-muted-foreground">说明</p>
+            <ul className="mt-3 space-y-3">
+              <li className="rounded-2xl border border-border/80 bg-surface/70 px-4 py-3">最大保留时间目前限制为 7 天，避免 SQLite 指标表无限增长。</li>
+              <li className="rounded-2xl border border-border/80 bg-surface/70 px-4 py-3">历史记录页的可查询范围会跟随这个设置。</li>
+              <li className="rounded-2xl border border-border/80 bg-surface/70 px-4 py-3">配置文件仍作为首次启动默认值；后台保存后以数据库设置为准。</li>
+            </ul>
+          </aside>
+        </div>
       </div>
     </section>
   )
@@ -68,4 +90,12 @@ export function SystemSettingsPage({ settings, selectedRetention, saving, messag
 
 function retentionLabel(value: RangeOption) {
   return retentionOptions.find((option) => option.value === value)?.label ?? value
+}
+
+function GitHubMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" fill="currentColor">
+      <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.09 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2.14c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.28-1.67-1.28-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.34.95.1-.74.4-1.25.73-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.18-3.08-.12-.29-.51-1.46.11-3.04 0 0 .96-.31 3.16 1.18.92-.25 1.9-.38 2.87-.39.97.01 1.95.14 2.87.39 2.19-1.49 3.15-1.18 3.15-1.18.63 1.58.24 2.75.12 3.04.74.8 1.18 1.83 1.18 3.08 0 4.42-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.13v3.16c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
+    </svg>
+  )
 }

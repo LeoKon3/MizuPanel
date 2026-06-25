@@ -1,7 +1,0 @@
-{"type":"server-started","port":52170,"host":"0.0.0.0","url_host":"172.18.51.122","url":"http://172.18.51.122:52170","screen_dir":"/root/code/go/MizuPanel/.superpowers/brainstorm/190420-1782141586/content","state_dir":"/root/code/go/MizuPanel/.superpowers/brainstorm/190420-1782141586/state"}
-{"type":"screen-added","file":"/root/code/go/MizuPanel/.superpowers/brainstorm/190420-1782141586/content/k8s-detail-layout-options.html"}
-{"type":"screen-added","file":"/root/code/go/MizuPanel/.superpowers/brainstorm/190420-1782141586/content/k8s-detail-fields-v2.html"}
-{"type":"screen-added","file":"/root/code/go/MizuPanel/.superpowers/brainstorm/190420-1782141586/content/k8s-detail-fields-v3-full.html"}
-{"type":"screen-added","file":"/root/code/go/MizuPanel/.superpowers/brainstorm/190420-1782141586/content/k8s-detail-fields-v4-soft.html"}
-{"type":"screen-added","file":"/root/code/go/MizuPanel/.superpowers/brainstorm/190420-1782141586/content/k8s-detail-fields-v5-green.html"}
-{"type":"server-stopped","reason":"idle timeout"}

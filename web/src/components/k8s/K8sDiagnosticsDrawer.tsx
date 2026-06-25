@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { CheckCircle2, Copy, Pencil, RefreshCw, Save, X } from 'lucide-react'
 
 import { executeK8sResourceAction, fetchK8sDiagnostics } from '../../api/k8s'
-import type { K8sDiagnostics, K8sResourceActionRequest, K8sResourceKind } from '../../types'
+import type { K8sDiagnostics, K8sPod, K8sResourceActionRequest, K8sResourceKind } from '../../types'
 import { K8sStatusBadge } from './K8sStatusBadge'
 
 type DiagnosticsTab = 'overview' | 'events' | 'yaml' | 'describe' | 'logs'
@@ -20,6 +20,8 @@ type K8sDiagnosticsDrawerProps = {
   onToast: (message: string, type: 'success' | 'error') => void
   onOpenLogs: (namespace: string, name: string) => void
   onResourceChanged?: () => void
+  relatedPods?: K8sPod[]
+  onSwitchResource?: (kind: K8sResourceKind, namespace: string, name: string) => void
 }
 
 const kindLabels: Record<K8sResourceKind, string> = {
@@ -53,7 +55,7 @@ async function copyToClipboard(value: string): Promise<void> {
   if (!copied) throw new Error('浏览器拒绝复制')
 }
 
-export function K8sDiagnosticsDrawer({ clusterId, resource, open, onClose, onToast, onOpenLogs, onResourceChanged }: K8sDiagnosticsDrawerProps) {
+export function K8sDiagnosticsDrawer({ clusterId, resource, open, onClose, onToast, onOpenLogs, onResourceChanged, relatedPods = [], onSwitchResource }: K8sDiagnosticsDrawerProps) {
   const [diagnostics, setDiagnostics] = useState<K8sDiagnostics>()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
@@ -192,9 +194,11 @@ export function K8sDiagnosticsDrawer({ clusterId, resource, open, onClose, onToa
               <DiagnosticsContent
                 activeTab={activeTab}
                 diagnostics={diagnostics}
+                relatedPods={relatedPods}
                 onCopy={copyText}
                 onEditYAML={openYamlEditor}
                 onOpenLogs={() => onOpenLogs(resource.namespace, resource.name)}
+                onSwitchResource={onSwitchResource}
               />
             )}
           </div>
@@ -218,7 +222,7 @@ export function K8sDiagnosticsDrawer({ clusterId, resource, open, onClose, onToa
   )
 }
 
-function DiagnosticsContent({ activeTab, diagnostics, onCopy, onEditYAML, onOpenLogs }: { activeTab: DiagnosticsTab; diagnostics: K8sDiagnostics; onCopy: (label: string, value: string) => void; onEditYAML: () => void; onOpenLogs: () => void }) {
+function DiagnosticsContent({ activeTab, diagnostics, relatedPods, onCopy, onEditYAML, onOpenLogs, onSwitchResource }: { activeTab: DiagnosticsTab; diagnostics: K8sDiagnostics; relatedPods: K8sPod[]; onCopy: (label: string, value: string) => void; onEditYAML: () => void; onOpenLogs: () => void; onSwitchResource?: (kind: K8sResourceKind, namespace: string, name: string) => void }) {
   if (activeTab === 'events') {
     return <EventsPane events={diagnostics.events || []} />
   }
@@ -239,10 +243,10 @@ function DiagnosticsContent({ activeTab, diagnostics, onCopy, onEditYAML, onOpen
       </section>
     )
   }
-  return <OverviewPane diagnostics={diagnostics} />
+  return <OverviewPane diagnostics={diagnostics} relatedPods={relatedPods} onSwitchResource={onSwitchResource} />
 }
 
-function OverviewPane({ diagnostics }: { diagnostics: K8sDiagnostics }) {
+function OverviewPane({ diagnostics, relatedPods, onSwitchResource }: { diagnostics: K8sDiagnostics; relatedPods: K8sPod[]; onSwitchResource?: (kind: K8sResourceKind, namespace: string, name: string) => void }) {
   return (
     <div className="space-y-4">
       <section className="soft-card p-5">
@@ -256,6 +260,7 @@ function OverviewPane({ diagnostics }: { diagnostics: K8sDiagnostics }) {
 
       <KeyValueSection title="摘要" values={diagnostics.summary || {}} />
       <KeyValueSection title="Labels" values={diagnostics.metadata || {}} />
+      <RelatedPodsSection pods={relatedPods} onSwitchResource={onSwitchResource} />
 
       {diagnostics.containers && diagnostics.containers.length > 0 ? (
         <section className="soft-card p-5">
@@ -287,6 +292,52 @@ function OverviewPane({ diagnostics }: { diagnostics: K8sDiagnostics }) {
       ) : null}
     </div>
   )
+}
+
+function RelatedPodsSection({ pods, onSwitchResource }: { pods: K8sPod[]; onSwitchResource?: (kind: K8sResourceKind, namespace: string, name: string) => void }) {
+  if (!pods || pods.length === 0) return null
+  const issuePods = pods.filter((pod) => pod.status !== 'Running' || !isPodReady(pod.ready) || pod.restarts > 0)
+  const visiblePods = issuePods.length > 0 ? issuePods : pods.slice(0, 5)
+  return (
+    <section className="soft-card border-warning/20 bg-warning/5 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-base font-black text-foreground">关联 Pod 状态</h3>
+          <p className="mt-1 text-xs font-bold text-muted-foreground">{issuePods.length > 0 ? `${issuePods.length} 个 Pod 需要关注` : `${pods.length} 个关联 Pod`}</p>
+        </div>
+      </div>
+      <div className="mt-3 space-y-2">
+        {visiblePods.map((pod) => (
+          <div key={`${pod.namespace}/${pod.name}`} className="rounded-2xl border border-border/80 bg-card/85 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-foreground" title={pod.name}>{pod.name}</p>
+                <p className="mt-1 text-xs font-bold text-muted-foreground">{pod.ready} · 重启 {pod.restarts} · {pod.node || '未调度'}</p>
+              </div>
+              <div className="flex min-w-0 items-center gap-2">
+                <K8sStatusBadge status={pod.status} />
+                {onSwitchResource ? (
+                  <button
+                    type="button"
+                    aria-label={`查看 Pod 诊断 ${pod.name}`}
+                    onClick={() => onSwitchResource('pod', pod.namespace, pod.name)}
+                    className="soft-button shrink-0 border border-primary/25 bg-primary/10 px-3 py-1.5 text-xs font-black text-primary hover:bg-primary/15"
+                  >
+                    诊断
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function isPodReady(ready: string) {
+  const [readyCount, totalCount] = ready.split('/').map((value) => Number.parseInt(value, 10))
+  return Number.isFinite(readyCount) && Number.isFinite(totalCount) && totalCount > 0 && readyCount === totalCount
 }
 
 function KeyValueSection({ title, values }: { title: string; values: Record<string, string> }) {

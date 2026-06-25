@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, K8sClustersResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, K8sClustersResponse, SystemAboutResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -70,6 +70,10 @@ export function getNodes(): Promise<NodesResponse> {
 
 export function getSettings(): Promise<SettingsResponse> {
   return request<SettingsResponse>('/api/settings')
+}
+
+export function getSystemAbout(): Promise<SystemAboutResponse> {
+  return request<SystemAboutResponse>('/api/system/about')
 }
 
 export function updateSettings(settings: SettingsUpdate): Promise<SettingsResponse> {

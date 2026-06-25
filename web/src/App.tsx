@@ -2,7 +2,7 @@ import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState }
 import { X } from 'lucide-react'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 
-import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, login, logout, readNodeFile, rebootNode, restartAgent, setUnauthorizedHandler, startSSHUninstall, updateSettings, uploadNodeFile, writeNodeFile } from './api/client'
+import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, setUnauthorizedHandler, startSSHUninstall, updateSettings, uploadNodeFile, writeNodeFile } from './api/client'
 import { BrandLogo } from './components/BrandLogo'
 import { MetricCard } from './components/MetricCard'
 import { formatBytes, formatPercent, formatSpeed } from './lib/format'
@@ -16,7 +16,7 @@ import { TerminalPage } from './pages/TerminalPage'
 import { K8sClustersPage } from './pages/K8sClustersPage'
 import { K8sClusterDetailPage } from './pages/K8sClusterDetailPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
-import type { DockerContainer, DockerSnapshotResponse, InstallPlatform, Metric, Node, ProcessSnapshotResponse, RangeOption, SettingsResponse } from './types'
+import type { DockerContainer, DockerSnapshotResponse, InstallPlatform, Metric, Node, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse } from './types'
 
 function decodeRouteNodeID(value?: string) {
   if (!value) return undefined
@@ -143,6 +143,7 @@ export default function App() {
   const [installCommandLoading, setInstallCommandLoading] = useState(false)
   const [installCommandOpen, setInstallCommandOpen] = useState(false)
   const [settings, setSettings] = useState<SettingsResponse>()
+  const [systemAbout, setSystemAbout] = useState<SystemAboutResponse>()
   const [settingsRetention, setSettingsRetention] = useState<RangeOption>('6h')
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsMessage, setSettingsMessage] = useState<string>()
@@ -230,6 +231,21 @@ export default function App() {
       })
       .catch((err: unknown) => {
         if (!cancelled) setSettingsError(err instanceof Error ? err.message : '系统设置加载失败')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [page])
+
+  useEffect(() => {
+    if (page !== 'settings') return
+    let cancelled = false
+    getSystemAbout()
+      .then((response) => {
+        if (!cancelled) setSystemAbout(response)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setSettingsError(err instanceof Error ? err.message : '系统信息加载失败')
       })
     return () => {
       cancelled = true
@@ -960,11 +976,11 @@ export default function App() {
               {installCommandDialog}
 
               {page === 'overview' ? (
-                <OverviewPage nodes={nodes} onlineNodes={onlineNodes} />
+                <OverviewPage nodes={nodes} onlineNodes={onlineNodes} onAddServer={showInstallCommand} />
               ) : page === 'history' ? (
                 <HistoryPage nodes={nodes} selectedNodeID={selectedNodeID} metrics={metrics} range={range} settings={settings} onSelectNode={setSelectedNodeID} onRangeChange={setRange} />
               ) : page === 'settings' ? (
-                <SystemSettingsPage settings={settings} selectedRetention={settingsRetention} saving={settingsSaving} message={settingsMessage} error={settingsError} onSelectRetention={setSettingsRetention} onSave={saveSettings} />
+                <SystemSettingsPage settings={settings} about={systemAbout} selectedRetention={settingsRetention} saving={settingsSaving} message={settingsMessage} error={settingsError} onSelectRetention={setSettingsRetention} onSave={saveSettings} />
               ) : page === 'alerts' ? (
                 <AlertsPage nodes={nodes} />
               ) : page === 'k8s' ? (

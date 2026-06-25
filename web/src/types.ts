@@ -22,6 +22,11 @@ export type SettingsUpdate = {
   metrics_retention: RangeOption
 }
 
+export type SystemAboutResponse = {
+  version: string
+  github_url: string
+}
+
 export type Metric = {
   id: number
   node_id: string

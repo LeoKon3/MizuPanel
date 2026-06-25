@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { createContainerExecSession, createInstallCommand, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodePath, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, startSSHInstall, startSSHUninstall, updateSettings, uploadNodeFile, writeNodeFile } from './client'
+import { createContainerExecSession, createInstallCommand, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodePath, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, startSSHInstall, startSSHUninstall, updateSettings, uploadNodeFile, writeNodeFile } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -70,6 +70,19 @@ describe('api client', () => {
     })
     expect(current.metrics_retention).toBe('6h')
     expect(updated.metrics_retention).toBe('24h')
+  })
+
+  test('fetches system about information', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      version: '0.1.0',
+      github_url: 'https://github.com/LeoKon3/MizuPanel'
+    })))
+
+    const about = await getSystemAbout()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/system/about')
+    expect(about.version).toBe('0.1.0')
+    expect(about.github_url).toBe('https://github.com/LeoKon3/MizuPanel')
   })
 
   test('creates linux install commands without a session request header', async () => {

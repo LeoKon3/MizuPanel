@@ -26,9 +26,11 @@ export function K8sStatusBadge({ status }: K8sStatusBadgeProps) {
         ? 'border-danger/20 bg-danger/10 text-danger'
         : 'border-border bg-muted text-muted-foreground'
 
+  const label = status || 'Unknown'
+
   return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-black ${className}`}>
-      {status || 'Unknown'}
+    <span className={`inline-flex max-w-full min-w-0 items-center truncate rounded-full border px-2.5 py-1 text-xs font-black ${className}`} title={label}>
+      {label}
     </span>
   )
 }

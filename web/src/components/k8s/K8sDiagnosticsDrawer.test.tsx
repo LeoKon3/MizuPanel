@@ -130,4 +130,40 @@ describe('K8sDiagnosticsDrawer', () => {
     expect(onToast).toHaveBeenCalledWith('YAML保存成功', 'success')
     expect(onResourceChanged).toHaveBeenCalled()
   })
+
+  test('surfaces related unhealthy pods for workload pending diagnosis', async () => {
+    const onSwitchResource = vi.fn()
+    vi.mocked(fetchK8sDiagnostics).mockResolvedValue({
+      success: true,
+      diagnostics: {
+        ...diagnostics,
+        kind: 'deployment',
+        name: 'api',
+        status: '0/1 ready',
+        events: [],
+      },
+    })
+
+    render(
+      <K8sDiagnosticsDrawer
+        clusterId="cluster-1"
+        resource={{ kind: 'deployment', namespace: 'default', name: 'api' }}
+        relatedPods={[
+          { name: 'api-abc', namespace: 'default', status: 'Pending', ready: '0/1', restarts: 0, age: '2m', node: '', workload_kind: 'deployment', workload_name: 'api' },
+        ]}
+        open
+        onClose={vi.fn()}
+        onToast={vi.fn()}
+        onOpenLogs={vi.fn()}
+        onSwitchResource={onSwitchResource}
+      />
+    )
+
+    await screen.findByText('关联 Pod 状态')
+    expect(screen.getByText('api-abc')).toBeInTheDocument()
+    expect(screen.getByText('Pending')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 Pod 诊断 api-abc' }))
+    expect(onSwitchResource).toHaveBeenCalledWith('pod', 'default', 'api-abc')
+  })
 })

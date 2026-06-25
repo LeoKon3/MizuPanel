@@ -32,6 +32,19 @@ All notable changes to MizuPanel will be documented in this file.
 - Added notification channel buttons for DingTalk, Feishu, and WeCom in the alert rule form.
 - Added Dashboard "告警规则" page with rule list, create/edit/delete forms, and enable/disable controls.
 - Added alert icon to Dashboard sidebar navigation.
+- Added Kubernetes cluster management across Agent kubectl handling, protocol messages, Server storage/service/API, and Dashboard pages.
+- Added Kubernetes cluster connection dialog, cluster list page, cluster detail page, and Pod logs modal.
+- Added Kubernetes resource views for Namespaces, Nodes, Pods, Deployments, StatefulSets, DaemonSets, Services, and Ingresses.
+- Added Kubernetes diagnostics drawer with overview, Events, Describe, YAML, logs, related Pod status, and YAML dry-run/apply editing.
+- Added Kubernetes current Pod/container resource observation from metrics-server and compact node resource summaries with capacity, allocatable, usage, and Pod count.
+- Added workload Pod expansion views for Deployments, StatefulSets, and DaemonSets with related Pod resource/status breakdown.
+- Added cluster-level Kubernetes manifest apply flow with dry-run support through REST API, Server Agent Hub, Agent kubectl client, and frontend client.
+- Added Kubernetes create resource modal for Deployment, Pod, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, ConfigMap, Secret, PVC, and custom YAML.
+- Added advanced Kubernetes resource creation options for namespaces, multi-container workloads, init containers, commands/args, environment variables, ConfigMap/Secret refs, probes, resources, volumes, scheduling, security context, update strategy, Service ports, Ingress routing, PVC storage, Job policy, CronJob policy, and StatefulSet volume claim templates.
+- Added manual alert history resolution plus resolved-alert single and bulk deletion APIs and Dashboard controls.
+- Added `/api/system/about` and `VERSION`-backed system metadata for Dashboard settings.
+- Added GitHub repository link and version display to the System Settings page.
+- Added refreshed README screenshot gallery and separate detailed configuration/screenshot documentation pages in Chinese and English.
 
 ### Changed
 
@@ -40,6 +53,23 @@ All notable changes to MizuPanel will be documented in this file.
 - Session storage is in-memory; Server restart requires re-login.
 - Alert engine runs in background goroutine, checks all enabled rules every 30 seconds by default.
 - Alert state is memory-only; service restart loses tracking state but preserves history records.
+- Changed the add-host flow to focus on generated curl/PowerShell install commands for the single-host dialog.
+- Changed the Dashboard navigation and branding with the soft-tech logo, simplified main nav labels, and hidden global history/log entries while preserving their routes.
+- Changed Kubernetes filters to use namespace dropdown selection and resource search patterns that keep namespace filtering separate from name/status searching.
+- Changed Kubernetes row actions to use softer body-portaled "more" menus so table actions remain usable near scroll boundaries.
+- Changed Kubernetes table density so deeper CPU/memory/container details live in drawers or expanded rows instead of crowding the main tables.
+- Changed Kubernetes YAML display/editing to remove noisy managed-fields output from normal viewing and require dry-run before saving edits.
+- Reworked `README.md` and `README.en.md` as visual product introductions with release-package deployment first, current screenshots, and detailed setup moved to docs pages.
+- Updated screenshot assets to match the current Dashboard, host, Kubernetes, create-resource, and alert interfaces.
+
+### Fixed
+
+- Fixed Kubernetes cluster detail navigation, empty/null cluster response handling, and connection timeout behavior.
+- Fixed Overview "添加服务器" quick action so it opens the existing add-host dialog instead of doing nothing/use a browser alert.
+- Fixed long Kubernetes status badges overflowing table and drawer layouts.
+- Fixed alert history rule names so renamed rules are reflected when history is listed.
+- Fixed disabled alert rules so currently active alerts are resolved instead of remaining active indefinitely.
+- Fixed resolved alert cleanup so active alerts cannot be deleted before being resolved.
 
 ### Security
 

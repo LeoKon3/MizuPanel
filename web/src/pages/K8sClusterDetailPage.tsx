@@ -97,7 +97,7 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
     namespace: '',
     podName: '',
   })
-  const [diagnosticsDrawer, setDiagnosticsDrawer] = useState<{ open: boolean; kind: K8sResourceKind; namespace: string; name: string } | null>(null)
+  const [diagnosticsDrawer, setDiagnosticsDrawer] = useState<{ open: boolean; kind: K8sResourceKind; namespace: string; name: string; relatedPods?: K8sPod[] } | null>(null)
   const [createResourceOpen, setCreateResourceOpen] = useState(false)
   const clusterRequestSeq = useRef(0)
   const resourceRequestSeq = useRef(0)
@@ -274,11 +274,11 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
   useEffect(() => {
     const agentOnline = cluster?.node_status ? cluster.node_status === 'online' : true
     if (!cluster || cluster.status !== 'online' || !agentOnline) return
-    if (!NAMESPACE_SCOPED_TABS.has(activeTab)) return
+    if (!NAMESPACE_SCOPED_TABS.has(activeTab) && !createResourceOpen) return
     if (namespaces.length > 0 || namespacesLoading) return
 
     loadNamespaceOptions()
-  }, [activeTab, cluster, loadNamespaceOptions, namespaces.length, namespacesLoading])
+  }, [activeTab, cluster, createResourceOpen, loadNamespaceOptions, namespaces.length, namespacesLoading])
 
   useEffect(() => {
     if (previousNamespaceRef.current === namespace) return
@@ -353,8 +353,13 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
     ingresses: summary?.ingress_count ?? ingresses.length,
   }
 
+  const relatedPodsFor = (kind: K8sResourceKind, namespace: string, name: string) => {
+    if (kind === 'pod') return []
+    return safePods.filter((pod) => pod.namespace === namespace && pod.workload_kind === kind && pod.workload_name === name)
+  }
+
   const openDiagnostics = (kind: K8sResourceKind, namespace: string, name: string) => {
-    setDiagnosticsDrawer({ open: true, kind, namespace, name })
+    setDiagnosticsDrawer({ open: true, kind, namespace, name, relatedPods: relatedPodsFor(kind, namespace, name) })
   }
 
   return (
@@ -379,10 +384,14 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
         clusterId={clusterId}
         open={Boolean(diagnosticsDrawer?.open)}
         resource={diagnosticsDrawer ? { kind: diagnosticsDrawer.kind, namespace: diagnosticsDrawer.namespace, name: diagnosticsDrawer.name } : undefined}
+        relatedPods={diagnosticsDrawer?.relatedPods || []}
         onClose={() => setDiagnosticsDrawer(null)}
         onToast={(message, type) => setToast({ message, type })}
         onOpenLogs={(namespace, name) => {
           setLogsModal({ open: true, namespace, podName: name })
+        }}
+        onSwitchResource={(kind, namespace, name) => {
+          setDiagnosticsDrawer({ open: true, kind, namespace, name, relatedPods: relatedPodsFor(kind, namespace, name) })
         }}
         onResourceChanged={() => loadActiveResource()}
       />

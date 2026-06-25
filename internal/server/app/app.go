@@ -100,6 +100,7 @@ func NewHandler(deps Dependencies) http.Handler {
 		sshRunner = sshops.NewCommandRunner()
 	}
 	mux.Handle("/api/auth/", apiRouter)
+	mux.Handle("/api/system/", apiRouter)
 	mux.Handle("/api/settings", apiRouter)
 	mux.Handle("/api/nodes", apiRouter)
 	mux.Handle("/api/alerts/", apiRouter)

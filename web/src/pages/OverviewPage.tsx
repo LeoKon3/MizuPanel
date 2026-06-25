@@ -8,11 +8,12 @@ import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianG
 type OverviewPageProps = {
   nodes: Node[]
   onlineNodes: number
+  onAddServer: () => void
 }
 
 type MetricType = 'cpu' | 'memory' | 'disk'
 
-export function OverviewPage({ nodes, onlineNodes }: OverviewPageProps) {
+export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPageProps) {
   const [k8sClusters, setK8sClusters] = useState<K8sCluster[]>([])
   const [alertHistory, setAlertHistory] = useState<AlertHistory[]>([])
   const [alertRulesCount, setAlertRulesCount] = useState(0)
@@ -360,7 +361,7 @@ export function OverviewPage({ nodes, onlineNodes }: OverviewPageProps) {
         <div className="soft-panel p-4">
           <h2 className="mb-3 text-sm font-black uppercase tracking-[0.1em] text-muted-foreground">快捷操作</h2>
           <div className="grid grid-cols-2 gap-3">
-            <QuickActionButton icon={<Plus size={24} />} label="添加服务器" color="blue" onClick={() => alert('添加服务器功能待实现')} />
+            <QuickActionButton icon={<Plus size={24} />} label="添加服务器" color="blue" onClick={onAddServer} />
             <QuickActionButton icon={<Bell size={24} />} label="告警规则" color="orange" onClick={() => window.location.href = '/alerts'} />
             <QuickActionButton icon={<Settings size={24} />} label="系统设置" color="green" onClick={() => window.location.href = '/settings'} />
             <QuickActionButton icon={<Box size={24} />} label="K8s 集群" color="cyan" onClick={() => window.location.href = '/k8s/clusters'} />

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import App from './App'
@@ -58,7 +58,11 @@ vi.mock('./api/client', () => ({
   getNodeProcesses: vi.fn(async () => ({ node_id: 'node-1', collected_at: 0, error: '', processes: [] })),
   getNodeDocker: vi.fn(async () => ({ node_id: 'node-1', collected_at: 0, available: false, error: '', containers: [] })),
   getSettings: vi.fn(async () => ({ metrics_retention: '6h', metrics_retention_seconds: 21600, max_metrics_retention: '7d' })),
+  getSystemAbout: vi.fn(async () => ({ version: '0.1.0', github_url: 'https://github.com/LeoKon3/MizuPanel' })),
   updateSettings: vi.fn(async () => ({ metrics_retention: '6h', metrics_retention_seconds: 21600, max_metrics_retention: '7d' })),
+  getAlertHistory: vi.fn(async () => ({ history: [] })),
+  getAlertRules: vi.fn(async () => ({ rules: [] })),
+  getK8sClusters: vi.fn(async () => ({ clusters: [] })),
   createInstallCommand: vi.fn(async () => ({ command: 'curl install', install_token: 'install-token' })),
   getNodeFiles: vi.fn(async () => ({ path: '/', entries: [] })),
   readNodeFile: vi.fn(async () => ({ path: '/tmp/a', content: '', editable: true })),
@@ -78,6 +82,7 @@ vi.mock('./api/client', () => ({
 
 describe('App', () => {
   beforeEach(() => {
+    window.history.pushState({}, '', '/')
     vi.clearAllMocks()
   })
 
@@ -170,6 +175,17 @@ describe('App', () => {
     expect(screen.getByLabelText('选择 Agent 安装系统')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '复制安装命令' })).toBeInTheDocument()
     expect(screen.getByText('token 来源：点击添加主机时，Server 会自动生成一次性 install_token。')).toBeInTheDocument()
+  })
+
+  test('opens the add host dialog from overview quick actions', async () => {
+    render(<App />)
+
+    const sidebarNavigation = await screen.findByRole('navigation', { name: '侧边导航' })
+    fireEvent.click(within(sidebarNavigation).getByRole('button', { name: '概览' }))
+    fireEvent.click(await screen.findByRole('button', { name: '添加服务器' }))
+
+    expect(await screen.findByRole('dialog', { name: '添加主机' })).toBeInTheDocument()
+    await waitFor(() => expect(createInstallCommand).toHaveBeenCalledWith('linux'))
   })
 
   test('creates a fresh manual install token when the add host dialog opens', async () => {

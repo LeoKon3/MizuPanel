@@ -98,3 +98,28 @@ func TestSettingsAPIRejectsRetentionOverSevenDays(t *testing.T) {
 		t.Fatalf("status = %d, want 400", recorder.Code)
 	}
 }
+
+func TestSystemAboutAPIReturnsVersionAndRepository(t *testing.T) {
+	mux, _ := testSettingsRouter(t, 6*time.Hour)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/system/about", nil)
+
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Version   string `json:"version"`
+		GitHubURL string `json:"github_url"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode about response: %v", err)
+	}
+	if response.Version != "0.1.0" {
+		t.Fatalf("version = %q, want 0.1.0", response.Version)
+	}
+	if response.GitHubURL != "https://github.com/LeoKon3/MizuPanel" {
+		t.Fatalf("github_url = %q", response.GitHubURL)
+	}
+}

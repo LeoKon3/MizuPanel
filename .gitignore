@@ -30,10 +30,9 @@ web/assets/
 .vscode/
 .idea/
 
-#docks
-docs
+# Docs
 skills-lock.json
-
+CHANGELOG.md
 # KeepM live memory store (plain text, machine-local)
 /.keepm-memory/
 .orbit/

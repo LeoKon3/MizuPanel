@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import App from './App'
-import { getNodeDocker, getNodeMetrics, getNodeProcesses, getNodes, getSettings, updateSettings } from './api/client'
+import { getNodeDocker, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, updateSettings } from './api/client'
 import type { Metric, Node } from './types'
 
 vi.mock('./api/client', () => ({
@@ -14,6 +14,7 @@ vi.mock('./api/client', () => ({
   getNodeProcesses: vi.fn(),
   getNodeDocker: vi.fn(),
   getSettings: vi.fn(),
+  getSystemAbout: vi.fn(),
   updateSettings: vi.fn(),
   getNodeFiles: vi.fn(async () => ({ path: '/', entries: [] })),
   readNodeFile: vi.fn(async () => ({ path: '/tmp/a', content: '', editable: true })),
@@ -80,12 +81,14 @@ describe('App history and system settings', () => {
     vi.mocked(getNodeProcesses).mockReset()
     vi.mocked(getNodeDocker).mockReset()
     vi.mocked(getSettings).mockReset()
+    vi.mocked(getSystemAbout).mockReset()
     vi.mocked(updateSettings).mockReset()
     vi.mocked(getNodes).mockResolvedValue({ nodes })
     vi.mocked(getNodeMetrics).mockResolvedValue({ metrics })
     vi.mocked(getNodeProcesses).mockResolvedValue({ node_id: 'node-1', collected_at: 0, error: '', processes: [] })
     vi.mocked(getNodeDocker).mockResolvedValue({ node_id: 'node-1', collected_at: 0, available: false, error: '', containers: [] })
     vi.mocked(getSettings).mockResolvedValue({ metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d' })
+    vi.mocked(getSystemAbout).mockResolvedValue({ version: '0.1.0', github_url: 'https://github.com/LeoKon3/MizuPanel' })
     vi.mocked(updateSettings).mockResolvedValue({ metrics_retention: '7d', metrics_retention_seconds: 604800, max_metrics_retention: '7d' })
   })
 
@@ -126,6 +129,8 @@ describe('App history and system settings', () => {
 
     const panel = await screen.findByRole('region', { name: '系统设置' })
     expect(within(panel).getByText('指标保留时间')).toBeInTheDocument()
+    expect(await within(panel).findByText('v0.1.0')).toBeInTheDocument()
+    expect(within(panel).getByRole('link', { name: '打开 GitHub 仓库' })).toHaveAttribute('href', 'https://github.com/LeoKon3/MizuPanel')
     fireEvent.click(within(panel).getByRole('button', { name: '7 天' }))
     fireEvent.click(within(panel).getByRole('button', { name: '保存设置' }))
 

@@ -162,6 +162,7 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 	mux.HandleFunc("/api/auth/session", server.handleAuthSession)
 	mux.HandleFunc("/api/auth/login", server.handleAuthLogin)
 	mux.HandleFunc("/api/auth/logout", server.handleAuthLogout)
+	mux.HandleFunc("/api/system/about", server.requireAuth(server.handleSystemAbout))
 	mux.HandleFunc("/api/settings", server.requireAuth(server.handleSettings))
 	mux.HandleFunc("/api/nodes", server.requireAuth(server.handleNodes))
 	mux.HandleFunc("/api/nodes/", server.requireAuth(server.handleNodeRoutes))
