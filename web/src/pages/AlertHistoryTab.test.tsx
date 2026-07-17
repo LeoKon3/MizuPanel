@@ -53,6 +53,31 @@ const secondResolvedAlert: AlertHistory = {
   rule_name: 'Memory High'
 }
 
+const deliveredActiveAlert: AlertHistory = {
+  ...activeAlert,
+  id: 10,
+  notification_sent: true,
+  notification_attempted_at: '2026-06-25T10:00:02Z'
+}
+
+const failedResolvedAlert: AlertHistory = {
+  ...resolvedAlert,
+  id: 11,
+  notification_error: 'webhook: webhook returned HTTP 400',
+  notification_attempted_at: '2026-06-25T10:00:02Z',
+  recovery_notification_sent: false,
+  recovery_notification_attempted_at: '2026-06-25T10:05:02Z'
+}
+
+const deliveredResolvedAlert: AlertHistory = {
+  ...resolvedAlert,
+  id: 12,
+  notification_sent: true,
+  notification_attempted_at: '2026-06-25T10:00:02Z',
+  recovery_notification_sent: true,
+  recovery_notification_attempted_at: '2026-06-25T10:05:02Z'
+}
+
 const resolveAlertHistoryMock = () =>
   (api as unknown as { resolveAlertHistory: ReturnType<typeof vi.fn> }).resolveAlertHistory
 const deleteAlertHistoryMock = () =>
@@ -132,5 +157,36 @@ describe('AlertHistoryTab', () => {
 
     fireEvent.click(selectAllButton)
     expect(deleteSelectedButton).toBeDisabled()
+  })
+
+  test('shows successful and legacy-unknown trigger delivery states', async () => {
+    vi.mocked(api.getAlertHistory).mockResolvedValue({ history: [deliveredActiveAlert, activeAlert] })
+
+    render(<AlertHistoryTab nodes={nodes} />)
+
+    expect(await screen.findAllByText('触发通知')).toHaveLength(2)
+    expect(screen.getByText('成功')).toBeInTheDocument()
+    expect(screen.getByText('未知')).toBeInTheDocument()
+  })
+
+  test('shows failed trigger details and unconfigured recovery delivery', async () => {
+    vi.mocked(api.getAlertHistory).mockResolvedValue({ history: [failedResolvedAlert] })
+
+    render(<AlertHistoryTab nodes={nodes} />)
+
+    expect(await screen.findByText('触发通知')).toBeInTheDocument()
+    expect(screen.getByText('恢复通知')).toBeInTheDocument()
+    expect(screen.getByText('失败')).toBeInTheDocument()
+    expect(screen.getByText('未配置')).toBeInTheDocument()
+    expect(screen.getByText('webhook: webhook returned HTTP 400')).toBeInTheDocument()
+  })
+
+  test('shows successful trigger and recovery delivery for resolved alerts', async () => {
+    vi.mocked(api.getAlertHistory).mockResolvedValue({ history: [deliveredResolvedAlert] })
+
+    render(<AlertHistoryTab nodes={nodes} />)
+
+    expect(await screen.findByText('恢复通知')).toBeInTheDocument()
+    expect(screen.getAllByText('成功')).toHaveLength(2)
   })
 })

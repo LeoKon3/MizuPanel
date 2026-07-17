@@ -20,6 +20,7 @@ type Client struct {
 	token                       string
 	debug                       bool
 	onNodeToken                 func(string) error
+	onConnected                 func()
 	agentManagementHandler      AgentManagementHandler
 	terminalHandlerFactory      TerminalHandlerFactory
 	containerExecHandlerFactory ContainerExecHandlerFactory
@@ -50,6 +51,7 @@ type AgentManagementHandler interface {
 	Status() protocol.AgentStatusResponse
 	Restart() protocol.AgentRestartResponse
 	Logs(lines int) protocol.AgentLogsResponse
+	Upgrade(protocol.AgentUpgradeRequest, func(protocol.AgentUpgradeResponse)) protocol.AgentUpgradeResponse
 }
 
 type TerminalHandler interface {
@@ -110,6 +112,10 @@ func (c *Client) SetDebug(debug bool) {
 
 func (c *Client) SetNodeTokenHandler(handler func(string) error) {
 	c.onNodeToken = handler
+}
+
+func (c *Client) SetConnectedHandler(handler func()) {
+	c.onConnected = handler
 }
 
 func (c *Client) SetAgentManagementHandler(handler AgentManagementHandler) {
@@ -248,6 +254,9 @@ func (c *Client) connect(ctx context.Context, hello protocol.HelloMessage) (*web
 			}
 		}
 	}
+	if c.onConnected != nil {
+		c.onConnected()
+	}
 	return conn, ack, nil
 }
 
@@ -366,6 +375,25 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 			response.RequestID = request.RequestID
 			response.NodeID = request.NodeID
 			_ = writer.writeJSON(response)
+		case protocol.MessageTypeAgentUpgradeRequest:
+			if c.agentManagementHandler == nil {
+				continue
+			}
+			var request protocol.AgentUpgradeRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			initialSent := make(chan struct{})
+			response := c.agentManagementHandler.Upgrade(request, func(result protocol.AgentUpgradeResponse) {
+				<-initialSent
+				result.Type = protocol.MessageTypeAgentUpgradeResponse
+				result.RequestID = request.RequestID
+				_ = writer.writeJSON(result)
+			})
+			response.Type = protocol.MessageTypeAgentUpgradeResponse
+			response.RequestID = request.RequestID
+			_ = writer.writeJSON(response)
+			close(initialSent)
 		case protocol.MessageTypeTerminalStart, protocol.MessageTypeTerminalData, protocol.MessageTypeTerminalResize, protocol.MessageTypeTerminalClose:
 			if terminalHandler == nil {
 				continue

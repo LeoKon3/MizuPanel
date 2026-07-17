@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { NodeDetail } from './NodeDetail'
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, Node, RebootResponse, SSHUninstallRequest } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, ConnectionDiagnostics, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, Node, RebootResponse, SSHUninstallRequest } from '../types'
 
 const node: Node = {
   id: 'node-1',
@@ -67,9 +67,8 @@ describe('NodeDetail file manager operations', () => {
     vi.restoreAllMocks()
   })
 
-  test('opens terminal, switches to file panel, enters directories, edits text files and reboots with confirmation', async () => {
+  test('opens terminal, switches to file panel, enters directories, edits text files and reboots with project modal', async () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const onLoadFiles = vi.fn(async (_nodeID: string, path: string): Promise<FileListResponse> => path === '/etc' ? etcList : rootList)
     const onReadFile = vi.fn(async (_nodeID: string, path: string): Promise<FileReadResponse> => ({ path, content: 'port=8080\n', editable: true, size: 10 }))
     const onWriteFile = vi.fn(async (_nodeID: string, path: string, content: string) => ({ path, saved: true, content }))
@@ -95,7 +94,7 @@ describe('NodeDetail file manager operations', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开终端' }))
     expect(open).toHaveBeenCalledWith('/nodes/node-1/terminal', '_blank', 'noopener,noreferrer')
 
-    fireEvent.click(screen.getByRole('button', { name: '文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
     expect(await screen.findByRole('region', { name: '文件管理' })).toBeInTheDocument()
     expect(onLoadFiles).toHaveBeenCalledWith('node-1', '/')
 
@@ -112,10 +111,52 @@ describe('NodeDetail file manager operations', () => {
     expect(onWriteFile).toHaveBeenCalledWith('node-1', '/etc/mizupanel.yaml', 'port=9090\n')
 
     fireEvent.click(screen.getByRole('button', { name: '重启' }))
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('当前执行用户：root'))
+		const rebootDialog = screen.getByRole('dialog', { name: '重启节点' })
+		expect(within(rebootDialog).getByText('root')).toBeInTheDocument()
+		fireEvent.click(within(rebootDialog).getByRole('button', { name: '确认重启' }))
     expect(onRebootNode).toHaveBeenCalledWith('node-1')
-    expect(await screen.findByText('重启命令已发送，节点可能会暂时离线，请稍后等待 Agent 重新连接。')).toBeInTheDocument()
+		expect(await screen.findByText('节点重启命令下发成功')).toBeInTheDocument()
   })
+
+	test('copies the current install command for a legacy Agent without leaving the Agent tab', async () => {
+		const writeText = vi.fn(async () => undefined)
+		Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+		const onGetLegacyAgentUpgradeCommand = vi.fn(async () => 'curl -fsSL http://panel/scripts/install-agent.sh')
+		const diagnostics: ConnectionDiagnostics = {
+			node_id: 'node-1',
+			online: true,
+			health: 'healthy',
+			agent_version: '0.1.0',
+			protocol_version: 1,
+			identity_source: 'legacy_config',
+			identity_conflict: false,
+			upgrade_supported: false,
+			latest_version: '0.1.1',
+			upgrade_available: true,
+			events: [],
+		}
+
+		render(
+			<NodeDetail
+				node={node}
+				metrics={[]}
+				processSnapshot={{ node_id: 'node-1', collected_at: 0, error: '', processes: [] }}
+				dockerSnapshot={{ node_id: 'node-1', collected_at: 0, available: false, error: '', containers: [] }}
+				range="1h"
+				onRangeChange={vi.fn()}
+				onGetConnectionDiagnostics={async () => diagnostics}
+				onGetLegacyAgentUpgradeCommand={onGetLegacyAgentUpgradeCommand}
+			/>
+		)
+
+		fireEvent.click(screen.getByRole('button', { name: 'Agent 管理' }))
+		const copyButton = await screen.findByRole('button', { name: '复制升级命令' })
+		fireEvent.click(copyButton)
+		await waitFor(() => expect(onGetLegacyAgentUpgradeCommand).toHaveBeenCalledTimes(1))
+		expect(writeText).toHaveBeenCalledWith('curl -fsSL http://panel/scripts/install-agent.sh')
+		expect(await screen.findByText('Agent升级命令复制成功')).toBeInTheDocument()
+		expect(screen.getByRole('region', { name: 'Agent 管理' })).toBeInTheDocument()
+	})
 
   test('keeps node actions on the detail header right without a separate remove-node action', () => {
     render(
@@ -131,9 +172,12 @@ describe('NodeDetail file manager operations', () => {
 
     const actions = screen.getByRole('toolbar', { name: '节点操作' })
     expect(within(actions).getByRole('button', { name: '打开终端' })).toBeInTheDocument()
-    expect(within(actions).getByRole('button', { name: '文件' })).toBeInTheDocument()
+    expect(within(actions).getByRole('button', { name: '分组与标签' })).toBeInTheDocument()
     expect(within(actions).getByRole('button', { name: '重启' })).toBeInTheDocument()
-    expect(within(actions).getByRole('button', { name: '卸载 Agent' })).toBeInTheDocument()
+    expect(within(actions).queryByRole('button', { name: '卸载 Agent' })).not.toBeInTheDocument()
+    const views = screen.getByRole('group', { name: '节点详情视图' })
+    expect(within(views).getByRole('button', { name: '文件管理' })).toBeInTheDocument()
+    expect(within(views).getByRole('button', { name: 'Agent 管理' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '移除节点记录' })).not.toBeInTheDocument()
   })
 
@@ -152,7 +196,9 @@ describe('NodeDetail file manager operations', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '卸载 Agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Agent 管理' }))
+    const agentPanel = await screen.findByRole('region', { name: 'Agent 管理' })
+    fireEvent.click(within(agentPanel).getByRole('button', { name: '卸载 Agent' }))
     const dialog = screen.getByRole('dialog', { name: '卸载 Agent' })
     expect(within(dialog).getByDisplayValue('10.0.0.1')).toBeInTheDocument()
     expect(within(dialog).getByDisplayValue('root')).toBeInTheDocument()
@@ -179,12 +225,12 @@ describe('NodeDetail file manager operations', () => {
     expect(within(dialog).getByText('正在执行 Agent 卸载脚本')).toBeInTheDocument()
     expect(within(dialog).getAllByText('执行卸载')).toHaveLength(1)
     expect(within(dialog).getAllByText('成功').length).toBeGreaterThan(0)
-    fireEvent.click(within(dialog).getByRole('button', { name: '完成并关闭' }))
+    const closeButtons = within(dialog).getAllByRole('button', { name: '关闭' })
+    fireEvent.click(closeButtons[closeButtons.length - 1])
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '卸载 Agent' })).not.toBeInTheDocument())
   })
 
   test('shows reboot feedback from the default overview view', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const onRebootNode = vi.fn(async (): Promise<RebootResponse> => ({ accepted: true }))
 
     render(
@@ -200,13 +246,14 @@ describe('NodeDetail file manager operations', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: '重启' }))
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('当前执行用户：root'))
+    const dialog = screen.getByRole('dialog', { name: '重启节点' })
+    expect(within(dialog).getByText('root')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认重启' }))
     expect(onRebootNode).toHaveBeenCalledWith('node-1')
-    expect(await screen.findByText('重启命令已发送，节点可能会暂时离线，请稍后等待 Agent 重新连接。')).toBeInTheDocument()
+    expect(await screen.findByText('节点重启命令下发成功')).toBeInTheDocument()
   })
 
   test('shows Agent management status, recent logs and restart feedback', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const onGetAgentStatus = vi.fn(async (): Promise<AgentStatusResponse> => ({
       version: '0.1.0',
       user: 'root',
@@ -248,9 +295,11 @@ describe('NodeDetail file manager operations', () => {
     expect(within(panel).getByText('mizupanel-agent started')).toBeInTheDocument()
 
     fireEvent.click(within(panel).getByRole('button', { name: '重启 Agent' }))
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('mizupanel-agent'))
+    const dialog = screen.getByRole('dialog', { name: '重启 Agent' })
+    expect(within(dialog).getByText('mizupanel-agent')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认重启' }))
     expect(onRestartAgent).toHaveBeenCalledWith('node-1')
-    expect(await within(panel).findByText('重启命令已下发，等待 Agent 重新连接')).toBeInTheDocument()
+    expect(await screen.findByText('Agent重启命令下发成功')).toBeInTheDocument()
   })
 
   test('clears stale Agent management data when switching to an offline node', async () => {
@@ -298,7 +347,7 @@ describe('NodeDetail file manager operations', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Agent 管理' }))
 
-    expect(await screen.findByText('节点离线，无法获取 Agent 管理信息。')).toBeInTheDocument()
+    expect(await screen.findByText('节点离线，状态与日志暂不可用；连接诊断仍可查看。')).toBeInTheDocument()
     expect(screen.queryByText('node-a-log')).not.toBeInTheDocument()
     expect(screen.queryByText('/usr/local/mizupanel/agent.yaml')).not.toBeInTheDocument()
   })
@@ -380,7 +429,7 @@ describe('NodeDetail file manager operations', () => {
       />
     )
 
-    expect(await screen.findByText('节点离线，无法获取 Agent 管理信息。')).toBeInTheDocument()
+    expect(await screen.findByText('节点离线，状态与日志暂不可用；连接诊断仍可查看。')).toBeInTheDocument()
     expect(screen.queryByText('same-node-log')).not.toBeInTheDocument()
     expect(screen.queryByText('/usr/local/mizupanel/agent.yaml')).not.toBeInTheDocument()
   })
@@ -439,7 +488,6 @@ describe('NodeDetail file manager operations', () => {
   })
 
   test('uploads files to the current directory and deletes entries after confirmation', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     let entries = [...etcList.entries]
     const onLoadFiles = vi.fn(async (_nodeID: string, path: string): Promise<FileListResponse> => ({ path, entries }))
     const onUploadFile = vi.fn(async (_nodeID: string, path: string, contentBase64: string): Promise<FileUploadResponse> => {
@@ -465,7 +513,7 @@ describe('NodeDetail file manager operations', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
     fireEvent.change(await screen.findByLabelText('直接打开路径'), { target: { value: '/etc' } })
     fireEvent.click(screen.getByRole('button', { name: '打开路径' }))
     expect(await screen.findByText('mizupanel.yaml')).toBeInTheDocument()
@@ -477,7 +525,8 @@ describe('NodeDetail file manager operations', () => {
     expect(await screen.findByText('upload.bin')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '删除 upload.bin' }))
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('/etc/upload.bin'))
+    expect(screen.getByText('确认删除 upload.bin？非空目录不会递归删除。')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
     await waitFor(() => expect(onDeletePath).toHaveBeenCalledWith('node-1', '/etc/upload.bin'))
     expect(await screen.findByText('文件已删除。')).toBeInTheDocument()
     expect(screen.queryByText('upload.bin')).not.toBeInTheDocument()
@@ -504,7 +553,7 @@ describe('NodeDetail file manager operations', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
     const pathInput = await screen.findByLabelText('直接打开路径')
     fireEvent.change(pathInput, { target: { value: '/var/log' } })
     fireEvent.click(screen.getByRole('button', { name: '打开路径' }))
@@ -543,7 +592,7 @@ describe('NodeDetail file manager operations', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
     const pathInput = await screen.findByLabelText('直接打开路径')
 
     fireEvent.change(pathInput, { target: { value: '/var/log' } })
@@ -591,7 +640,7 @@ describe('NodeDetail file manager operations', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
     fireEvent.click(await screen.findByRole('button', { name: '编辑文件 old.conf' }))
     fireEvent.click(await screen.findByRole('button', { name: '编辑文件 latest.conf' }))
 
@@ -630,7 +679,7 @@ describe('NodeDetail file manager operations', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
     const pathInput = await screen.findByLabelText('直接打开路径')
     fireEvent.change(pathInput, { target: { value: '/var/log' } })
     fireEvent.click(screen.getByRole('button', { name: '打开路径' }))
@@ -664,8 +713,9 @@ describe('NodeDetail file manager operations', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '文件' }))
+    fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
     const panel = await screen.findByRole('region', { name: '文件管理' })
-    expect(await within(panel).findByText('二进制文件不可编辑')).toBeInTheDocument()
+    expect(await within(panel).findByText(/二进制文件/)).toBeInTheDocument()
+    expect(within(panel).getByText('不可编辑')).toBeInTheDocument()
   })
 })

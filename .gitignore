@@ -36,6 +36,8 @@ CHANGELOG.md
 # KeepM live memory store (plain text, machine-local)
 /.keepm-memory/
 .orbit/
+.planning
+docs
 
 # codex
 .agents/

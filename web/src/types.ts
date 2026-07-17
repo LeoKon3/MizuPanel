@@ -51,6 +51,48 @@ export type Metric = {
   created_at: string
 }
 
+export type NodeGroupSummary = {
+  id: string
+  name: string
+}
+
+export type NodeTagSummary = {
+  id: string
+  name: string
+  color: 'green' | 'teal' | 'blue' | 'amber' | 'red' | 'gray'
+}
+
+export type NodeGroup = NodeGroupSummary & {
+  node_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type NodeTag = NodeTagSummary & {
+  node_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type NodeGroupsResponse = {
+  groups: NodeGroup[]
+}
+
+export type NodeTagsResponse = {
+  tags: NodeTag[]
+}
+
+export type BatchNodeMetadataUpdate = {
+  node_ids: string[]
+  group_id?: string | null
+  add_tag_ids?: string[]
+  remove_tag_ids?: string[]
+}
+
+export type BatchNodeMetadataResponse = {
+  nodes: Record<string, { group: NodeGroupSummary | null, tags: NodeTagSummary[] }>
+}
+
 export type Node = {
   id: string
   name: string
@@ -66,6 +108,8 @@ export type Node = {
   agent_mode?: AgentMode
   agent_user?: string
   latest_metric?: Metric
+  group?: NodeGroupSummary | null
+  tags?: NodeTagSummary[]
 }
 
 export type NodesResponse = {
@@ -293,6 +337,46 @@ export type AgentStatusResponse = {
   code?: string
 }
 
+export type ConnectionEvent = {
+  id: number
+  node_id: string
+  type: 'connected' | 'disconnected' | 'replaced_by_new_connection' | 'identity_conflict_suspected' | 'protocol_rejected' | 'heartbeat_timeout' | string
+  reason?: string
+  agent_version?: string
+  protocol_version: number
+  identity_source?: string
+  hostname?: string
+  remote_addr?: string
+  created_at: string
+}
+
+export type ConnectionDiagnostics = {
+  node_id: string
+  online: boolean
+  health: 'healthy' | 'offline' | 'identity_conflict' | string
+  agent_version?: string
+  protocol_version: number
+  identity_source?: string
+  last_heartbeat_at?: string
+  last_connected_at?: string
+  last_disconnected_at?: string
+  last_disconnect_reason?: string
+  identity_conflict: boolean
+  upgrade_supported: boolean
+  latest_version?: string
+  upgrade_available: boolean
+  events: ConnectionEvent[]
+}
+
+export type AgentUpgradeResponse = {
+  accepted: boolean
+  stage?: string
+  message?: string
+  error?: string
+  code?: string
+}
+export type AgentUpgradeStatus = { node_id: string; target_version: string; actual_version?: string; stage: string; error?: string }
+
 export type AgentRestartResponse = {
   accepted: boolean
   message?: string
@@ -344,6 +428,10 @@ export type AlertHistory = {
   resolved_at?: string
   notification_sent: boolean
   notification_error?: string
+  notification_attempted_at?: string
+  recovery_notification_sent?: boolean
+  recovery_notification_error?: string
+  recovery_notification_attempted_at?: string
   created_at: string
 }
 

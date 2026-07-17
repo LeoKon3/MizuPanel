@@ -72,6 +72,8 @@ func NewHandler(deps Dependencies) http.Handler {
 		DockerSnapshots:  deps.DockerSnapshots,
 		Interval:         deps.Interval,
 		Debug:            deps.Debug,
+		PublicURL:        deps.PublicURL,
+		DownloadDir:      deps.DownloadDir,
 	})
 
 	// K8s 服务层
@@ -102,6 +104,10 @@ func NewHandler(deps Dependencies) http.Handler {
 	mux.Handle("/api/auth/", apiRouter)
 	mux.Handle("/api/system/", apiRouter)
 	mux.Handle("/api/settings", apiRouter)
+	mux.Handle("/api/node-groups", apiRouter)
+	mux.Handle("/api/node-groups/", apiRouter)
+	mux.Handle("/api/node-tags", apiRouter)
+	mux.Handle("/api/node-tags/", apiRouter)
 	mux.Handle("/api/nodes", apiRouter)
 	mux.Handle("/api/alerts/", apiRouter)
 	mux.Handle("/api/k8s/", apiRouter)

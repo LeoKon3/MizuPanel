@@ -2,9 +2,10 @@
 set -euo pipefail
 
 DEST_ROOT=""
+PURGE_IDENTITY="false"
 
 usage() {
-  printf 'Usage: %s [--dest-root PATH]\n' "$0"
+  printf 'Usage: %s [--dest-root PATH] [--purge-identity]\n' "$0"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -12,6 +13,10 @@ while [ "$#" -gt 0 ]; do
     --dest-root)
       DEST_ROOT="$2"
       shift 2
+      ;;
+    --purge-identity)
+      PURGE_IDENTITY="true"
+      shift
       ;;
     -h|--help)
       usage
@@ -45,7 +50,13 @@ if [ -z "$DEST_ROOT" ]; then
 fi
 
 rm -f "$SERVICE_PATH"
-rm -rf "$INSTALL_DIR"
+rm -rf "$INSTALL_DIR/bin" "$INSTALL_DIR/var"
+rm -f "$INSTALL_DIR/etc/agent.yaml" "$INSTALL_DIR/mizupanel-agent" "$INSTALL_DIR/agent.yaml"
+if [ "$PURGE_IDENTITY" = "true" ]; then
+  rm -f "$INSTALL_DIR/etc/agent-id"
+fi
+rmdir "$INSTALL_DIR/etc" 2>/dev/null || true
+rmdir "$INSTALL_DIR" 2>/dev/null || true
 
 if [ -z "$DEST_ROOT" ]; then
   if command -v systemctl >/dev/null 2>&1; then
@@ -57,4 +68,8 @@ if [ -z "$DEST_ROOT" ]; then
   fi
 fi
 
-printf 'MizuPanel agent uninstalled.\n'
+if [ "$PURGE_IDENTITY" = "true" ]; then
+  printf 'MizuPanel agent uninstalled and identity removed.\n'
+else
+  printf 'MizuPanel agent uninstalled. Identity preserved at %s/etc/agent-id.\n' "$INSTALL_DIR"
+fi

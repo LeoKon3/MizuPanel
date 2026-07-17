@@ -1,10 +1,14 @@
 package agenthub
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +21,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/protocol"
 	serverdb "github.com/mizupanel/mizupanel/internal/server/db"
 	"github.com/mizupanel/mizupanel/internal/server/store"
+	"github.com/mizupanel/mizupanel/internal/version"
 )
 
 func TestInstallAuthStoreGeneratesRandomNodeToken(t *testing.T) {
@@ -162,6 +167,102 @@ func TestClosePendingOperationsUnblocksK8sMessages(t *testing.T) {
 	}
 	if len(conn.pendingK8sMessages) != 0 {
 		t.Fatalf("pendingK8sMessages length = %d, want 0", len(conn.pendingK8sMessages))
+	}
+}
+
+func TestClosePendingOperationsUnblocksAgentUpgrade(t *testing.T) {
+	conn := &agentConnection{pendingAgentUpgrades: map[string]chan protocol.AgentUpgradeResponse{"upgrade-1": make(chan protocol.AgentUpgradeResponse, 1)}}
+	ch := conn.pendingAgentUpgrades["upgrade-1"]
+	conn.closePendingOperations("Agent 连接已断开")
+	select {
+	case response := <-ch:
+		if response.RequestID != "upgrade-1" || response.Stage != "failed" || response.Code != "offline" || !strings.Contains(response.Error, "连接已断开") {
+			t.Fatalf("offline upgrade response = %#v", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for pending upgrade to unblock")
+	}
+	if len(conn.pendingAgentUpgrades) != 0 {
+		t.Fatalf("pendingAgentUpgrades length = %d, want 0", len(conn.pendingAgentUpgrades))
+	}
+}
+
+func TestAgentUpgradeRejectsNonCurrentTarget(t *testing.T) {
+	handler := &Handler{}
+	response, err := handler.AgentUpgrade(t.Context(), "node-1", "0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "invalid_target" || response.Accepted {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestAgentUpgradeFailureAndReconnectStatusTransitions(t *testing.T) {
+	handler := &Handler{connections: make(map[string]*agentConnection), upgrades: map[string]protocol.AgentUpgradeStatus{
+		"node-1": {NodeID: "node-1", TargetVersion: "0.1.2", ActualVersion: "0.1.1", Stage: "waiting_reconnect"},
+	}}
+	agent := &agentConnection{nodeID: "node-1", agentVersion: "0.1.1"}
+	handler.recordAgentUpgradeResponse(agent, protocol.AgentUpgradeResponse{Stage: "failed", Error: "SHA-256 校验失败"})
+	failed := handler.AgentUpgradeStatus("node-1")
+	if failed.Stage != "failed" || !strings.Contains(failed.Error, "SHA-256") {
+		t.Fatalf("failed status = %#v", failed)
+	}
+	handler.observeAgentUpgradeReconnect("node-1", "0.1.2")
+	completed := handler.AgentUpgradeStatus("node-1")
+	if completed.Stage != "completed" || completed.ActualVersion != "0.1.2" || completed.Error != "" {
+		t.Fatalf("completed status = %#v", completed)
+	}
+}
+
+func TestAgentUpgradeOldVersionReconnectAndTimeoutFail(t *testing.T) {
+	handler := &Handler{connections: make(map[string]*agentConnection), upgrades: map[string]protocol.AgentUpgradeStatus{
+		"old-node":     {NodeID: "old-node", TargetVersion: "0.1.2", ActualVersion: "0.1.1", Stage: "waiting_reconnect"},
+		"timeout-node": {NodeID: "timeout-node", TargetVersion: "0.1.2", ActualVersion: "0.1.1", Stage: "waiting_reconnect"},
+	}}
+	handler.observeAgentUpgradeReconnect("old-node", "0.1.1")
+	oldStatus := handler.AgentUpgradeStatus("old-node")
+	if oldStatus.Stage != "failed" || oldStatus.ActualVersion != "0.1.1" || !strings.Contains(oldStatus.Error, "仍为版本") {
+		t.Fatalf("old-version reconnect status = %#v", oldStatus)
+	}
+	handler.expireAgentUpgrade("timeout-node", "0.1.2")
+	timeoutStatus := handler.AgentUpgradeStatus("timeout-node")
+	if timeoutStatus.Stage != "failed" || !strings.Contains(timeoutStatus.Error, "超时") {
+		t.Fatalf("timeout status = %#v", timeoutStatus)
+	}
+	handler.observeAgentUpgradeReconnect("timeout-node", "0.1.2")
+	completed := handler.AgentUpgradeStatus("timeout-node")
+	if completed.Stage != "completed" || completed.Error != "" {
+		t.Fatalf("late successful reconnect status = %#v", completed)
+	}
+}
+
+func TestPrepareAgentUpgradeRequestUsesCurrentServerArtifact(t *testing.T) {
+	downloadDir := t.TempDir()
+	artifact := []byte("static-agent-binary")
+	if err := os.WriteFile(filepath.Join(downloadDir, "mizupanel-agent-linux-amd64"), artifact, 0755); err != nil {
+		t.Fatal(err)
+	}
+	handler := &Handler{options: Options{PublicURL: "https://panel.example.com/", DownloadDir: downloadDir}}
+	request, code, err := handler.prepareAgentUpgradeRequest(store.Node{ID: "node-1", OS: "linux", Arch: "amd64"}, "request-1", version.Current)
+	if err != nil || code != "" {
+		t.Fatalf("prepare request code/error = %q/%v", code, err)
+	}
+	sum := sha256.Sum256(artifact)
+	if request.TargetVersion != version.Current || request.DownloadURL != "https://panel.example.com/downloads/mizupanel-agent-linux-amd64" || request.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("upgrade request = %#v", request)
+	}
+}
+
+func TestPrepareAgentUpgradeRequestRejectsMissingPackageAndUnsupportedPlatform(t *testing.T) {
+	handler := &Handler{options: Options{PublicURL: "https://panel.example.com", DownloadDir: t.TempDir()}}
+	_, code, err := handler.prepareAgentUpgradeRequest(store.Node{ID: "node-1", OS: "linux", Arch: "amd64"}, "request-1", version.Current)
+	if code != "package_missing" || err == nil {
+		t.Fatalf("missing package code/error = %q/%v", code, err)
+	}
+	_, code, err = handler.prepareAgentUpgradeRequest(store.Node{ID: "node-1", OS: "windows", Arch: "amd64"}, "request-2", version.Current)
+	if code != "unsupported_platform" || err == nil {
+		t.Fatalf("unsupported platform code/error = %q/%v", code, err)
 	}
 }
 

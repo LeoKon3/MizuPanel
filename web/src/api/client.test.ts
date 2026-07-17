@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { createContainerExecSession, createInstallCommand, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodePath, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, startSSHInstall, startSSHUninstall, updateSettings, uploadNodeFile, writeNodeFile } from './client'
+import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -36,6 +36,41 @@ describe('api client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/nodes')
     expect(result.nodes).toEqual([])
+  })
+
+  test('manages node groups, tags, and batch metadata', async () => {
+    const group = { id: 'group-1', name: 'Production', node_count: 0, created_at: '', updated_at: '' }
+    const tag = { id: 'tag-1', name: 'Database', color: 'blue', node_count: 0, created_at: '', updated_at: '' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ groups: [group] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(group)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...group, name: 'Primary' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tags: [tag] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(tag)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...tag, name: 'Critical DB', color: 'red' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ nodes: { 'node-1': { group: null, tags: [] } } })))
+
+    await getNodeGroups()
+    await createNodeGroup('Production')
+    await updateNodeGroup('group 1', 'Primary')
+    await deleteNodeGroup('group 1')
+    await getNodeTags()
+    await createNodeTag('Database', 'blue')
+    await updateNodeTag('tag 1', 'Critical DB', 'red')
+    await deleteNodeTag('tag 1')
+    await updateBatchNodeMetadata({ node_ids: ['node-1'], group_id: null, add_tag_ids: [], remove_tag_ids: [] })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/node-groups')
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/node-groups', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Production' }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/node-groups/group%201', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ name: 'Primary' }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/node-groups/group%201', { method: 'DELETE' })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/node-tags')
+    expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/node-tags', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Database', color: 'blue' }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(7, '/api/node-tags/tag%201', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ name: 'Critical DB', color: 'red' }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/node-tags/tag%201', { method: 'DELETE' })
+    expect(fetchMock).toHaveBeenNthCalledWith(9, '/api/nodes/batch/metadata', expect.objectContaining({ method: 'PATCH' }))
   })
 
   test('deletes node records with an empty response', async () => {

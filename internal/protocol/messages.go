@@ -1,5 +1,7 @@
 package protocol
 
+const CurrentProtocolVersion = 1
+
 const (
 	MessageTypeHello                = "hello"
 	MessageTypeHelloAck             = "hello_ack"
@@ -24,6 +26,8 @@ const (
 	MessageTypeAgentRestartResponse = "agent_restart_response"
 	MessageTypeAgentLogsRequest     = "agent_logs_request"
 	MessageTypeAgentLogsResponse    = "agent_logs_response"
+	MessageTypeAgentUpgradeRequest  = "agent_upgrade_request"
+	MessageTypeAgentUpgradeResponse = "agent_upgrade_response"
 	MessageTypeTerminalStart        = "terminal_start"
 	MessageTypeTerminalStarted      = "terminal_started"
 	MessageTypeTerminalData         = "terminal_data"
@@ -101,6 +105,8 @@ type HelloMessage struct {
 	Type            string `json:"type"`
 	NodeID          string `json:"node_id"`
 	AgentVersion    string `json:"agent_version"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	IdentitySource  string `json:"identity_source,omitempty"`
 	Hostname        string `json:"hostname"`
 	Name            string `json:"name"`
 	IP              string `json:"ip"`
@@ -111,6 +117,7 @@ type HelloMessage struct {
 	AgentMode       string `json:"agent_mode,omitempty"`
 	AgentUser       string `json:"agent_user,omitempty"`
 	AgentManagement bool   `json:"agent_management,omitempty"`
+	AgentUpgrade    bool   `json:"agent_upgrade,omitempty"`
 }
 
 type HelloAckMessage struct {
@@ -288,6 +295,33 @@ type AgentLogsResponse struct {
 	CollectedAt int64  `json:"collected_at,omitempty"`
 	Error       string `json:"error,omitempty"`
 	Code        string `json:"code,omitempty"`
+}
+
+type AgentUpgradeRequest struct {
+	Type          string `json:"type"`
+	RequestID     string `json:"request_id"`
+	NodeID        string `json:"node_id"`
+	TargetVersion string `json:"target_version"`
+	DownloadURL   string `json:"download_url"`
+	SHA256        string `json:"sha256"`
+}
+
+type AgentUpgradeResponse struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id,omitempty"`
+	Accepted  bool   `json:"accepted"`
+	Stage     string `json:"stage,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Code      string `json:"code,omitempty"`
+}
+
+type AgentUpgradeStatus struct {
+	NodeID        string `json:"node_id"`
+	TargetVersion string `json:"target_version"`
+	ActualVersion string `json:"actual_version,omitempty"`
+	Stage         string `json:"stage"`
+	Error         string `json:"error,omitempty"`
 }
 
 type TerminalMessage struct {

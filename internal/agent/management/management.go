@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mizupanel/mizupanel/internal/version"
+
 	"github.com/mizupanel/mizupanel/internal/protocol"
 )
 
@@ -32,17 +34,25 @@ type Options struct {
 	StartTime       time.Time
 	GOOS            string
 	Runner          Runner
+	Upgrade         func(protocol.AgentUpgradeRequest, func(protocol.AgentUpgradeResponse)) protocol.AgentUpgradeResponse
 }
 
 type Handler struct {
 	options Options
 }
 
+func (h *Handler) Upgrade(request protocol.AgentUpgradeRequest, report func(protocol.AgentUpgradeResponse)) protocol.AgentUpgradeResponse {
+	if h.options.Upgrade == nil {
+		return protocol.AgentUpgradeResponse{Code: "unsupported", Error: "当前 Agent 暂不支持一键升级。"}
+	}
+	return h.options.Upgrade(request, report)
+}
+
 type commandRunner struct{}
 
 func NewHandler(options Options) *Handler {
 	if options.Version == "" {
-		options.Version = "0.1.0"
+		options.Version = version.Current
 	}
 	if options.Mode == "" {
 		options.Mode = "normal"

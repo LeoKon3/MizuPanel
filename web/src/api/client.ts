@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, K8sClustersResponse, SystemAboutResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, K8sClustersResponse, SystemAboutResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -66,6 +66,62 @@ export function logout(): Promise<void> {
 
 export function getNodes(): Promise<NodesResponse> {
   return request<NodesResponse>('/api/nodes')
+}
+
+export function getNodeGroups(): Promise<NodeGroupsResponse> {
+  return request<NodeGroupsResponse>('/api/node-groups')
+}
+
+export function createNodeGroup(name: string): Promise<NodeGroup> {
+  return request<NodeGroup>('/api/node-groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  })
+}
+
+export function updateNodeGroup(groupID: string, name: string): Promise<NodeGroup> {
+  return request<NodeGroup>(`/api/node-groups/${encodeURIComponent(groupID)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  })
+}
+
+export function deleteNodeGroup(groupID: string): Promise<void> {
+  return requestVoid(`/api/node-groups/${encodeURIComponent(groupID)}`, { method: 'DELETE' })
+}
+
+export function getNodeTags(): Promise<NodeTagsResponse> {
+  return request<NodeTagsResponse>('/api/node-tags')
+}
+
+export function createNodeTag(name: string, color: NodeTag['color']): Promise<NodeTag> {
+  return request<NodeTag>('/api/node-tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, color })
+  })
+}
+
+export function updateNodeTag(tagID: string, name: string, color: NodeTag['color']): Promise<NodeTag> {
+  return request<NodeTag>(`/api/node-tags/${encodeURIComponent(tagID)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, color })
+  })
+}
+
+export function deleteNodeTag(tagID: string): Promise<void> {
+  return requestVoid(`/api/node-tags/${encodeURIComponent(tagID)}`, { method: 'DELETE' })
+}
+
+export function updateBatchNodeMetadata(update: BatchNodeMetadataUpdate): Promise<BatchNodeMetadataResponse> {
+  return request<BatchNodeMetadataResponse>('/api/nodes/batch/metadata', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update)
+  })
 }
 
 export function getSettings(): Promise<SettingsResponse> {
@@ -162,8 +218,20 @@ export function getAgentStatus(nodeID: string): Promise<AgentStatusResponse> {
   return request<AgentStatusResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/agent/status`)
 }
 
+export function getConnectionDiagnostics(nodeID: string): Promise<ConnectionDiagnostics> {
+  return request<ConnectionDiagnostics>(`/api/nodes/${encodeURIComponent(nodeID)}/connection-diagnostics`)
+}
+
 export function restartAgent(nodeID: string): Promise<AgentRestartResponse> {
   return request<AgentRestartResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/agent/restart`, { method: 'POST' })
+}
+
+export function upgradeAgent(nodeID: string): Promise<AgentUpgradeResponse> {
+  return request<AgentUpgradeResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/agent/upgrade`, { method: 'POST' })
+}
+
+export function getAgentUpgradeStatus(nodeID: string): Promise<{ node_id: string; target_version: string; actual_version?: string; stage: string; error?: string }> {
+  return request(`/api/nodes/${encodeURIComponent(nodeID)}/agent/upgrade/status`)
 }
 
 export function getAgentLogs(nodeID: string, lines = 100): Promise<AgentLogsResponse> {

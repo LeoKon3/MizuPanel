@@ -1,14 +1,15 @@
 import type { ReactNode, MouseEvent as ReactMouseEvent } from 'react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { MoreHorizontal, Play, RotateCw, ScrollText, Square, Terminal, Trash2, X } from 'lucide-react'
+import { Copy, MoreHorizontal, Play, RotateCw, ScrollText, ShieldAlert, Square, Tags, Terminal, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, DockerContainer, DockerSnapshotResponse, FileDeleteResponse, FileEntry, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, Metric, Node, ProcessInfo, ProcessSnapshotResponse, RangeOption, RebootResponse, SSHAuthType, SSHJobResponse, SSHProgressEvent, SSHUninstallRequest } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, ConnectionDiagnostics, DockerContainer, DockerSnapshotResponse, FileDeleteResponse, FileEntry, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, Metric, Node, ProcessInfo, ProcessSnapshotResponse, RangeOption, RebootResponse, SSHAuthType, SSHJobResponse, SSHProgressEvent, SSHUninstallRequest } from '../types'
 import { formatBytes, formatPercent, formatSpeed } from '../lib/format'
 import { MetricsChart } from '../components/MetricsChart'
 import LogViewer from '../components/LogViewer'
 import ContainerLogsModal from '../components/ContainerLogsModal'
 import CreateContainerModal from '../components/CreateContainerModal'
+import { SingleNodeOrganizationModal } from '../components/SingleNodeOrganizationModal'
 import { Toast } from '../components/Toast'
 
 type NodeDetailProps = {
@@ -27,9 +28,14 @@ type NodeDetailProps = {
   onRebootNode?: (nodeID: string) => Promise<RebootResponse>
   onSSHUninstall?: (nodeID: string, request: SSHUninstallRequest) => Promise<SSHJobResponse>
   onGetAgentStatus?: (nodeID: string) => Promise<AgentStatusResponse>
+  onGetConnectionDiagnostics?: (nodeID: string) => Promise<ConnectionDiagnostics>
+  onUpgradeAgent?: (nodeID: string) => Promise<AgentUpgradeResponse>
+  onGetAgentUpgradeStatus?: (nodeID: string) => Promise<{ node_id: string; target_version: string; actual_version?: string; stage: string; error?: string }>
+	onGetLegacyAgentUpgradeCommand?: () => Promise<string>
   onRestartAgent?: (nodeID: string) => Promise<AgentRestartResponse>
   onGetAgentLogs?: (nodeID: string, lines: number) => Promise<AgentLogsResponse>
   onRefreshDocker?: (nodeID: string) => Promise<void>
+  onNodeOrganizationChanged?: () => Promise<void> | void
 }
 
 type DetailSection = 'overview' | 'processes' | 'containers' | 'files' | 'logs' | 'agent'
@@ -46,6 +52,27 @@ type PathTreeState = Record<string, {
 
 const FILE_TREE_ROOTS = ['/', '/root', '/data', '/usr', '/var', '/tmp', '/home']
 
+async function copyTextToClipboard(value: string): Promise<void> {
+	if (navigator.clipboard) {
+		try {
+			await navigator.clipboard.writeText(value)
+			return
+		} catch {
+			// Machine-IP HTTP access may reject Clipboard API; fall back below.
+		}
+	}
+	const textarea = document.createElement('textarea')
+	textarea.value = value
+	textarea.setAttribute('readonly', '')
+	textarea.style.position = 'fixed'
+	textarea.style.left = '-9999px'
+	document.body.appendChild(textarea)
+	textarea.select()
+	const copied = document.execCommand('copy')
+	document.body.removeChild(textarea)
+	if (!copied) throw new Error('浏览器拒绝复制')
+}
+
 function mergeSSHProgressEvent(current: SSHProgressEventLog[], progress: SSHProgressEvent): SSHProgressEventLog[] {
   const index = current.findIndex((event) => event.step === progress.step)
   if (index === -1) {
@@ -60,7 +87,7 @@ function mergeSSHProgressEvent(current: SSHProgressEventLog[], progress: SSHProg
   return next
 }
 
-export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onRestartAgent, onGetAgentLogs, onRefreshDocker }: NodeDetailProps) {
+export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onGetConnectionDiagnostics, onUpgradeAgent, onGetAgentUpgradeStatus, onGetLegacyAgentUpgradeCommand, onRestartAgent, onGetAgentLogs, onRefreshDocker, onNodeOrganizationChanged }: NodeDetailProps) {
   const [activeSection, setActiveSection] = useState<DetailSection>('overview')
   const [processSort, setProcessSort] = useState<ProcessSort>('cpu')
   const [processSearch, setProcessSearch] = useState('')
@@ -100,15 +127,37 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
   const [sshUninstallError, setSSHUninstallError] = useState<string>()
   const [sshUninstallEvents, setSSHUninstallEvents] = useState<SSHProgressEventLog[]>([])
   const [agentStatus, setAgentStatus] = useState<AgentStatusResponse>()
+  const [connectionDiagnostics, setConnectionDiagnostics] = useState<ConnectionDiagnostics>()
   const [agentLogs, setAgentLogs] = useState<AgentLogsResponse>()
   const [agentLoading, setAgentLoading] = useState(false)
   const [agentMessage, setAgentMessage] = useState<string>()
   const [agentError, setAgentError] = useState<string>()
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+	const [rebootOpen, setRebootOpen] = useState(false)
+	const [rebootLoading, setRebootLoading] = useState(false)
+	const [restartOpen, setRestartOpen] = useState(false)
+	const [restartLoading, setRestartLoading] = useState(false)
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const [upgradeLoading, setUpgradeLoading] = useState(false)
+	const [organizationEditorOpen, setOrganizationEditorOpen] = useState(false)
+	const [legacyUpgradeCopying, setLegacyUpgradeCopying] = useState(false)
+
+	useEffect(() => {
+		if (!rebootOpen && !restartOpen && !upgradeOpen) return undefined
+		const handleEscape = (event: KeyboardEvent) => {
+			if (event.key !== 'Escape') return
+			if (upgradeOpen && !upgradeLoading) setUpgradeOpen(false)
+			else if (restartOpen && !restartLoading) setRestartOpen(false)
+			else if (rebootOpen && !rebootLoading) setRebootOpen(false)
+		}
+		document.addEventListener('keydown', handleEscape)
+		return () => document.removeEventListener('keydown', handleEscape)
+	}, [rebootLoading, rebootOpen, restartLoading, restartOpen, upgradeLoading, upgradeOpen])
 
   useEffect(() => {
     agentRequestSeq.current += 1
     setAgentStatus(undefined)
+    setConnectionDiagnostics(undefined)
     setAgentLogs(undefined)
     setAgentMessage(undefined)
     setAgentError(undefined)
@@ -116,15 +165,15 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
     if (!node || activeSection !== 'agent') return
     const requestID = agentRequestSeq.current
     if (node.status !== 'online') {
-      setAgentError('节点离线，无法获取 Agent 管理信息。')
-      return
+      setAgentError('节点离线，状态与日志暂不可用；连接诊断仍可查看。')
     }
     setAgentLoading(true)
     Promise.allSettled([
-      onGetAgentStatus ? onGetAgentStatus(node.id) : Promise.resolve(undefined),
-      onGetAgentLogs ? onGetAgentLogs(node.id, 100) : Promise.resolve(undefined)
+      node.status === 'online' && onGetAgentStatus ? onGetAgentStatus(node.id) : Promise.resolve(undefined),
+      node.status === 'online' && onGetAgentLogs ? onGetAgentLogs(node.id, 100) : Promise.resolve(undefined),
+      onGetConnectionDiagnostics ? onGetConnectionDiagnostics(node.id) : Promise.resolve(undefined)
     ])
-      .then(([statusResult, logsResult]) => {
+      .then(([statusResult, logsResult, diagnosticsResult]) => {
         if (requestID !== agentRequestSeq.current) return
         if (statusResult.status === 'fulfilled' && statusResult.value) {
           setAgentStatus(statusResult.value)
@@ -136,6 +185,12 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
           if (logsResult.value.error) setAgentError(logsResult.value.error)
         } else if (logsResult.status === 'rejected') {
           setAgentError(logsResult.reason instanceof Error ? logsResult.reason.message : 'Agent 日志加载失败')
+        }
+        if (diagnosticsResult.status === 'fulfilled' && diagnosticsResult.value) {
+          setConnectionDiagnostics(diagnosticsResult.value)
+        } else if (diagnosticsResult.status === 'rejected') {
+          const message = diagnosticsResult.reason instanceof Error ? diagnosticsResult.reason.message : '未知错误'
+          setToast({ message: `连接诊断加载失败: ${message}`, type: 'error' })
         }
       })
       .finally(() => {
@@ -456,12 +511,16 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
       setOperationMessage('节点离线，无法发送重启命令。')
       return
     }
-    const confirmed = window.confirm(`确认重启节点 ${displayName}？\n该操作会以当前 Agent 运行用户执行。\n当前执行用户：${node.agent_user || '未知'}`)
-    if (!confirmed) return
+		setRebootLoading(true)
     setOperationMessage(undefined)
     onRebootNode(node.id)
-      .then((response) => setOperationMessage(response.accepted ? '重启命令已发送，节点可能会暂时离线，请稍后等待 Agent 重新连接。' : formatOperationError(response.code, response.error || '重启命令发送失败')))
-      .catch((err: unknown) => setOperationMessage(err instanceof Error ? err.message : '重启命令发送失败'))
+			.then((response) => {
+				if (!response.accepted) throw new Error(formatOperationError(response.code, response.error || '节点重启命令发送失败'))
+				setRebootOpen(false)
+				setToast({ message: '节点重启命令下发成功', type: 'success' })
+			})
+			.catch((err: unknown) => setToast({ message: `节点重启失败: ${err instanceof Error ? err.message : '未知错误'}`, type: 'error' }))
+			.finally(() => setRebootLoading(false))
   }
 
   const closeSSHUninstallDialog = () => {
@@ -533,15 +592,15 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
     const requestID = agentRequestSeq.current + 1
     agentRequestSeq.current = requestID
     if (!online) {
-      setAgentError('节点离线，无法获取 Agent 管理信息。')
-      return
+      setAgentError('节点离线，状态与日志暂不可用；连接诊断仍可查看。')
     }
     setAgentLoading(true)
     Promise.allSettled([
-      onGetAgentStatus ? onGetAgentStatus(node.id) : Promise.resolve(undefined),
-      onGetAgentLogs ? onGetAgentLogs(node.id, 100) : Promise.resolve(undefined)
+      online && onGetAgentStatus ? onGetAgentStatus(node.id) : Promise.resolve(undefined),
+      online && onGetAgentLogs ? onGetAgentLogs(node.id, 100) : Promise.resolve(undefined),
+      onGetConnectionDiagnostics ? onGetConnectionDiagnostics(node.id) : Promise.resolve(undefined)
     ])
-      .then(([statusResult, logsResult]) => {
+      .then(([statusResult, logsResult, diagnosticsResult]) => {
         if (requestID !== agentRequestSeq.current) return
         if (statusResult.status === 'fulfilled' && statusResult.value) {
           setAgentStatus(statusResult.value)
@@ -554,6 +613,8 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
         } else if (logsResult.status === 'rejected') {
           setAgentError(logsResult.reason instanceof Error ? logsResult.reason.message : 'Agent 日志加载失败')
         }
+        if (diagnosticsResult.status === 'fulfilled' && diagnosticsResult.value) setConnectionDiagnostics(diagnosticsResult.value)
+        else if (diagnosticsResult.status === 'rejected') setToast({ message: `连接诊断加载失败: ${diagnosticsResult.reason instanceof Error ? diagnosticsResult.reason.message : '未知错误'}`, type: 'error' })
       })
       .finally(() => {
         if (requestID === agentRequestSeq.current) setAgentLoading(false)
@@ -588,14 +649,52 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
       setAgentError('节点离线，无法重启 Agent。')
       return
     }
-    const confirmed = window.confirm(`确认重启 ${agentStatus?.service_name || 'mizupanel-agent'}？\n重启后 Agent 会短暂断开并自动重新连接。`)
-    if (!confirmed) return
+		setRestartLoading(true)
     setAgentMessage(undefined)
     setAgentError(undefined)
     onRestartAgent(node.id)
-      .then((response) => setAgentMessage(response.accepted ? response.message || '重启命令已下发，等待 Agent 重新连接' : formatOperationError(response.code, response.error || 'Agent 重启命令发送失败')))
-      .catch((err: unknown) => setAgentError(err instanceof Error ? err.message : 'Agent 重启命令发送失败'))
+			.then((response) => {
+				if (!response.accepted) throw new Error(formatOperationError(response.code, response.error || 'Agent 重启命令发送失败'))
+				setRestartOpen(false)
+				setToast({ message: 'Agent重启命令下发成功', type: 'success' })
+			})
+			.catch((err: unknown) => setToast({ message: `Agent重启失败: ${err instanceof Error ? err.message : '未知错误'}`, type: 'error' }))
+			.finally(() => setRestartLoading(false))
   }
+
+  const confirmAgentUpgrade = () => {
+    if (!onUpgradeAgent || upgradeLoading) return
+    setUpgradeLoading(true)
+    onUpgradeAgent(node.id)
+      .then((response) => {
+        if (!response.accepted) throw new Error(response.error || '升级请求未被接受')
+        setUpgradeOpen(false)
+        setToast({ message: 'Agent升级已开始，正在等待重新连接', type: 'success' })
+        if (onGetAgentUpgradeStatus) {
+          let attempts = 0
+          const timer = window.setInterval(() => {
+            attempts += 1
+            onGetAgentUpgradeStatus(node.id).then((status) => {
+              if (status.stage === 'completed') { window.clearInterval(timer); setToast({ message: 'Agent升级成功', type: 'success' }) }
+              else if (status.stage === 'failed') { window.clearInterval(timer); setToast({ message: `Agent升级失败: ${status.error || '未知错误'}`, type: 'error' }) }
+              else if (attempts >= 40) { window.clearInterval(timer); setToast({ message: 'Agent升级失败: 等待重新连接超时', type: 'error' }) }
+            }).catch(() => { if (attempts >= 40) window.clearInterval(timer) })
+          }, 3000)
+        }
+      })
+      .catch((err: unknown) => setToast({ message: `Agent升级失败: ${err instanceof Error ? err.message : '未知错误'}`, type: 'error' }))
+      .finally(() => setUpgradeLoading(false))
+  }
+
+	const copyLegacyAgentUpgradeCommand = () => {
+		if (!onGetLegacyAgentUpgradeCommand || legacyUpgradeCopying) return
+		setLegacyUpgradeCopying(true)
+		onGetLegacyAgentUpgradeCommand()
+			.then(copyTextToClipboard)
+			.then(() => setToast({ message: 'Agent升级命令复制成功', type: 'success' }))
+			.catch((err: unknown) => setToast({ message: `Agent升级命令复制失败: ${err instanceof Error ? err.message : '未知错误'}`, type: 'error' }))
+			.finally(() => setLegacyUpgradeCopying(false))
+	}
 
   const handleCreateContainer = async (nodeId: string, command: string) => {
     try {
@@ -660,10 +759,19 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
             </button>
             <button
               type="button"
+              aria-label="分组与标签"
+              onClick={() => setOrganizationEditorOpen(true)}
+              className="soft-button inline-flex min-h-9 cursor-pointer items-center gap-2 border border-border bg-card px-3 text-xs font-black text-foreground shadow-sm transition hover:bg-muted focus:outline-none focus:ring-4 focus:ring-primary/20"
+            >
+              <Tags size={14} aria-hidden="true" />
+              分组与标签
+            </button>
+            <button
+              type="button"
               aria-label="重启"
               title="重启节点"
-              disabled={!online}
-              onClick={reboot}
+				disabled={!online || rebootLoading}
+				onClick={() => setRebootOpen(true)}
               className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 text-xs font-black text-warning shadow-sm transition hover:bg-warning/15 focus:outline-none focus:ring-4 focus:ring-warning/20 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
             >
               <PowerIcon />
@@ -1046,13 +1154,48 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={loadAgentManagement} disabled={!online || agentLoading} className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60">刷新状态</button>
               <button type="button" onClick={refreshAgentLogs} disabled={!online || agentLoading} className="min-h-10 rounded-2xl border border-success/30 bg-success/10 px-4 text-xs font-black text-success transition hover:bg-success/15 disabled:cursor-not-allowed disabled:opacity-60">刷新日志</button>
-              <button type="button" aria-label="重启 Agent" onClick={restartAgentService} disabled={!online} className="min-h-10 rounded-2xl border border-warning/30 bg-warning/10 px-4 text-xs font-black text-warning transition hover:bg-warning/15 disabled:cursor-not-allowed disabled:opacity-60">重启 Agent</button>
+              {connectionDiagnostics?.upgrade_available && connectionDiagnostics.upgrade_supported ? <button type="button" onClick={() => setUpgradeOpen(true)} disabled={!online || upgradeLoading} className="min-h-10 rounded-2xl bg-primary px-4 text-xs font-black text-primary-foreground shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60">升级 Agent</button> : null}
+								{connectionDiagnostics?.upgrade_available && !connectionDiagnostics.upgrade_supported ? <button type="button" onClick={copyLegacyAgentUpgradeCommand} disabled={!onGetLegacyAgentUpgradeCommand || legacyUpgradeCopying} className="inline-flex min-h-10 items-center gap-2 rounded-2xl border border-warning/30 bg-warning/10 px-4 text-xs font-black text-warning transition hover:bg-warning/15 disabled:cursor-not-allowed disabled:opacity-60"><Copy size={14} aria-hidden="true" />{legacyUpgradeCopying ? '正在生成...' : '复制升级命令'}</button> : null}
+								<button type="button" aria-label="重启 Agent" onClick={() => setRestartOpen(true)} disabled={!online || restartLoading} className="min-h-10 rounded-2xl border border-warning/30 bg-warning/10 px-4 text-xs font-black text-warning transition hover:bg-warning/15 disabled:cursor-not-allowed disabled:opacity-60">重启 Agent</button>
               <button type="button" aria-label="卸载 Agent" title="通过 SSH 卸载远端 Agent" onClick={openSSHUninstallDialog} className="min-h-10 rounded-2xl border border-danger/30 bg-danger/10 px-4 text-xs font-black text-danger transition hover:bg-danger/15 focus:outline-none focus:ring-4 focus:ring-danger/20">卸载 Agent</button>
             </div>
           </div>
           {agentMessage ? <p className="m-4 rounded-2xl border border-success/30 bg-success/10 px-4 py-3 text-sm font-black text-success">{agentMessage}</p> : null}
           {agentError ? <p className="m-4 rounded-2xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm font-black text-warning">{agentError}</p> : null}
           {agentLoading ? <p className="m-4 rounded-2xl border border-info/30 bg-info/10 px-4 py-3 text-sm font-black text-info">正在加载 Agent 管理信息...</p> : null}
+          {connectionDiagnostics ? (
+            <div className="mx-4 mt-4 rounded-3xl border border-border bg-surface/70 p-4">
+              {(() => {
+                const versionState = connectionAgentVersionState(connectionDiagnostics)
+                return (
+                  <>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-foreground">连接诊断</p>
+                  <p className="mt-1 text-xs font-bold text-muted-foreground">稳定身份、Agent 版本与当前连接健康</p>
+                </div>
+                <span className={`soft-chip inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-black ${connectionDiagnostics.identity_conflict ? 'bg-danger/10 text-danger' : connectionDiagnostics.online ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>
+                  {connectionDiagnostics.identity_conflict ? <ShieldAlert size={14} /> : connectionDiagnostics.online ? <Wifi size={14} /> : <WifiOff size={14} />}
+                  {connectionDiagnostics.identity_conflict ? '身份冲突' : connectionDiagnostics.online ? '连接正常' : '当前离线'}
+                </span>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <InfoBlock label="Agent ID" value={connectionDiagnostics.node_id} wrap />
+                <div className="rounded-2xl border border-border bg-card px-3 py-2.5">
+                  <p className="text-[11px] font-black uppercase tracking-[0.14em] text-muted-foreground">Agent 状态</p>
+                  <span className={`mt-2 inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-black ${versionState.tone}`}>
+                    {versionState.kind === 'current' ? <Wifi size={13} /> : <ShieldAlert size={13} />}
+                    {versionState.label}
+                  </span>
+                </div>
+                <InfoBlock label="Agent 版本" value={connectionDiagnostics.agent_version || node.agent_version || '未知'} />
+                <InfoBlock label="最后心跳" value={formatDateTime(connectionDiagnostics.last_heartbeat_at)} />
+              </div>
+                  </>
+                )
+              })()}
+            </div>
+          ) : null}
           <div className="grid gap-3 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
               <InfoBlock label="服务名称" value={agentStatus?.service_name || 'mizupanel-agent'} />
@@ -1075,6 +1218,54 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
           </div>
         </section>
       ) : null}
+
+      {upgradeOpen && connectionDiagnostics ? (
+        <div className="soft-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4">
+          <section role="dialog" aria-modal="true" aria-label="升级 Agent" className="soft-modal-shell w-full max-w-lg">
+            <div className="soft-modal-header flex items-start justify-between gap-3 border-b px-5 py-4">
+              <div><h3 className="text-base font-black text-foreground">升级 Agent</h3><p className="mt-1 text-xs font-bold text-muted-foreground">升级到 Server 提供的最新版本</p></div>
+              <button type="button" aria-label="关闭" onClick={() => setUpgradeOpen(false)} disabled={upgradeLoading} className="soft-button inline-flex h-9 w-9 items-center justify-center border border-border bg-card text-muted-foreground"><X size={16} /></button>
+            </div>
+            <div className="space-y-3 p-5">
+              <div className="grid gap-2 sm:grid-cols-2"><InfoBlock label="当前版本" value={connectionDiagnostics.agent_version || '未知'} /><InfoBlock label="目标版本" value={connectionDiagnostics.latest_version || '最新版本'} /></div>
+              <p className="rounded-2xl border border-warning/25 bg-warning/10 px-4 py-3 text-sm font-bold text-warning">升级期间 Agent 会短暂断开。系统会校验升级包并保留上一版用于失败恢复。</p>
+            </div>
+            <div className="soft-modal-footer flex justify-end gap-2 border-t px-5 py-4"><button type="button" onClick={() => setUpgradeOpen(false)} disabled={upgradeLoading} className="soft-button min-h-10 border border-border bg-card px-4 text-xs font-black text-muted-foreground">取消</button><button type="button" onClick={confirmAgentUpgrade} disabled={upgradeLoading} className="soft-button min-h-10 bg-primary px-4 text-xs font-black text-primary-foreground disabled:opacity-60">{upgradeLoading ? '正在准备...' : '确认升级'}</button></div>
+          </section>
+        </div>
+      ) : null}
+
+			{rebootOpen ? (
+				<div className="soft-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4">
+					<section role="dialog" aria-modal="true" aria-label="重启节点" className="soft-modal-shell w-full max-w-md">
+						<div className="soft-modal-header flex items-start justify-between gap-3 border-b px-5 py-4">
+							<div><h3 className="text-base font-black text-foreground">重启节点</h3><p className="mt-1 text-xs font-bold text-muted-foreground">向当前 Agent 下发系统重启命令</p></div>
+							<button type="button" aria-label="关闭" onClick={() => setRebootOpen(false)} disabled={rebootLoading} className="soft-button inline-flex h-9 w-9 items-center justify-center border border-border bg-card text-muted-foreground"><X size={16} /></button>
+						</div>
+						<div className="space-y-3 p-5">
+							<div className="grid gap-2 sm:grid-cols-2"><InfoBlock label="节点" value={displayName} /><InfoBlock label="执行用户" value={node.agent_user || '未知'} /></div>
+							<p className="rounded-2xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm font-bold text-danger">节点会暂时离线，系统服务和容器工作负载也会中断，请确认当前可以执行重启。</p>
+						</div>
+						<div className="soft-modal-footer flex justify-end gap-2 border-t px-5 py-4"><button type="button" onClick={() => setRebootOpen(false)} disabled={rebootLoading} className="soft-button min-h-10 border border-border bg-card px-4 text-xs font-black text-muted-foreground">取消</button><button type="button" onClick={reboot} disabled={rebootLoading} className="soft-button min-h-10 bg-danger px-4 text-xs font-black text-white disabled:opacity-60">{rebootLoading ? '正在下发...' : '确认重启'}</button></div>
+					</section>
+				</div>
+			) : null}
+
+			{restartOpen ? (
+				<div className="soft-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4">
+					<section role="dialog" aria-modal="true" aria-label="重启 Agent" className="soft-modal-shell w-full max-w-md">
+						<div className="soft-modal-header flex items-start justify-between gap-3 border-b px-5 py-4">
+							<div><h3 className="text-base font-black text-foreground">重启 Agent</h3><p className="mt-1 text-xs font-bold text-muted-foreground">重新启动节点上的 Agent 服务</p></div>
+							<button type="button" aria-label="关闭" onClick={() => setRestartOpen(false)} disabled={restartLoading} className="soft-button inline-flex h-9 w-9 items-center justify-center border border-border bg-card text-muted-foreground"><X size={16} /></button>
+						</div>
+						<div className="space-y-3 p-5">
+							<InfoBlock label="服务名称" value={agentStatus?.service_name || 'mizupanel-agent'} />
+							<p className="rounded-2xl border border-warning/25 bg-warning/10 px-4 py-3 text-sm font-bold text-warning">重启期间 Agent 会短暂离线，并在服务恢复后自动重新连接。</p>
+						</div>
+						<div className="soft-modal-footer flex justify-end gap-2 border-t px-5 py-4"><button type="button" onClick={() => setRestartOpen(false)} disabled={restartLoading} className="soft-button min-h-10 border border-border bg-card px-4 text-xs font-black text-muted-foreground">取消</button><button type="button" onClick={restartAgentService} disabled={restartLoading} className="soft-button min-h-10 bg-warning px-4 text-xs font-black text-white disabled:opacity-60">{restartLoading ? '正在下发...' : '确认重启'}</button></div>
+					</section>
+				</div>
+			) : null}
 
       {sshUninstallOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4">
@@ -1181,6 +1372,17 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
         onCreate={handleCreateContainer}
       />
 
+      {organizationEditorOpen ? (
+        <SingleNodeOrganizationModal
+          node={node}
+          onClose={() => setOrganizationEditorOpen(false)}
+          onSaved={async () => {
+            await onNodeOrganizationChanged?.()
+            setToast({ message: '主机组织信息调整成功', type: 'success' })
+          }}
+        />
+      ) : null}
+
       {/* Toast Notification */}
       {toast && (
         <Toast
@@ -1255,6 +1457,23 @@ function formatAgentMode(mode?: string) {
   if (mode === 'ops') return '运维模式'
   if (mode === 'normal') return '普通模式'
   return mode || '未知'
+}
+
+function formatDateTime(value?: string) {
+  if (!value || value.startsWith('0001-')) return '暂无记录'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '暂无记录'
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function connectionAgentVersionState(diagnostics: ConnectionDiagnostics) {
+  if (diagnostics.events.some((event) => event.type === 'protocol_rejected')) {
+    return { kind: 'incompatible', label: '版本不兼容', tone: 'bg-danger/10 text-danger' }
+  }
+  if (diagnostics.protocol_version >= 1) {
+    return { kind: 'current', label: '新版 Agent', tone: 'bg-success/10 text-success' }
+  }
+  return { kind: 'legacy', label: '待升级', tone: 'bg-warning/10 text-warning' }
 }
 
 function formatUptime(seconds?: number) {

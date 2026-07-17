@@ -3,34 +3,49 @@ package alerting
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mizupanel/mizupanel/internal/server/store"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func responseWithBody(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
 func TestSendWebhook(t *testing.T) {
-	// Mock webhook server
 	var receivedPayload AlertPayload
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			t.Errorf("expected POST, got %s", r.Method)
+	notifier := NewNotifier()
+	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != "POST" {
+			t.Errorf("expected POST, got %s", request.Method)
 		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("expected Content-Type application/json, got %s", r.Header.Get("Content-Type"))
+		if request.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("expected Content-Type application/json, got %s", request.Header.Get("Content-Type"))
 		}
-		if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
+		if err := json.NewDecoder(request.Body).Decode(&receivedPayload); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
+		return responseWithBody(http.StatusOK, ""), nil
+	})
 
-	notifier := NewNotifier()
 	channel := NotificationChannel{
 		Type:       "webhook",
-		WebhookURL: server.URL,
+		WebhookURL: "http://webhook.invalid/notify",
 	}
 	payload := AlertPayload{
 		RuleName:    "CPU High",
@@ -57,19 +72,17 @@ func TestSendWebhook(t *testing.T) {
 }
 
 func TestSendWebhookWithHeaders(t *testing.T) {
-	// Mock webhook server that checks custom headers
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Custom-Header") != "test-value" {
-			t.Errorf("expected X-Custom-Header test-value, got %s", r.Header.Get("X-Custom-Header"))
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
 	notifier := NewNotifier()
+	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("X-Custom-Header") != "test-value" {
+			t.Errorf("expected X-Custom-Header test-value, got %s", request.Header.Get("X-Custom-Header"))
+		}
+		return responseWithBody(http.StatusOK, ""), nil
+	})
+
 	channel := NotificationChannel{
 		Type:       "webhook",
-		WebhookURL: server.URL,
+		WebhookURL: "http://webhook.invalid/notify",
 		Headers: map[string]string{
 			"X-Custom-Header": "test-value",
 		},
@@ -87,24 +100,18 @@ func TestSendWebhookWithHeaders(t *testing.T) {
 }
 
 func TestSendDingTalk(t *testing.T) {
-	// Mock DingTalk server
 	var receivedPayload map[string]interface{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
+	notifier := NewNotifier()
+	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(request.Body).Decode(&receivedPayload); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errcode": 0,
-			"errmsg":  "ok",
-		})
-	}))
-	defer server.Close()
+		return responseWithBody(http.StatusOK, `{"errcode":0,"errmsg":"ok"}`), nil
+	})
 
-	notifier := NewNotifier()
 	channel := NotificationChannel{
 		Type:       "dingtalk",
-		WebhookURL: server.URL,
+		WebhookURL: "http://dingtalk.invalid/robot/send",
 	}
 	payload := AlertPayload{
 		RuleName:    "Memory High",
@@ -136,29 +143,22 @@ func TestSendDingTalk(t *testing.T) {
 }
 
 func TestSendDingTalkWithSecret(t *testing.T) {
-	// Mock DingTalk server that checks signature
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check that timestamp and sign query parameters are present
-		timestamp := r.URL.Query().Get("timestamp")
-		sign := r.URL.Query().Get("sign")
+	notifier := NewNotifier()
+	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		timestamp := request.URL.Query().Get("timestamp")
+		sign := request.URL.Query().Get("sign")
 		if timestamp == "" {
 			t.Error("expected timestamp query parameter")
 		}
 		if sign == "" {
 			t.Error("expected sign query parameter")
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"errcode": 0,
-			"errmsg":  "ok",
-		})
-	}))
-	defer server.Close()
+		return responseWithBody(http.StatusOK, `{"errcode":0,"errmsg":"ok"}`), nil
+	})
 
-	notifier := NewNotifier()
 	channel := NotificationChannel{
 		Type:       "dingtalk",
-		WebhookURL: server.URL,
+		WebhookURL: "http://dingtalk.invalid/robot/send",
 		Secret:     "test-secret",
 	}
 	payload := AlertPayload{
@@ -189,6 +189,63 @@ func TestSendUnsupportedChannel(t *testing.T) {
 	err := notifier.Send(context.Background(), channel, payload)
 	if err == nil {
 		t.Fatal("expected error for unsupported channel type")
+	}
+}
+
+func TestDeliverChannelWithRetryRetriesTransientFailure(t *testing.T) {
+	var attempts atomic.Int32
+	notifier := NewNotifier()
+	notifier.client.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		if attempts.Add(1) < 3 {
+			return responseWithBody(http.StatusServiceUnavailable, ""), nil
+		}
+		return responseWithBody(http.StatusNoContent, ""), nil
+	})
+
+	engine := &Engine{
+		notifier:                   notifier,
+		notificationAttemptTimeout: time.Second,
+		notificationRetryDelays:    []time.Duration{0, time.Millisecond, time.Millisecond},
+	}
+	err := engine.deliverChannelWithRetry(context.Background(), NotificationChannel{Type: "webhook", WebhookURL: "http://webhook.invalid/notify"}, AlertPayload{Status: "triggered"})
+	if err != nil {
+		t.Fatalf("deliver with retry: %v", err)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("attempts = %d, want 3", got)
+	}
+}
+
+func TestDeliverChannelWithRetryDoesNotRetryBadRequest(t *testing.T) {
+	var attempts atomic.Int32
+	notifier := NewNotifier()
+	notifier.client.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		return responseWithBody(http.StatusBadRequest, ""), nil
+	})
+
+	engine := &Engine{
+		notifier:                   notifier,
+		notificationAttemptTimeout: time.Second,
+		notificationRetryDelays:    []time.Duration{0, time.Millisecond, time.Millisecond},
+	}
+	err := engine.deliverChannelWithRetry(context.Background(), NotificationChannel{Type: "webhook", WebhookURL: "http://webhook.invalid/notify"}, AlertPayload{Status: "triggered"})
+	if err == nil {
+		t.Fatal("expected bad request error")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+}
+
+func TestDeliveryErrorsDoNotExposeWebhookURL(t *testing.T) {
+	const secretURL = "://webhook-secret-token"
+	err := NewNotifier().Send(context.Background(), NotificationChannel{Type: "webhook", WebhookURL: secretURL}, AlertPayload{Status: "triggered"})
+	if err == nil {
+		t.Fatal("expected invalid webhook error")
+	}
+	if strings.Contains(err.Error(), secretURL) || strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("error leaked webhook URL: %q", err)
 	}
 }
 

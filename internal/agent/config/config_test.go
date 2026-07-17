@@ -198,3 +198,54 @@ func TestLoadRejectsInvalidInterval(t *testing.T) {
 		t.Fatal("Load returned nil error, want invalid interval error")
 	}
 }
+
+func TestLoadUsesPersistentAgentIDBesideConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(path, []byte("node:\n  id: legacy-host\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	const identity = "7bb62f38-85fd-4b89-9c6d-e2ca51a4c241"
+	if err := os.WriteFile(filepath.Join(dir, "agent-id"), []byte(identity+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NodeID != identity {
+		t.Fatalf("NodeID = %q, want %q", cfg.NodeID, identity)
+	}
+}
+
+func TestLoadRejectsMalformedPersistentAgentID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(path, []byte("node:\n  id: legacy-host\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-id"), []byte("invalid identity/value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() succeeded with malformed persistent identity")
+	}
+}
+
+func TestLoadPreservesMigratedLegacyAgentID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(path, []byte("node:\n  id: ignored\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-id"), []byte("master\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NodeID != "master" || cfg.IdentitySource != "legacy" {
+		t.Fatalf("config = %#v", cfg)
+	}
+}

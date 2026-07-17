@@ -25,6 +25,9 @@ vi.mock('./api/client', () => ({
   deleteNodePath: vi.fn(async () => ({ path: '/tmp/upload.bin', deleted: true })),
   deleteNode: vi.fn(async () => undefined),
   rebootNode: vi.fn(async () => ({ accepted: true })),
+  getConnectionDiagnostics: vi.fn(async () => ({ node_id: 'node-1', online: true, health: 'healthy', agent_version: '0.1.0', protocol_version: 1, identity_conflict: false, upgrade_supported: false, latest_version: '0.1.1', upgrade_available: true, events: [] })),
+  upgradeAgent: vi.fn(async () => ({ accepted: true, stage: 'preparing' })),
+  getAgentUpgradeStatus: vi.fn(async () => ({ node_id: 'node-1', target_version: '0.1.1', actual_version: '0.1.1', stage: 'completed' })),
   createTerminalSession: vi.fn(async () => ({ token: 'terminal-token' })),
   createContainerExecSession: vi.fn(async () => ({ token: 'exec-token' })),
   startSSHInstall: vi.fn(async () => ({ job_id: 'ssh-install-1' })),
@@ -178,8 +181,6 @@ describe('node monitoring detail', () => {
   })
 
   test('wires Agent management actions through the API client', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-
     render(<App />)
 
     await screen.findByRole('heading', { name: 'Oracle SG' })
@@ -191,9 +192,11 @@ describe('node monitoring detail', () => {
     expect(within(panel).getByText('mizupanel-agent started')).toBeInTheDocument()
 
     fireEvent.click(within(panel).getByRole('button', { name: '重启 Agent' }))
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('mizupanel-agent'))
+		const dialog = screen.getByRole('dialog', { name: '重启 Agent' })
+		expect(within(dialog).getByText('mizupanel-agent')).toBeInTheDocument()
+		fireEvent.click(within(dialog).getByRole('button', { name: '确认重启' }))
     expect(restartAgent).toHaveBeenCalledWith('node-1')
-    expect(await within(panel).findByText('重启命令已下发，等待 Agent 重新连接')).toBeInTheDocument()
+		expect(await screen.findByText('Agent重启命令下发成功')).toBeInTheDocument()
   })
 
   test('uses placeholders for missing disk I/O fields and derives boot time from uptime', async () => {

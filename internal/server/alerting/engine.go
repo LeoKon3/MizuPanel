@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,22 +24,37 @@ type AlertState struct {
 
 // Engine manages alert rule evaluation and notification
 type Engine struct {
-	alerts   *store.AlertStore
-	metrics  *store.MetricStore
-	nodes    *store.NodeStore
-	notifier *Notifier
-	states   map[string]*AlertState // key: "ruleID:nodeID"
-	mu       sync.RWMutex
+	alerts                     *store.AlertStore
+	metrics                    *store.MetricStore
+	nodes                      *store.NodeStore
+	notifier                   *Notifier
+	notificationAttemptTimeout time.Duration
+	notificationRetryDelays    []time.Duration
+	states                     map[string]*AlertState // key: "ruleID:nodeID"
+	mu                         sync.RWMutex
+}
+
+type notificationDeliveryResult struct {
+	Sent        bool
+	Error       string
+	AttemptedAt time.Time
+}
+
+type channelDeliveryResult struct {
+	channelType string
+	err         error
 }
 
 // NewEngine creates a new alerting engine
 func NewEngine(alerts *store.AlertStore, metrics *store.MetricStore, nodes *store.NodeStore) *Engine {
 	return &Engine{
-		alerts:   alerts,
-		metrics:  metrics,
-		nodes:    nodes,
-		notifier: NewNotifier(),
-		states:   make(map[string]*AlertState),
+		alerts:                     alerts,
+		metrics:                    metrics,
+		nodes:                      nodes,
+		notifier:                   NewNotifier(),
+		notificationAttemptTimeout: 5 * time.Second,
+		notificationRetryDelays:    []time.Duration{0, 250 * time.Millisecond, 750 * time.Millisecond},
+		states:                     make(map[string]*AlertState),
 	}
 }
 
@@ -107,10 +123,14 @@ func (e *Engine) CheckRules(ctx context.Context) error {
 			triggered := e.evaluateRule(&rule, &metric)
 			if triggered {
 				// Send notification and create alert history
-				e.handleAlert(ctx, &rule, &node, &metric)
+				if err := e.handleAlert(ctx, &rule, &node, &metric); err != nil {
+					return fmt.Errorf("handle alert rule %d for node %s: %w", rule.ID, node.ID, err)
+				}
 			} else {
 				// Check if alert was previously triggered and should be resolved
-				e.checkResolution(ctx, &rule, node.ID)
+				if err := e.checkResolution(ctx, &rule, &node, &metric); err != nil {
+					return fmt.Errorf("resolve alert rule %d for node %s: %w", rule.ID, node.ID, err)
+				}
 			}
 		}
 	}
@@ -148,7 +168,7 @@ func (e *Engine) syncStatesWithActiveAlerts() error {
 }
 
 // handleAlert sends notification and creates alert history when rule triggers
-func (e *Engine) handleAlert(ctx context.Context, rule *store.AlertRule, node *store.Node, metric *store.Metric) {
+func (e *Engine) handleAlert(ctx context.Context, rule *store.AlertRule, node *store.Node, metric *store.Metric) error {
 	stateKey := fmt.Sprintf("%d:%s", rule.ID, metric.NodeID)
 	e.mu.Lock()
 	state := e.states[stateKey]
@@ -168,9 +188,9 @@ func (e *Engine) handleAlert(ctx context.Context, rule *store.AlertRule, node *s
 	// If alert already triggered, update metric value and return
 	if state != nil && state.Triggered {
 		if state.HistoryID > 0 {
-			_ = e.alerts.UpdateAlertHistoryMetricValue(state.HistoryID, floatValue)
+			return e.alerts.UpdateAlertHistoryMetricValue(state.HistoryID, floatValue)
 		}
-		return
+		return nil
 	}
 
 	// Create alert history
@@ -187,8 +207,7 @@ func (e *Engine) handleAlert(ctx context.Context, rule *store.AlertRule, node *s
 	}
 
 	if err := e.alerts.CreateAlertHistory(history); err != nil {
-		// Log error but continue with notifications
-		return
+		return fmt.Errorf("create alert history: %w", err)
 	}
 
 	// Send notifications
@@ -204,29 +223,11 @@ func (e *Engine) handleAlert(ctx context.Context, rule *store.AlertRule, node *s
 		Status:      "triggered",
 	}
 
-	notificationSent := false
-	var notificationError string
-	for _, channel := range rule.NotificationChannels {
-		nc := NotificationChannel{
-			Type:       channel.Type,
-			WebhookURL: channel.WebhookURL,
-			Secret:     channel.Secret,
-			Headers:    channel.Headers,
-		}
-		if err := e.notifier.Send(ctx, nc, payload); err != nil {
-			notificationError = err.Error()
-		} else {
-			notificationSent = true
-		}
-	}
-
-	// Update history with notification status
-	if notificationSent {
-		history.NotificationSent = true
-	}
-	if notificationError != "" {
-		history.NotificationError = notificationError
-	}
+	delivery := e.deliverNotifications(ctx, rule.NotificationChannels, payload)
+	history.NotificationSent = delivery.Sent
+	history.NotificationError = delivery.Error
+	history.NotificationAttemptedAt = &delivery.AttemptedAt
+	updateErr := e.alerts.UpdateAlertHistoryNotificationResult(history.ID, delivery.Sent, delivery.Error, delivery.AttemptedAt)
 
 	// Mark as triggered in state
 	e.mu.Lock()
@@ -235,27 +236,133 @@ func (e *Engine) handleAlert(ctx context.Context, rule *store.AlertRule, node *s
 		e.states[stateKey].HistoryID = history.ID
 	}
 	e.mu.Unlock()
+
+	if updateErr != nil {
+		return fmt.Errorf("persist trigger notification result: %w", updateErr)
+	}
+	return nil
 }
 
 // checkResolution checks if a previously triggered alert should be resolved
-func (e *Engine) checkResolution(ctx context.Context, rule *store.AlertRule, nodeID string) {
-	stateKey := fmt.Sprintf("%d:%s", rule.ID, nodeID)
+func (e *Engine) checkResolution(ctx context.Context, rule *store.AlertRule, node *store.Node, metric *store.Metric) error {
+	stateKey := fmt.Sprintf("%d:%s", rule.ID, node.ID)
 	e.mu.Lock()
 	state := e.states[stateKey]
 	e.mu.Unlock()
 
 	// If alert was triggered but condition is no longer met, mark as resolved
 	if state != nil && state.Triggered && state.HistoryID > 0 {
+		history, err := e.alerts.GetAlertHistoryByID(state.HistoryID)
+		if err != nil {
+			return fmt.Errorf("load alert history: %w", err)
+		}
+		if history == nil {
+			return fmt.Errorf("alert history %d not found", state.HistoryID)
+		}
+
 		resolvedAt := time.Now().UTC()
 		if err := e.alerts.UpdateAlertHistoryResolved(state.HistoryID, resolvedAt); err != nil {
-			// Log error but continue
+			return fmt.Errorf("mark alert resolved: %w", err)
 		}
+
+		metricValue := e.getMetricValue(metric, rule.MetricField)
+		floatValue := 0.0
+		if value, ok := metricValue.(float64); ok {
+			floatValue = value
+		} else if value, ok := metricValue.(int64); ok {
+			floatValue = float64(value)
+		}
+		payload := AlertPayload{
+			RuleName:    history.RuleName,
+			NodeID:      node.ID,
+			NodeName:    node.Name,
+			MetricField: rule.MetricField,
+			MetricValue: floatValue,
+			Threshold:   rule.Threshold,
+			Operator:    rule.Operator,
+			TriggeredAt: history.TriggeredAt,
+			ResolvedAt:  &resolvedAt,
+			Status:      "resolved",
+		}
+		delivery := e.deliverNotifications(ctx, rule.NotificationChannels, payload)
+		updateErr := e.alerts.UpdateAlertHistoryRecoveryNotificationResult(state.HistoryID, delivery.Sent, delivery.Error, delivery.AttemptedAt)
 
 		// Clear state
 		e.mu.Lock()
 		delete(e.states, stateKey)
 		e.mu.Unlock()
+
+		if updateErr != nil {
+			return fmt.Errorf("persist recovery notification result: %w", updateErr)
+		}
 	}
+	return nil
+}
+
+func (e *Engine) deliverNotifications(ctx context.Context, channels []store.NotificationChannel, payload AlertPayload) notificationDeliveryResult {
+	attemptedAt := time.Now().UTC()
+	if len(channels) == 0 {
+		return notificationDeliveryResult{AttemptedAt: attemptedAt}
+	}
+
+	results := make([]channelDeliveryResult, len(channels))
+	var wg sync.WaitGroup
+	for index, channel := range channels {
+		index := index
+		channel := channel
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[index] = channelDeliveryResult{
+				channelType: channel.Type,
+				err: e.deliverChannelWithRetry(ctx, NotificationChannel{
+					Type:       channel.Type,
+					WebhookURL: channel.WebhookURL,
+					Secret:     channel.Secret,
+					Headers:    channel.Headers,
+				}, payload),
+			}
+		}()
+	}
+	wg.Wait()
+
+	errorsByChannel := make([]string, 0)
+	for _, result := range results {
+		if result.err != nil {
+			errorsByChannel = append(errorsByChannel, fmt.Sprintf("%s: %s", result.channelType, result.err.Error()))
+		}
+	}
+	return notificationDeliveryResult{
+		Sent:        len(errorsByChannel) == 0,
+		Error:       strings.Join(errorsByChannel, "; "),
+		AttemptedAt: time.Now().UTC(),
+	}
+}
+
+func (e *Engine) deliverChannelWithRetry(ctx context.Context, channel NotificationChannel, payload AlertPayload) error {
+	var lastErr error
+	for attempt, delay := range e.notificationRetryDelays {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return newDeliveryError(false, "request canceled")
+			case <-timer.C:
+			}
+		}
+
+		attemptCtx, cancel := context.WithTimeout(ctx, e.notificationAttemptTimeout)
+		lastErr = e.notifier.Send(attemptCtx, channel, payload)
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+		if !isRetryableDeliveryError(lastErr) || attempt == len(e.notificationRetryDelays)-1 {
+			return lastErr
+		}
+	}
+	return lastErr
 }
 
 // evaluateRule evaluates a single rule against a metric

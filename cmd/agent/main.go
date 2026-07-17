@@ -15,8 +15,10 @@ import (
 	"github.com/mizupanel/mizupanel/internal/agent/metrics"
 	agentprocess "github.com/mizupanel/mizupanel/internal/agent/process"
 	agentterminal "github.com/mizupanel/mizupanel/internal/agent/terminal"
+	agentupgrade "github.com/mizupanel/mizupanel/internal/agent/upgrade"
 	agentws "github.com/mizupanel/mizupanel/internal/agent/ws"
 	"github.com/mizupanel/mizupanel/internal/protocol"
+	"github.com/mizupanel/mizupanel/internal/version"
 )
 
 func main() {
@@ -62,8 +64,12 @@ func runAgent(ctx context.Context, configPath string) error {
 	if cfg.Debug {
 		log.Printf("[debug][agent] debug logging enabled")
 	}
+	upgrader := agentupgrade.New(cfg.ServerURL, version.Current, cfg.AgentMode)
+	if cfg.AgentMode == "ops" {
+		client.SetConnectedHandler(upgrader.ConfirmSuccessfulStart)
+	}
 	client.SetAgentManagementHandler(agentmanagement.NewHandler(agentmanagement.Options{
-		Version:         "0.1.0",
+		Version:         version.Current,
 		User:            currentUsername(),
 		Mode:            cfg.AgentMode,
 		TerminalEnabled: cfg.EnableTerminal && agentterminal.Supported(),
@@ -76,6 +82,7 @@ func runAgent(ctx context.Context, configPath string) error {
 		},
 		ConfigPath: configPath,
 		StartTime:  time.Now(),
+		Upgrade:    upgrader.Start,
 	}))
 	client.SetTerminalHandlerFactory(func(sender agentws.TerminalSender) agentws.TerminalHandler {
 		return agentterminal.NewManager(cfg.EnableTerminal, sender)
@@ -100,7 +107,9 @@ func runAgent(ctx context.Context, configPath string) error {
 	return client.RunForever(ctx, protocol.HelloMessage{
 		Type:            protocol.MessageTypeHello,
 		NodeID:          cfg.NodeID,
-		AgentVersion:    "0.1.0",
+		AgentVersion:    version.Current,
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		IdentitySource:  cfg.IdentitySource,
 		Hostname:        initialSnapshot.Hostname,
 		Name:            cfg.Name,
 		IP:              initialSnapshot.IP,
@@ -111,6 +120,7 @@ func runAgent(ctx context.Context, configPath string) error {
 		AgentMode:       cfg.AgentMode,
 		AgentUser:       currentUsername(),
 		AgentManagement: true,
+		AgentUpgrade:    cfg.AgentMode == "ops",
 	}, cfg.Interval, 3*time.Second, func(nodeID string, timestamp int64) (protocol.MetricsMessage, error) {
 		snapshot, err := collector.Collect()
 		if err != nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/protocol"
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
 	"github.com/mizupanel/mizupanel/internal/server/store"
+	"github.com/mizupanel/mizupanel/internal/version"
 )
 
 type TerminalHub interface {
@@ -41,6 +42,8 @@ type NodeOperations interface {
 	AgentStatus(ctx context.Context, nodeID string) (protocol.AgentStatusResponse, error)
 	AgentRestart(ctx context.Context, nodeID string) (protocol.AgentRestartResponse, error)
 	AgentLogs(ctx context.Context, nodeID string, lines int) (protocol.AgentLogsResponse, error)
+	AgentUpgrade(ctx context.Context, nodeID string, targetVersion string) (protocol.AgentUpgradeResponse, error)
+	AgentUpgradeStatus(nodeID string) protocol.AgentUpgradeStatus
 	DockerExec(ctx context.Context, nodeID string, command string) (protocol.DockerExecResponse, error)
 	ContainerStart(ctx context.Context, nodeID string, containerID string) (protocol.ContainerStartResponse, error)
 	ContainerStop(ctx context.Context, nodeID string, containerID string) (protocol.ContainerStopResponse, error)
@@ -52,8 +55,13 @@ type NodeDisconnecter interface {
 	DisconnectNode(nodeID string)
 }
 
+type ConnectionDiagnosticsProvider interface {
+	ConnectionDiagnostics(ctx context.Context, nodeID string) (store.ConnectionDiagnostics, error)
+}
+
 type Server struct {
 	nodes                   *store.NodeStore
+	organizations           *store.NodeOrganizationStore
 	metrics                 *store.MetricStore
 	processes               *store.ProcessSnapshotStore
 	docker                  *store.DockerSnapshotStore
@@ -61,6 +69,7 @@ type Server struct {
 	terminalHub             TerminalHub
 	agentOps                NodeOperations
 	disconnecter            NodeDisconnecter
+	diagnostics             ConnectionDiagnosticsProvider
 	settings                *store.SettingsStore
 	defaultMetricsRetention time.Duration
 	terminalTokens          map[string]terminalToken
@@ -122,7 +131,7 @@ const (
 )
 
 func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...any) *http.ServeMux {
-	server := &Server{nodes: nodes, metrics: metrics, defaultMetricsRetention: 6 * time.Hour, terminalTokens: make(map[string]terminalToken), auth: NewAuthenticator(AuthConfig{})}
+	server := &Server{nodes: nodes, organizations: store.NewNodeOrganizationStoreWithDialect(nodes.DB(), nodes.Dialect()), metrics: metrics, defaultMetricsRetention: 6 * time.Hour, terminalTokens: make(map[string]terminalToken), auth: NewAuthenticator(AuthConfig{})}
 	var alertStore *store.AlertStore
 	var k8sService *k8s.Service
 	for _, snapshotStore := range snapshots {
@@ -142,6 +151,9 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 			}
 			if disconnecter, ok := snapshotStore.(NodeDisconnecter); ok {
 				server.disconnecter = disconnecter
+			}
+			if diagnostics, ok := snapshotStore.(ConnectionDiagnosticsProvider); ok {
+				server.diagnostics = diagnostics
 			}
 		case TerminalConfig:
 			server.terminalEnabled = typed.Enabled
@@ -164,6 +176,10 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 	mux.HandleFunc("/api/auth/logout", server.handleAuthLogout)
 	mux.HandleFunc("/api/system/about", server.requireAuth(server.handleSystemAbout))
 	mux.HandleFunc("/api/settings", server.requireAuth(server.handleSettings))
+	mux.HandleFunc("/api/node-groups", server.requireAuth(server.handleNodeGroups))
+	mux.HandleFunc("/api/node-groups/", server.requireAuth(server.handleNodeGroup))
+	mux.HandleFunc("/api/node-tags", server.requireAuth(server.handleNodeTags))
+	mux.HandleFunc("/api/node-tags/", server.requireAuth(server.handleNodeTag))
 	mux.HandleFunc("/api/nodes", server.requireAuth(server.handleNodes))
 	mux.HandleFunc("/api/nodes/", server.requireAuth(server.handleNodeRoutes))
 	if alertStore != nil {
@@ -384,12 +400,20 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	organizations, err := s.organizations.ListNodeOrganizations(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load node organization metadata")
+		return
+	}
 
 	response := struct {
 		Nodes []NodeResponse `json:"nodes"`
 	}{Nodes: make([]NodeResponse, 0, len(nodes))}
 	for _, node := range nodes {
 		item := nodeResponse(node)
+		organization := organizations[node.ID]
+		item.Group = organization.Group
+		item.Tags = organization.Tags
 		if s.terminalEnabled && s.terminalHub != nil {
 			item.TerminalEnabled = s.terminalHub.NodeTerminalEnabled(node.ID)
 		}
@@ -410,6 +434,10 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/nodes/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 2 && parts[0] == "batch" && parts[1] == "metadata" {
+		s.handleBatchNodeMetadata(w, r)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "metrics" {
 		s.handleNodeMetrics(w, r, parts[0])
 		return
@@ -452,6 +480,18 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 3 && parts[1] == "agent" && parts[2] == "logs" {
 		s.handleNodeAgentLogs(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "agent" && parts[2] == "upgrade" {
+		s.handleNodeAgentUpgrade(w, r, parts[0])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "agent" && parts[2] == "upgrade" && parts[3] == "status" {
+		s.handleNodeAgentUpgradeStatus(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "connection-diagnostics" {
+		s.handleNodeConnectionDiagnostics(w, r, parts[0])
 		return
 	}
 	if len(parts) == 3 && parts[1] == "terminal" && parts[2] == "session" {
@@ -515,6 +555,13 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	response := nodeResponse(node)
+	organization, err := s.organizations.GetNodeOrganization(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load node organization metadata")
+		return
+	}
+	response.Group = organization.Group
+	response.Tags = organization.Tags
 	if s.terminalEnabled && s.terminalHub != nil {
 		response.TerminalEnabled = s.terminalHub.NodeTerminalEnabled(id)
 	}
@@ -863,6 +910,39 @@ func (s *Server) handleNodeAgentLogs(w http.ResponseWriter, r *http.Request, nod
 	writeAgentOperationResponse(w, response.Code, response.Error, response)
 }
 
+func (s *Server) handleNodeAgentUpgrade(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !authorizeBrowserNodeOperation(r) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "Agent upgrade unavailable")
+		return
+	}
+	response, err := s.agentOps.AgentUpgrade(r.Context(), nodeID, version.Current)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleNodeAgentUpgradeStatus(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "Agent upgrade unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.agentOps.AgentUpgradeStatus(nodeID))
+}
+
 func (s *Server) agentManagementAvailable(w http.ResponseWriter, r *http.Request, nodeID string) bool {
 	node, err := s.nodes.Get(r.Context(), nodeID)
 	if err != nil {
@@ -917,7 +997,7 @@ func authorizeBrowserNodeOperation(r *http.Request) bool {
 	if !sameOrigin(r) {
 		return false
 	}
-	if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/reboot") || strings.HasSuffix(r.URL.Path, "/agent/restart")) {
+	if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/reboot") || strings.HasSuffix(r.URL.Path, "/agent/restart") || strings.HasSuffix(r.URL.Path, "/agent/upgrade")) {
 		return true
 	}
 	return strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json")

@@ -33,6 +33,17 @@ func TestHelloMessageJSON(t *testing.T) {
 	}
 }
 
+func TestHelloMessageJSONIncludesProtocolIdentityMetadata(t *testing.T) {
+	data, err := json.Marshal(HelloMessage{Type: MessageTypeHello, NodeID: "agent-1", ProtocolVersion: CurrentProtocolVersion, IdentitySource: "persistent_uuid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `"protocol_version":1`) || !strings.Contains(text, `"identity_source":"persistent_uuid"`) {
+		t.Fatalf("hello metadata missing: %s", text)
+	}
+}
+
 func TestHelloAckMessageJSONIncludesNodeToken(t *testing.T) {
 	msg := HelloAckMessage{Type: MessageTypeHelloAck, NodeID: "node-1", NodeToken: "node-token", Interval: 5}
 

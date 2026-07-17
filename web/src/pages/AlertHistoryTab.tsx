@@ -443,6 +443,22 @@ function AlertCard({
               <>触发: {formatTimestamp(alert.triggered_at)} · 解决: {formatTimestamp(alert.resolved_at!)}</>
             )}
           </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <NotificationDeliveryStatus
+              label="触发通知"
+              sent={alert.notification_sent}
+              error={alert.notification_error}
+              attemptedAt={alert.notification_attempted_at}
+            />
+            {!isActive ? (
+              <NotificationDeliveryStatus
+                label="恢复通知"
+                sent={Boolean(alert.recovery_notification_sent)}
+                error={alert.recovery_notification_error}
+                attemptedAt={alert.recovery_notification_attempted_at}
+              />
+            ) : null}
+          </div>
         </div>
         {isActive ? (
           <button
@@ -467,6 +483,44 @@ function AlertCard({
       </div>
     </div>
   )
+}
+
+function NotificationDeliveryStatus({
+  label,
+  sent,
+  error,
+  attemptedAt
+}: {
+  label: string
+  sent: boolean
+  error?: string
+  attemptedAt?: string
+}) {
+  const status = getNotificationDeliveryStatus(sent, error, attemptedAt)
+  return (
+    <div className={`min-w-0 rounded-xl border px-2.5 py-1.5 ${status.containerTone}`}>
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-black text-muted-foreground">{label}</span>
+        <span className={`text-[10px] font-black ${status.textTone}`}>{status.label}</span>
+      </div>
+      {status.kind === 'failed' && error ? (
+        <p className="mt-1 max-w-md break-words text-[11px] font-semibold leading-4 text-danger">{error}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function getNotificationDeliveryStatus(sent: boolean, error?: string, attemptedAt?: string) {
+  if (!attemptedAt) {
+    return { kind: 'unknown', label: '未知', containerTone: 'border-warning/20 bg-warning/5', textTone: 'text-warning' }
+  }
+  if (sent) {
+    return { kind: 'success', label: '成功', containerTone: 'border-success/20 bg-success/5', textTone: 'text-success' }
+  }
+  if (error) {
+    return { kind: 'failed', label: '失败', containerTone: 'border-danger/20 bg-danger/5', textTone: 'text-danger' }
+  }
+  return { kind: 'unconfigured', label: '未配置', containerTone: 'border-border bg-muted/40', textTone: 'text-muted-foreground' }
 }
 
 function DeleteAlertHistoryModal({

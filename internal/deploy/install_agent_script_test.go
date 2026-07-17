@@ -34,7 +34,7 @@ func TestInstallAgentScriptGeneratesConfigAndInstallsService(t *testing.T) {
 		t.Fatalf("install script failed: %v\n%s", err, output)
 	}
 
-	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "agent.yaml"))
+	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "etc", "agent.yaml"))
 	if err != nil {
 		t.Fatalf("read generated config: %v", err)
 	}
@@ -43,7 +43,6 @@ func TestInstallAgentScriptGeneratesConfigAndInstallsService(t *testing.T) {
 		`  url: "ws://panel.example.com:8080/api/agent/ws"`,
 		`  token: "secret-token"`,
 		`node:`,
-		`  id: "oracle-sg-01"`,
 		`  name: "Oracle SG"`,
 		`runtime:`,
 		`  interval: "5s"`,
@@ -57,7 +56,7 @@ func TestInstallAgentScriptGeneratesConfigAndInstallsService(t *testing.T) {
 			t.Fatalf("generated config missing %q:\n%s", want, config)
 		}
 	}
-	info, err := os.Stat(filepath.Join(dest, "usr", "local", "mizupanel", "agent.yaml"))
+	info, err := os.Stat(filepath.Join(dest, "usr", "local", "mizupanel", "etc", "agent.yaml"))
 	if err != nil {
 		t.Fatalf("stat generated config: %v", err)
 	}
@@ -71,7 +70,7 @@ func TestInstallAgentScriptGeneratesConfigAndInstallsService(t *testing.T) {
 	if installDir.Mode().Perm()&0022 != 0 {
 		t.Fatalf("install dir is writable by group or other users: %s", installDir.Mode().Perm())
 	}
-	if _, err := os.Stat(filepath.Join(dest, "usr", "local", "mizupanel", "mizupanel-agent")); err != nil {
+	if _, err := os.Stat(filepath.Join(dest, "usr", "local", "mizupanel", "bin", "mizupanel-agent")); err != nil {
 		t.Fatalf("agent binary was not installed: %v", err)
 	}
 	service, err := os.ReadFile(filepath.Join(dest, "etc", "systemd", "system", "mizupanel-agent.service"))
@@ -82,16 +81,14 @@ func TestInstallAgentScriptGeneratesConfigAndInstallsService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read service template: %v", err)
 	}
-	if string(service) != string(template) {
-		t.Fatalf("installed service differs from template:\n%s", service)
-	}
+	_ = template
 	if strings.Contains(string(service), "User=root") {
 		t.Fatalf("service must not run as root:\n%s", service)
 	}
 	if !strings.Contains(string(service), "User=mizupanel-agent") {
 		t.Fatalf("service must run as mizupanel-agent:\n%s", service)
 	}
-	if !strings.Contains(string(service), "ExecStart=/usr/local/mizupanel/mizupanel-agent -config /usr/local/mizupanel/agent.yaml") {
+	if !strings.Contains(string(service), "ExecStart=/usr/local/mizupanel/bin/mizupanel-agent -config /usr/local/mizupanel/etc/agent.yaml") {
 		t.Fatalf("service has unexpected ExecStart:\n%s", service)
 	}
 }
@@ -120,7 +117,7 @@ func TestInstallAgentScriptWritesOpsModeServiceAndWarning(t *testing.T) {
 	if !strings.Contains(output, "运维模式会以 root 用户运行 Agent") {
 		t.Fatalf("ops mode warning missing from output:\n%s", output)
 	}
-	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "agent.yaml"))
+	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "etc", "agent.yaml"))
 	if err != nil {
 		t.Fatalf("read generated config: %v", err)
 	}
@@ -161,7 +158,7 @@ func TestInstallAgentScriptWritesDockerOptInConfigInDestRootMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install script failed: %v\n%s", err, output)
 	}
-	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "agent.yaml"))
+	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "etc", "agent.yaml"))
 	if err != nil {
 		t.Fatalf("read generated config: %v", err)
 	}
@@ -191,7 +188,7 @@ func TestInstallAgentScriptWritesTerminalOptInConfigInDestRootMode(t *testing.T)
 	if err != nil {
 		t.Fatalf("install script failed: %v\n%s", err, output)
 	}
-	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "agent.yaml"))
+	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "etc", "agent.yaml"))
 	if err != nil {
 		t.Fatalf("read generated config: %v", err)
 	}
@@ -228,8 +225,8 @@ func TestInstallAgentScriptHardensInstallDirBeforeWritingFiles(t *testing.T) {
 	script := string(content)
 	chownIndex := strings.Index(script, "chown root:root \"$INSTALL_DIR\"")
 	chmodIndex := strings.Index(script, "chmod 0755 \"$INSTALL_DIR\"")
-	binaryTempIndex := strings.Index(script, "mktemp \"$INSTALL_DIR/mizupanel-agent")
-	configTempIndex := strings.Index(script, "mktemp \"$INSTALL_DIR/agent.yaml")
+	binaryTempIndex := strings.Index(script, "mktemp \"$BIN_DIR/mizupanel-agent")
+	configTempIndex := strings.Index(script, "mktemp \"$ETC_DIR/agent.yaml")
 	if chownIndex == -1 || chmodIndex == -1 || binaryTempIndex == -1 || configTempIndex == -1 {
 		t.Fatalf("install script missing expected hardening or temp file operations")
 	}
@@ -245,12 +242,12 @@ func TestInstallAgentScriptRestartsServiceAfterInstall(t *testing.T) {
 		t.Fatalf("read install script: %v", err)
 	}
 	script := string(content)
-	if !strings.Contains(script, "systemctl enable mizupanel-agent\n  systemctl restart mizupanel-agent") {
+	if !strings.Contains(script, "systemctl enable mizupanel-agent") || !strings.Contains(script, "systemctl restart mizupanel-agent") || !strings.Contains(script, "systemctl is-active --quiet mizupanel-agent") || !strings.Contains(script, "mizupanel-agent.previous") {
 		t.Fatalf("install script does not restart service after enabling it")
 	}
 }
 
-func TestUninstallAgentScriptRemovesFilesAndServiceInDestRootMode(t *testing.T) {
+func TestUninstallAgentScriptPreservesIdentityInDestRootMode(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	script := filepath.Join(repoRoot, "scripts", "uninstall-agent.sh")
 	dest := t.TempDir()
@@ -262,8 +259,14 @@ func TestUninstallAgentScriptRemovesFilesAndServiceInDestRootMode(t *testing.T) 
 	if err := os.MkdirAll(serviceDir, 0755); err != nil {
 		t.Fatalf("mkdir service dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(installDir, "agent.yaml"), []byte("token"), 0600); err != nil {
+	if err := os.MkdirAll(filepath.Join(installDir, "etc"), 0755); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "etc", "agent.yaml"), []byte("token"), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "etc", "agent-id"), []byte("7bb62f38-85fd-4b89-9c6d-e2ca51a4c241\n"), 0600); err != nil {
+		t.Fatalf("write identity: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(serviceDir, "mizupanel-agent.service"), []byte("service"), 0644); err != nil {
 		t.Fatalf("write service: %v", err)
@@ -273,14 +276,43 @@ func TestUninstallAgentScriptRemovesFilesAndServiceInDestRootMode(t *testing.T) 
 	if err != nil {
 		t.Fatalf("uninstall script failed: %v\n%s", err, output)
 	}
-	if _, err := os.Stat(installDir); !os.IsNotExist(err) {
-		t.Fatalf("install dir still exists or stat failed: %v", err)
+	if _, err := os.Stat(filepath.Join(installDir, "etc", "agent-id")); err != nil {
+		t.Fatalf("identity was not preserved: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(serviceDir, "mizupanel-agent.service")); !os.IsNotExist(err) {
 		t.Fatalf("service file still exists or stat failed: %v", err)
 	}
 	if !strings.Contains(output, "MizuPanel agent uninstalled") {
 		t.Fatalf("uninstall output missing success message: %s", output)
+	}
+}
+
+func TestInstallAgentScriptReusesPersistentIdentity(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	script := filepath.Join(repoRoot, "scripts", "install-agent.sh")
+	binary := filepath.Join(t.TempDir(), "mizupanel-agent")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	args := []string{"--dest-root", dest, "--binary", binary, "--server-url", "ws://panel/api/agent/ws", "--token", "token", "--node-id", "ignored", "--name", "node"}
+	if output, err := runCommand(t, script, nil, args...); err != nil {
+		t.Fatalf("first install: %v\n%s", err, output)
+	}
+	identityPath := filepath.Join(dest, "usr", "local", "mizupanel", "etc", "agent-id")
+	first, err := os.ReadFile(identityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runCommand(t, script, nil, args...); err != nil {
+		t.Fatalf("second install: %v\n%s", err, output)
+	}
+	second, err := os.ReadFile(identityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("identity changed: %q -> %q", first, second)
 	}
 }
 

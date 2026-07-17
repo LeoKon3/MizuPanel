@@ -4,12 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +23,7 @@ import (
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
 	"github.com/mizupanel/mizupanel/internal/server/store"
+	"github.com/mizupanel/mizupanel/internal/version"
 )
 
 type Options struct {
@@ -29,6 +34,9 @@ type Options struct {
 	AgentTokens      *store.AgentTokenStore
 	ProcessSnapshots *store.ProcessSnapshotStore
 	DockerSnapshots  *store.DockerSnapshotStore
+	HeartbeatTimeout time.Duration
+	PublicURL        string
+	DownloadDir      string
 }
 
 const (
@@ -160,20 +168,28 @@ func (s *InstallAuthStore) MayAuthenticateNodeToken(token string) bool {
 type Handler struct {
 	nodes       *store.NodeStore
 	metrics     *store.MetricStore
+	events      *store.ConnectionEventStore
 	options     Options
 	upgrader    websocket.Upgrader
 	mu          sync.Mutex
 	sessions    map[string]string
 	connections map[string]*agentConnection
+	upgrades    map[string]protocol.AgentUpgradeStatus
 }
 
 type agentConnection struct {
 	nodeID                   string
 	sessionID                string
+	hostname                 string
+	remoteAddr               string
+	agentVersion             string
+	protocolVersion          int
+	identitySource           string
 	conn                     *websocket.Conn
 	writeMu                  sync.Mutex
 	terminalEnabled          bool
 	supportsAgentManagement  bool
+	supportsAgentUpgrade     bool
 	sessionMu                sync.Mutex
 	terminals                map[string]*browserTerminal
 	containerExecs           map[string]*browserContainerExec
@@ -190,6 +206,7 @@ type agentConnection struct {
 	pendingAgentStatuses     map[string]chan protocol.AgentStatusResponse
 	pendingAgentRestarts     map[string]chan protocol.AgentRestartResponse
 	pendingAgentLogs         map[string]chan protocol.AgentLogsResponse
+	pendingAgentUpgrades     map[string]chan protocol.AgentUpgradeResponse
 	pendingDockerExecs       map[string]chan protocol.DockerExecResponse
 	pendingContainerStarts   map[string]chan protocol.ContainerStartResponse
 	pendingContainerStops    map[string]chan protocol.ContainerStopResponse
@@ -217,12 +234,17 @@ func NewHandler(nodes *store.NodeStore, metrics *store.MetricStore, options Opti
 	if options.Interval == 0 {
 		options.Interval = 5
 	}
+	if options.HeartbeatTimeout <= 0 {
+		options.HeartbeatTimeout = 2 * time.Minute
+	}
 	return &Handler{
 		nodes:       nodes,
 		metrics:     metrics,
+		events:      store.NewConnectionEventStore(nodes.DB()),
 		options:     options,
 		sessions:    make(map[string]string),
 		connections: make(map[string]*agentConnection),
+		upgrades:    make(map[string]protocol.AgentUpgradeStatus),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(*http.Request) bool { return true },
 		},
@@ -295,8 +317,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
 	nodeID := nodeIDForHello(hello)
+	if hello.ProtocolVersion != 0 && hello.ProtocolVersion != protocol.CurrentProtocolVersion {
+		if h.options.Debug {
+			log.Printf("[debug][server][agenthub] unsupported protocol remote=%s version=%d supported=%d", r.RemoteAddr, hello.ProtocolVersion, protocol.CurrentProtocolVersion)
+		}
+		if nodeID != "" {
+			if _, err := h.nodes.Get(r.Context(), nodeID); err == nil {
+				h.recordConnectionEvent(&agentConnection{nodeID: nodeID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource}, store.ConnectionEventProtocolRejected, fmt.Sprintf("unsupported protocol version %d; server supports %d", hello.ProtocolVersion, protocol.CurrentProtocolVersion))
+			}
+		}
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "unsupported protocol version"), time.Now().Add(time.Second))
+		return
+	}
+
 	if nodeID == "" {
 		if h.options.Debug {
 			log.Printf("[debug][server][agenthub] hello missing node_id remote=%s", r.RemoteAddr)
@@ -378,20 +412,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := h.startSession(nodeID)
-	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage)}
+	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage)}
+	h.recordConnectionEvent(agent, store.ConnectionEventConnected, "")
 	h.registerConnection(agent)
+	h.observeAgentUpgradeReconnect(nodeID, hello.AgentVersion)
 	defer h.unregisterConnection(agent)
 	defer h.finishSession(context.WithoutCancel(r.Context()), nodeID, sessionID)
+	disconnectReason := "connection closed"
+	defer func() { h.recordConnectionEvent(agent, store.ConnectionEventDisconnected, disconnectReason) }()
 	if err := agent.writeJSON(protocol.HelloAckMessage{Type: protocol.MessageTypeHelloAck, NodeID: nodeID, NodeToken: nodeToken, Interval: h.options.Interval}); err != nil {
 		h.unregisterConnection(agent)
 		return
 	}
+	_ = conn.SetReadDeadline(time.Now().Add(h.options.HeartbeatTimeout))
 
 	for {
 		var rawMessage json.RawMessage
 		if err := conn.ReadJSON(&rawMessage); err != nil {
+			disconnectReason = err.Error()
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				disconnectReason = "heartbeat timeout"
+				h.recordConnectionEvent(agent, store.ConnectionEventHeartbeatTimeout, disconnectReason)
+			}
 			return
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(h.options.HeartbeatTimeout))
 		var incoming struct {
 			Type string `json:"type"`
 		}
@@ -461,6 +507,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			agent.deliverAgentLogs(message)
+		case protocol.MessageTypeAgentUpgradeResponse:
+			var message protocol.AgentUpgradeResponse
+			if err := json.Unmarshal(rawMessage, &message); err != nil {
+				continue
+			}
+			agent.deliverAgentUpgrade(message)
+			h.recordAgentUpgradeResponse(agent, message)
 		case protocol.MessageTypeDockerExecResponse:
 			var message protocol.DockerExecResponse
 			if err := json.Unmarshal(rawMessage, &message); err != nil {
@@ -658,6 +711,67 @@ func (h *Handler) FileList(ctx context.Context, nodeID string, path string) (pro
 	case <-ctx.Done():
 		return protocol.FileListResponse{}, ctx.Err()
 	}
+}
+
+func (h *Handler) AgentUpgradeStatus(nodeID string) protocol.AgentUpgradeStatus {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if status, ok := h.upgrades[nodeID]; ok {
+		return status
+	}
+	agent := h.connections[nodeID]
+	actual := ""
+	if agent != nil {
+		actual = agent.agentVersion
+	}
+	return protocol.AgentUpgradeStatus{NodeID: nodeID, ActualVersion: actual, Stage: "idle"}
+}
+
+func (h *Handler) observeAgentUpgradeReconnect(nodeID string, actualVersion string) {
+	h.mu.Lock()
+	if status, ok := h.upgrades[nodeID]; ok {
+		if status.TargetVersion == actualVersion {
+			status.Stage = "completed"
+			status.ActualVersion = actualVersion
+			status.Error = ""
+			h.upgrades[nodeID] = status
+		} else if status.Stage == "waiting_reconnect" || status.Stage == "preparing" {
+			status.Stage = "failed"
+			status.ActualVersion = actualVersion
+			status.Error = fmt.Sprintf("Agent 重连后仍为版本 %s。", actualVersion)
+			h.upgrades[nodeID] = status
+		}
+	}
+	h.mu.Unlock()
+}
+
+func (h *Handler) expireAgentUpgrade(nodeID string, targetVersion string) {
+	h.mu.Lock()
+	status, ok := h.upgrades[nodeID]
+	if ok && status.TargetVersion == targetVersion && (status.Stage == "preparing" || status.Stage == "waiting_reconnect") {
+		status.Stage = "failed"
+		status.Error = "等待 Agent 重新连接超时。"
+		h.upgrades[nodeID] = status
+	}
+	h.mu.Unlock()
+}
+
+func (h *Handler) recordAgentUpgradeResponse(agent *agentConnection, response protocol.AgentUpgradeResponse) {
+	if agent == nil || response.Stage != "failed" {
+		return
+	}
+	h.setAgentUpgradeFailed(agent.nodeID, agent.agentVersion, response.Error)
+}
+
+func (h *Handler) setAgentUpgradeFailed(nodeID string, actualVersion string, reason string) {
+	h.mu.Lock()
+	status := h.upgrades[nodeID]
+	status.NodeID = nodeID
+	status.ActualVersion = actualVersion
+	status.Stage = "failed"
+	status.Error = reason
+	h.upgrades[nodeID] = status
+	h.mu.Unlock()
 }
 
 func (h *Handler) FileRead(ctx context.Context, nodeID string, path string) (protocol.FileReadResponse, error) {
@@ -867,6 +981,87 @@ func (h *Handler) AgentLogs(ctx context.Context, nodeID string, lines int) (prot
 	case <-ctx.Done():
 		return protocol.AgentLogsResponse{}, ctx.Err()
 	}
+}
+
+func (h *Handler) AgentUpgrade(ctx context.Context, nodeID string, targetVersion string) (protocol.AgentUpgradeResponse, error) {
+	if targetVersion != version.Current {
+		return protocol.AgentUpgradeResponse{Code: "invalid_target", Error: "Agent 只能升级到当前 Server 提供的最新版本。"}, nil
+	}
+	agent := h.connection(nodeID)
+	if agent == nil {
+		return protocol.AgentUpgradeResponse{Code: "offline", Error: "Agent 离线，无法升级。"}, nil
+	}
+	if !agent.supportsAgentUpgrade {
+		return protocol.AgentUpgradeResponse{Code: "unsupported", Error: "当前 Agent 需要先通过安装命令升级一次。"}, nil
+	}
+	node, err := h.nodes.Get(ctx, nodeID)
+	if err != nil {
+		return protocol.AgentUpgradeResponse{}, err
+	}
+	requestID, err := randomTerminalSessionID()
+	if err != nil {
+		return protocol.AgentUpgradeResponse{}, err
+	}
+	request, code, err := h.prepareAgentUpgradeRequest(node, requestID, targetVersion)
+	if err != nil {
+		return protocol.AgentUpgradeResponse{Code: code, Error: err.Error()}, nil
+	}
+	ch := make(chan protocol.AgentUpgradeResponse, 1)
+	agent.addAgentUpgradeRequest(requestID, ch)
+	defer agent.removeAgentUpgradeRequest(requestID)
+	h.mu.Lock()
+	h.upgrades[nodeID] = protocol.AgentUpgradeStatus{NodeID: nodeID, TargetVersion: targetVersion, ActualVersion: agent.agentVersion, Stage: "preparing"}
+	h.mu.Unlock()
+	if err := agent.writeJSON(request); err != nil {
+		h.setAgentUpgradeFailed(nodeID, agent.agentVersion, err.Error())
+		return protocol.AgentUpgradeResponse{}, err
+	}
+	select {
+	case response := <-ch:
+		if response.Accepted {
+			h.mu.Lock()
+			status := h.upgrades[nodeID]
+			if status.Stage != "failed" {
+				status.Stage = "waiting_reconnect"
+				status.Error = ""
+				h.upgrades[nodeID] = status
+			}
+			h.mu.Unlock()
+			time.AfterFunc(2*time.Minute, func() { h.expireAgentUpgrade(nodeID, targetVersion) })
+		} else {
+			h.setAgentUpgradeFailed(nodeID, agent.agentVersion, response.Error)
+		}
+		return response, nil
+	case <-time.After(15 * time.Second):
+		h.setAgentUpgradeFailed(nodeID, agent.agentVersion, "Agent 升级请求超时。")
+		return protocol.AgentUpgradeResponse{Code: "timeout", Error: "Agent 升级请求超时。"}, nil
+	case <-ctx.Done():
+		h.setAgentUpgradeFailed(nodeID, agent.agentVersion, ctx.Err().Error())
+		return protocol.AgentUpgradeResponse{}, ctx.Err()
+	}
+}
+
+func (h *Handler) prepareAgentUpgradeRequest(node store.Node, requestID string, targetVersion string) (protocol.AgentUpgradeRequest, string, error) {
+	if node.OS != "linux" || (node.Arch != "amd64" && node.Arch != "arm64") {
+		return protocol.AgentUpgradeRequest{}, "unsupported_platform", errors.New("当前系统架构暂不支持一键升级。")
+	}
+	if h.options.PublicURL == "" {
+		return protocol.AgentUpgradeRequest{}, "public_url_missing", errors.New("Server public_url 未配置，无法生成安全升级地址。")
+	}
+	name := "mizupanel-agent-linux-" + node.Arch
+	content, err := os.ReadFile(filepath.Join(h.options.DownloadDir, name))
+	if err != nil {
+		return protocol.AgentUpgradeRequest{}, "package_missing", errors.New("Server 未准备对应的 Agent 升级包。")
+	}
+	sum := sha256.Sum256(content)
+	return protocol.AgentUpgradeRequest{
+		Type:          protocol.MessageTypeAgentUpgradeRequest,
+		RequestID:     requestID,
+		NodeID:        node.ID,
+		TargetVersion: targetVersion,
+		DownloadURL:   strings.TrimRight(h.options.PublicURL, "/") + "/downloads/" + name,
+		SHA256:        hex.EncodeToString(sum[:]),
+	}, "", nil
 }
 
 func (h *Handler) AttachTerminal(ctx context.Context, nodeID string, browser *websocket.Conn) error {
@@ -1141,6 +1336,53 @@ func (h *Handler) ContainerDelete(ctx context.Context, nodeID string, containerI
 // IsNodeOnline 检查节点是否在线
 func (h *Handler) IsNodeOnline(nodeID string) bool {
 	return h.connection(nodeID) != nil
+}
+
+func (h *Handler) ConnectionDiagnostics(ctx context.Context, nodeID string) (store.ConnectionDiagnostics, error) {
+	node, err := h.nodes.Get(ctx, nodeID)
+	if err != nil {
+		return store.ConnectionDiagnostics{}, err
+	}
+	events, err := h.events.List(ctx, nodeID)
+	if err != nil {
+		return store.ConnectionDiagnostics{}, err
+	}
+	diagnostics := store.ConnectionDiagnostics{NodeID: nodeID, Online: h.IsNodeOnline(nodeID), Health: "healthy", AgentVersion: node.AgentVersion, Events: events}
+	diagnostics.LatestVersion = version.Current
+	diagnostics.UpgradeAvailable = node.AgentVersion != "" && node.AgentVersion != version.Current
+	if !node.LastSeenAt.IsZero() {
+		lastHeartbeat := node.LastSeenAt
+		diagnostics.LastHeartbeatAt = &lastHeartbeat
+	}
+	if connection := h.connection(nodeID); connection != nil {
+		diagnostics.AgentVersion = connection.agentVersion
+		diagnostics.ProtocolVersion = connection.protocolVersion
+		diagnostics.IdentitySource = connection.identitySource
+		diagnostics.UpgradeSupported = connection.supportsAgentUpgrade
+	}
+	for _, event := range events {
+		switch event.Type {
+		case store.ConnectionEventConnected:
+			if diagnostics.LastConnectedAt == nil {
+				connectedAt := event.CreatedAt
+				diagnostics.LastConnectedAt = &connectedAt
+			}
+		case store.ConnectionEventDisconnected:
+			if diagnostics.LastDisconnectedAt == nil {
+				disconnectedAt := event.CreatedAt
+				diagnostics.LastDisconnectedAt = &disconnectedAt
+				diagnostics.LastDisconnectReason = event.Reason
+			}
+		case store.ConnectionEventIdentityConflict:
+			diagnostics.IdentityConflict = true
+		}
+	}
+	if diagnostics.IdentityConflict {
+		diagnostics.Health = "identity_conflict"
+	} else if !diagnostics.Online {
+		diagnostics.Health = "offline"
+	}
+	return diagnostics, nil
 }
 
 // SendToNodeWithTimeout 发送消息到节点并等待响应
@@ -1431,10 +1673,24 @@ func (h *Handler) registerConnection(connection *agentConnection) {
 	h.connections[connection.nodeID] = connection
 	h.mu.Unlock()
 	if previous != nil && previous != connection {
+		h.recordConnectionEvent(previous, store.ConnectionEventReplaced, "replaced by a newer connection")
+		if previous.hostname != "" && connection.hostname != "" && previous.hostname != connection.hostname {
+			h.recordConnectionEvent(connection, store.ConnectionEventIdentityConflict, fmt.Sprintf("same Agent ID reported different hostnames: %s and %s", previous.hostname, connection.hostname))
+		}
 		previous.closeTerminals("Agent 已重新连接，旧终端会话已关闭")
 		previous.closeContainerExecs("Agent 已重新连接，旧容器终端会话已关闭")
 		previous.closePendingOperations("Agent 已重新连接，请重试操作")
 		_ = previous.conn.Close()
+	}
+}
+
+func (h *Handler) recordConnectionEvent(connection *agentConnection, eventType string, reason string) {
+	if h.events == nil || connection == nil {
+		return
+	}
+	event := &store.ConnectionEvent{NodeID: connection.nodeID, Type: eventType, Reason: reason, AgentVersion: connection.agentVersion, ProtocolVersion: connection.protocolVersion, IdentitySource: connection.identitySource, Hostname: connection.hostname, RemoteAddr: connection.remoteAddr, CreatedAt: time.Now().UTC()}
+	if err := h.events.Create(context.Background(), event); err != nil && h.options.Debug {
+		log.Printf("[debug][server][agenthub] record connection event failed node_id=%s type=%s error=%v", connection.nodeID, eventType, err)
 	}
 }
 
@@ -1572,6 +1828,12 @@ func (c *agentConnection) addAgentLogsRequest(requestID string, ch chan protocol
 	c.pendingAgentLogs[requestID] = ch
 }
 
+func (c *agentConnection) addAgentUpgradeRequest(requestID string, ch chan protocol.AgentUpgradeResponse) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	c.pendingAgentUpgrades[requestID] = ch
+}
+
 func (c *agentConnection) removeAgentStatusRequest(requestID string) {
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
@@ -1588,6 +1850,12 @@ func (c *agentConnection) removeAgentLogsRequest(requestID string) {
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
 	delete(c.pendingAgentLogs, requestID)
+}
+
+func (c *agentConnection) removeAgentUpgradeRequest(requestID string) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	delete(c.pendingAgentUpgrades, requestID)
 }
 
 func (c *agentConnection) addDockerExecRequest(requestID string, ch chan protocol.DockerExecResponse) {
@@ -1731,6 +1999,15 @@ func (c *agentConnection) deliverAgentLogs(response protocol.AgentLogsResponse) 
 	}
 }
 
+func (c *agentConnection) deliverAgentUpgrade(response protocol.AgentUpgradeResponse) {
+	c.pendingMu.Lock()
+	ch := c.pendingAgentUpgrades[response.RequestID]
+	c.pendingMu.Unlock()
+	if ch != nil {
+		ch <- response
+	}
+}
+
 func (c *agentConnection) deliverDockerExec(response protocol.DockerExecResponse) {
 	c.pendingMu.Lock()
 	ch := c.pendingDockerExecs[response.RequestID]
@@ -1796,6 +2073,7 @@ func (c *agentConnection) closePendingOperations(reason string) {
 	agentStatuses := c.pendingAgentStatuses
 	agentRestarts := c.pendingAgentRestarts
 	agentLogs := c.pendingAgentLogs
+	agentUpgrades := c.pendingAgentUpgrades
 	dockerExecs := c.pendingDockerExecs
 	containerStarts := c.pendingContainerStarts
 	containerStops := c.pendingContainerStops
@@ -1811,6 +2089,7 @@ func (c *agentConnection) closePendingOperations(reason string) {
 	c.pendingAgentStatuses = make(map[string]chan protocol.AgentStatusResponse)
 	c.pendingAgentRestarts = make(map[string]chan protocol.AgentRestartResponse)
 	c.pendingAgentLogs = make(map[string]chan protocol.AgentLogsResponse)
+	c.pendingAgentUpgrades = make(map[string]chan protocol.AgentUpgradeResponse)
 	c.pendingDockerExecs = make(map[string]chan protocol.DockerExecResponse)
 	c.pendingContainerStarts = make(map[string]chan protocol.ContainerStartResponse)
 	c.pendingContainerStops = make(map[string]chan protocol.ContainerStopResponse)
@@ -1844,6 +2123,9 @@ func (c *agentConnection) closePendingOperations(reason string) {
 	}
 	for requestID, ch := range agentLogs {
 		ch <- protocol.AgentLogsResponse{Type: protocol.MessageTypeAgentLogsResponse, RequestID: requestID, Code: "offline", Error: reason}
+	}
+	for requestID, ch := range agentUpgrades {
+		ch <- protocol.AgentUpgradeResponse{Type: protocol.MessageTypeAgentUpgradeResponse, RequestID: requestID, Stage: "failed", Code: "offline", Error: reason}
 	}
 	for _, ch := range dockerExecs {
 		ch <- protocol.DockerExecResponse{Type: protocol.MessageTypeDockerExecResponse, Accepted: false, ExitCode: 1, Error: reason}

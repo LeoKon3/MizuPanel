@@ -28,8 +28,10 @@ All notable changes to MizuPanel will be documented in this file.
 - Added alert state tracking in memory to prevent duplicate notifications.
 - Added automatic alert resolution tracking (updates `resolved_at` when condition no longer met).
 - Added Feishu (飞书) notification channel with interactive card format and HMAC-SHA256 signature support.
-- Added WeCom (企业微信) notification channel with markdown message format.
-- Added notification channel buttons for DingTalk, Feishu, and WeCom in the alert rule form.
+- Added notification channel buttons for DingTalk and Feishu in the alert rule form.
+- Added concurrent alert delivery with bounded retries for transient Webhook, DingTalk, and Feishu failures.
+- Added persisted trigger and recovery notification attempt/result fields to alert history.
+- Added recovery notifications for real metric recovery while keeping manual resolution, rule disabling, and rule deletion silent.
 - Added Dashboard "告警规则" page with rule list, create/edit/delete forms, and enable/disable controls.
 - Added alert icon to Dashboard sidebar navigation.
 - Added Kubernetes cluster management across Agent kubectl handling, protocol messages, Server storage/service/API, and Dashboard pages.
@@ -46,6 +48,12 @@ All notable changes to MizuPanel will be documented in this file.
 - Added GitHub repository link and version display to the System Settings page.
 - Added refreshed README screenshot gallery and separate detailed configuration/screenshot documentation pages in Chinese and English.
 - Added GitHub Actions release workflow to build and upload Linux amd64/arm64 release packages for `v*` tags and manual tag dispatch.
+- Added persistent Agent identity under `/usr/local/mizupanel/etc/agent-id`, generated once and reused across idempotent reinstall and upgrade runs.
+- Added Agent protocol version, capability reporting, connection diagnostics, and identity-conflict detection.
+- Added secure one-click Agent upgrades to the current Server version with SHA-256 verification, architecture checks, delayed rollback, reconnect confirmation, and asynchronous failure reporting.
+- Added node groups and preset-color tags with relational SQLite/MySQL storage, enriched node APIs, and transactional batch metadata updates.
+- Added grouped host browsing, group/tag filters, a desktop batch-management table, and latest-version batch Agent upgrades with bounded frontend concurrency.
+- Added a single-host “分组与标签” editor in the host detail header, including offline editing, inline tag creation, and local node refresh after save.
 
 ### Changed
 
@@ -63,6 +71,11 @@ All notable changes to MizuPanel will be documented in this file.
 - Changed release packaging to include the `VERSION` file and documented direct GitHub Release package downloads.
 - Reworked `README.md` and `README.en.md` as visual product introductions with release-package deployment first, current screenshots, and detailed setup moved to docs pages.
 - Updated screenshot assets to match the current Dashboard, host, Kubernetes, create-resource, and alert interfaces.
+- Changed Linux Agent installation to the `/usr/local/mizupanel/{bin,etc,var}` layout and made repeat installation preserve the machine identity while refreshing binaries and configuration.
+- Changed Agent upgrade policy to support only the latest Server-bundled Agent version; legacy Agents receive a final idempotent install command instead of a selectable target version.
+- Changed alert channel delivery to treat a notification as successful only when every configured channel succeeds, with sanitized per-channel failure summaries.
+- Changed the host workspace to separate single-host browsing from multi-host batch management while sharing search, status, group, and tag filters.
+- Changed the supported Dashboard surface to Windows desktop browsers: one persistent sidebar and one operational batch table with horizontal overflow, without phone-specific navigation or duplicate list rendering.
 
 ### Fixed
 
@@ -72,6 +85,10 @@ All notable changes to MizuPanel will be documented in this file.
 - Fixed alert history rule names so renamed rules are reflected when history is listed.
 - Fixed disabled alert rules so currently active alerts are resolved instead of remaining active indefinitely.
 - Fixed resolved alert cleanup so active alerts cannot be deleted before being resolved.
+- Fixed Agent identity instability across reinstall and upgrade by preserving the generated machine UUID independently from mutable display names and hostnames.
+- Fixed duplicate Agent connections with the same identity so the Server can distinguish replacement from suspected identity conflicts.
+- Fixed transient alert delivery loss by retrying network errors, HTTP 408/425/429, and 5xx responses while avoiding deterministic 4xx retries.
+- Fixed alert history so trigger and recovery delivery status remains distinguishable from unknown legacy rows.
 
 ### Security
 
@@ -80,6 +97,8 @@ All notable changes to MizuPanel will be documented in this file.
 - Empty passwords are rejected when authentication is enabled.
 - Session TTL defaults to 24 hours; expired sessions are automatically pruned.
 - Alert rules API endpoints are protected by authentication middleware when auth is enabled.
+- Agent upgrades accept only fixed Server-origin artifacts, cap downloads at 256 MiB, verify SHA-256 and executable ELF architecture, and arm rollback before replacing the running binary.
+- Connection and alert errors exposed to logs, APIs, and history omit tokens, Webhook URLs, secrets, and custom request headers.
 
 ## v0.0.4 - 2026-06-10
 

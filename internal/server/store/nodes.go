@@ -45,6 +45,10 @@ func (s *NodeStore) DB() *sql.DB {
 	return s.db
 }
 
+func (s *NodeStore) Dialect() serverdb.Dialect {
+	return s.dialect
+}
+
 func (s *NodeStore) Upsert(ctx context.Context, node Node) error {
 	now := time.Now().UTC()
 	if node.CreatedAt.IsZero() {
@@ -133,6 +137,7 @@ func (s *NodeStore) Delete(ctx context.Context, id string) error {
 		`DELETE FROM node_tokens WHERE node_id = ?`,
 		`DELETE FROM node_process_snapshots WHERE node_id = ?`,
 		`DELETE FROM node_docker_snapshots WHERE node_id = ?`,
+		`DELETE FROM node_tag_links WHERE node_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, statement, id); err != nil {
 			return err
@@ -171,6 +176,7 @@ func (s *NodeStore) DeleteIfDeleted(ctx context.Context, id string) error {
 		`DELETE FROM node_tokens WHERE node_id = ?`,
 		`DELETE FROM node_process_snapshots WHERE node_id = ?`,
 		`DELETE FROM node_docker_snapshots WHERE node_id = ?`,
+		`DELETE FROM node_tag_links WHERE node_id = ?`,
 		`DELETE FROM nodes WHERE id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, statement, id); err != nil {

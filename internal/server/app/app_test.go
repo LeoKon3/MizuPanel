@@ -932,7 +932,7 @@ func TestServedAgentInstallScriptSelectsBinaryURLForMachineArchitecture(t *testi
 	if downloads["/downloads/mizupanel-agent-linux-arm64"] != 1 {
 		t.Fatalf("arm64 binary downloads = %d, want 1", downloads["/downloads/mizupanel-agent-linux-arm64"])
 	}
-	installedBinary, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "mizupanel-agent"))
+	installedBinary, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "bin", "mizupanel-agent"))
 	if err != nil {
 		t.Fatalf("read downloaded binary: %v", err)
 	}
@@ -1310,7 +1310,7 @@ func TestServedAgentInstallScriptGeneratesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embedded install script failed: %v\n%s", err, output)
 	}
-	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "agent.yaml"))
+	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "etc", "agent.yaml"))
 	if err != nil {
 		t.Fatalf("read generated config: %v", err)
 	}
@@ -1351,14 +1351,14 @@ func TestServedAgentInstallScriptDownloadsBinaryURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embedded install script failed: %v\n%s", err, output)
 	}
-	installedBinary, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "mizupanel-agent"))
+	installedBinary, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "bin", "mizupanel-agent"))
 	if err != nil {
 		t.Fatalf("read downloaded binary: %v", err)
 	}
 	if string(installedBinary) != string(binaryPayload) {
 		t.Fatalf("installed binary = %q, want downloaded payload", installedBinary)
 	}
-	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "agent.yaml"))
+	config, err := os.ReadFile(filepath.Join(dest, "usr", "local", "mizupanel", "etc", "agent.yaml"))
 	if err != nil {
 		t.Fatalf("read generated config: %v", err)
 	}

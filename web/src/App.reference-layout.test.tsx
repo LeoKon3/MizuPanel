@@ -103,6 +103,9 @@ vi.mock('./api/client', () => ({
   deleteNodePath: vi.fn(async () => ({ path: '/tmp/upload.bin', deleted: true })),
   deleteNode: vi.fn(async () => undefined),
   rebootNode: vi.fn(async () => ({ accepted: true })),
+  getConnectionDiagnostics: vi.fn(async () => ({ node_id: 'node-1', online: true, health: 'healthy', agent_version: '0.1.0', protocol_version: 1, identity_conflict: false, upgrade_supported: false, latest_version: '0.1.1', upgrade_available: true, events: [] })),
+  upgradeAgent: vi.fn(async () => ({ accepted: true, stage: 'preparing' })),
+  getAgentUpgradeStatus: vi.fn(async () => ({ node_id: 'node-1', target_version: '0.1.1', actual_version: '0.1.1', stage: 'completed' })),
   getAgentStatus: vi.fn(async () => ({ version: '0.1.0', user: 'root', mode: 'ops', terminal_enabled: true, docker_available: true, service_name: 'mizupanel-agent', uptime: 3600, collected_at: 1710000000 })),
   restartAgent: vi.fn(async () => ({ accepted: true, message: '重启命令已下发，等待 Agent 重新连接' })),
   getAgentLogs: vi.fn(async () => ({ lines: 100, content: 'mizupanel-agent started', collected_at: 1710000001 })),
@@ -158,9 +161,7 @@ describe('reference-style dashboard layout', () => {
     expect(within(sidebarNavigation).getByRole('button', { name: '告警' })).toBeInTheDocument()
     expect(within(sidebarNavigation).getByRole('button', { name: '系统设置' })).toBeInTheDocument()
     expect(within(sidebarNavigation).queryByRole('button', { name: '日志' })).not.toBeInTheDocument()
-    const mobileNavigation = screen.getByRole('navigation', { name: '移动端导航' })
-    expect(within(mobileNavigation).queryByRole('button', { name: '历史记录' })).not.toBeInTheDocument()
-    expect(within(mobileNavigation).queryByRole('button', { name: '日志' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: '移动端导航' })).not.toBeInTheDocument()
     expect(within(sidebarNavigation).queryByRole('button', { name: 'Docker' })).not.toBeInTheDocument()
     expect(within(sidebarNavigation).queryByRole('button', { name: '文件管理' })).not.toBeInTheDocument()
     expect(within(sidebarNavigation).queryByRole('button', { name: '终端' })).not.toBeInTheDocument()

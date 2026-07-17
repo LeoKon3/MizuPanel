@@ -2,9 +2,11 @@ import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState }
 import { X } from 'lucide-react'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 
-import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, setUnauthorizedHandler, startSSHUninstall, updateSettings, uploadNodeFile, writeNodeFile } from './api/client'
+import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAgentUpgradeStatus, getAuthSession, getConnectionDiagnostics, getNodeDocker, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, setUnauthorizedHandler, startSSHUninstall, updateSettings, upgradeAgent, uploadNodeFile, writeNodeFile } from './api/client'
 import { BrandLogo } from './components/BrandLogo'
+import { HostBatchTable } from './components/HostBatchTable'
 import { MetricCard } from './components/MetricCard'
+import { NodeOrganizationControls, type HostGroupFilter, type HostTagFilter, type HostViewMode } from './components/NodeOrganizationControls'
 import { formatBytes, formatPercent, formatSpeed } from './lib/format'
 import { AlertsPage } from './pages/AlertsPage'
 import { HistoryPage } from './pages/HistoryPage'
@@ -16,7 +18,7 @@ import { TerminalPage } from './pages/TerminalPage'
 import { K8sClustersPage } from './pages/K8sClustersPage'
 import { K8sClusterDetailPage } from './pages/K8sClusterDetailPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
-import type { DockerContainer, DockerSnapshotResponse, InstallPlatform, Metric, Node, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse } from './types'
+import type { DockerContainer, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse } from './types'
 
 function decodeRouteNodeID(value?: string) {
   if (!value) return undefined
@@ -133,6 +135,9 @@ export default function App() {
   const [error, setError] = useState<string>()
   const [search, setSearch] = useState('')
   const [hostFilter, setHostFilter] = useState<HostFilter>('all')
+  const [hostView, setHostView] = useState<HostViewMode>('browse')
+  const [hostGroupFilter, setHostGroupFilter] = useState<HostGroupFilter>('all')
+  const [hostTagFilter, setHostTagFilter] = useState<HostTagFilter>('all')
   const [hostMetricsHistory, setHostMetricsHistory] = useState<Array<{ cpu: number; memory: number; disk: number }>>([])
   const [installPlatform, setInstallPlatform] = useState<InstallPlatform>('linux')
   const [installCommand, setInstallCommand] = useState<string>()
@@ -373,10 +378,15 @@ export default function App() {
     const keyword = search.trim().toLowerCase()
     return nodes.filter((node) => {
       if (hostFilter !== 'all' && node.status !== hostFilter) return false
+      if (hostGroupFilter === 'ungrouped' && node.group) return false
+      if (hostGroupFilter !== 'all' && hostGroupFilter !== 'ungrouped' && node.group?.id !== hostGroupFilter) return false
+      if (hostTagFilter !== 'all' && !(node.tags ?? []).some((tag) => tag.id === hostTagFilter)) return false
       if (!keyword) return true
-      return [node.name, node.hostname, node.ip, node.os, node.arch].some((value) => value.toLowerCase().includes(keyword))
+      return [node.name, node.hostname, node.ip, node.os, node.arch, node.group?.name ?? '', ...(node.tags ?? []).map((tag) => tag.name)].some((value) => value.toLowerCase().includes(keyword))
     })
-  }, [hostFilter, nodes, search])
+  }, [hostFilter, hostGroupFilter, hostTagFilter, nodes, search])
+  const hostGroups = useMemo(() => uniqueNodeGroups(nodes), [nodes])
+  const hostTags = useMemo(() => uniqueNodeTags(nodes), [nodes])
   const visibleSelectedNode = useMemo(() => filteredNodes.find((node) => node.id === selectedNodeID), [filteredNodes, selectedNodeID])
   const selectedMetrics = useMemo(() => selectedNodeID ? metrics.filter((metric) => metric.node_id === selectedNodeID) : [], [metrics, selectedNodeID])
   const selectedProcessSnapshot = processSnapshot?.node_id === selectedNodeID ? processSnapshot : undefined
@@ -515,6 +525,8 @@ export default function App() {
     setInstallPlatform(platform)
     requestInstallCommand(platform)
   }
+
+  const getLegacyAgentUpgradeCommand = () => createInstallCommand('linux').then((response) => response.command)
 
   const openPage = (nextPage: AppPage) => {
     setPage(nextPage)
@@ -805,6 +817,8 @@ export default function App() {
         <TopStatCard title="异常节点" value={String(nodes.length - onlineNodes)} subtitle="离线或未上报" tone="red" />
       </section>
 
+      <NodeOrganizationControls view={hostView} onViewChange={setHostView} groupFilter={hostGroupFilter} onGroupFilterChange={setHostGroupFilter} tagFilter={hostTagFilter} onTagFilterChange={setHostTagFilter} groups={hostGroups} tags={hostTags} onChanged={loadNodes} />
+
       {nodes.length === 0 ? (
         <section className="soft-empty-state px-6 py-12 text-center">
           <p className="font-display text-3xl font-black text-foreground">暂无节点接入</p>
@@ -820,6 +834,8 @@ export default function App() {
             安装目标主机 Agent 进行采集
           </button>
         </section>
+      ) : hostView === 'batch' ? (
+        <HostBatchTable nodes={filteredNodes} onOpenNode={(node) => { setSelectedNodeID(node.id); setHostView('browse') }} onNodesChanged={loadNodes} />
       ) : (
         <div data-testid="host-main-grid" className="grid min-w-0 gap-3 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
           <section data-testid="host-list-panel" className="soft-panel min-w-0 p-3 xl:w-[320px]">
@@ -866,7 +882,7 @@ export default function App() {
               <span>当前显示 {filteredNodes.length} 台</span>
             </div>
           </section>
-          <NodeDetail node={visibleSelectedNode} metrics={selectedMetrics} processSnapshot={selectedProcessSnapshot} dockerSnapshot={selectedDockerSnapshot} monitoringLoading={monitoringLoading} range={range} onRangeChange={setRange} onLoadFiles={getNodeFiles} onReadFile={readNodeFile} onWriteFile={writeNodeFile} onUploadFile={uploadNodeFile} onDeletePath={deleteNodePath} onRebootNode={rebootNode} onSSHUninstall={startSSHUninstall} onGetAgentStatus={getAgentStatus} onRestartAgent={restartAgent} onGetAgentLogs={getAgentLogs} onRefreshDocker={refreshDockerSnapshot} />
+          <NodeDetail node={visibleSelectedNode} metrics={selectedMetrics} processSnapshot={selectedProcessSnapshot} dockerSnapshot={selectedDockerSnapshot} monitoringLoading={monitoringLoading} range={range} onRangeChange={setRange} onLoadFiles={getNodeFiles} onReadFile={readNodeFile} onWriteFile={writeNodeFile} onUploadFile={uploadNodeFile} onDeletePath={deleteNodePath} onRebootNode={rebootNode} onSSHUninstall={startSSHUninstall} onGetAgentStatus={getAgentStatus} onGetConnectionDiagnostics={getConnectionDiagnostics} onUpgradeAgent={upgradeAgent} onGetAgentUpgradeStatus={getAgentUpgradeStatus} onGetLegacyAgentUpgradeCommand={getLegacyAgentUpgradeCommand} onRestartAgent={restartAgent} onGetAgentLogs={getAgentLogs} onRefreshDocker={refreshDockerSnapshot} onNodeOrganizationChanged={loadNodes} />
         </div>
       )}
     </div>
@@ -875,7 +891,7 @@ export default function App() {
   return (
     <main className="soft-page min-h-screen text-foreground">
       <div className="flex min-h-screen">
-        <div className={`sticky top-0 hidden h-screen shrink-0 transition-[width] duration-300 ease-in-out motion-reduce:transition-none md:block relative ${sidebarCollapsed ? 'w-[72px]' : 'w-[232px]'}`}>
+        <div className={`relative sticky top-0 h-screen shrink-0 transition-[width] duration-300 ease-in-out motion-reduce:transition-none ${sidebarCollapsed ? 'w-[72px]' : 'w-[232px]'}`}>
           <aside
             aria-label="MizuPanel 侧边栏"
             data-collapsed={sidebarCollapsed ? 'true' : 'false'}
@@ -922,20 +938,6 @@ export default function App() {
 
         <section className="flex min-w-0 flex-1 flex-col">
           <header className="soft-topbar sticky top-0 z-20 border-b border-header-border px-4 py-3 backdrop-blur md:px-6">
-            <nav aria-label="移动端导航" className="mb-3 flex gap-2 overflow-x-auto md:hidden">
-              {navItems.map((item) => (
-                <button
-                  key={item.page}
-                  type="button"
-                  aria-current={page === item.page ? 'page' : undefined}
-                  onClick={() => openPage(item.page)}
-                  className={`inline-flex min-h-10 shrink-0 cursor-pointer items-center gap-2 rounded-xl px-3 text-xs font-black transition focus:outline-none focus:ring-4 focus:ring-primary/20 ${page === item.page ? 'bg-primary text-primary-foreground shadow-sm' : 'border border-border bg-card text-muted-foreground hover:text-foreground'}`}
-                >
-                  <NavIcon name={item.icon} />
-                  {item.label}
-                </button>
-              ))}
-            </nav>
             <div className="flex justify-end">
               <h1 className="sr-only">{contentCopy.title}</h1>
               <div className="flex flex-wrap items-center gap-2">
@@ -1033,6 +1035,22 @@ export default function App() {
       </div>
     </main>
   )
+}
+
+function uniqueNodeGroups(nodes: Node[]): NodeGroupSummary[] {
+  const groups = new Map<string, NodeGroupSummary>()
+  for (const node of nodes) {
+    if (node.group) groups.set(node.group.id, node.group)
+  }
+  return [...groups.values()]
+}
+
+function uniqueNodeTags(nodes: Node[]): NodeTagSummary[] {
+  const tags = new Map<string, NodeTagSummary>()
+  for (const node of nodes) {
+    for (const tag of node.tags ?? []) tags.set(tag.id, tag)
+  }
+  return [...tags.values()]
 }
 
 function TopStatCard({ title, value, subtitle, tone, sparklineData }: { title: string, value: string, subtitle: string, tone: 'blue' | 'green' | 'orange' | 'red', sparklineData?: number[] }) {

@@ -24,6 +24,7 @@ func sqliteMigrationStatements() []string {
 		`CREATE TABLE IF NOT EXISTS nodes (
 					id TEXT PRIMARY KEY,
 					name TEXT NOT NULL,
+					group_id TEXT,
 					hostname TEXT,
 					ip TEXT,
 					os TEXT,
@@ -37,6 +38,31 @@ func sqliteMigrationStatements() []string {
 					created_at DATETIME NOT NULL,
 					updated_at DATETIME NOT NULL
 				);`,
+		`CREATE TABLE IF NOT EXISTS node_groups (
+					id TEXT PRIMARY KEY,
+					name TEXT NOT NULL,
+					normalized_name TEXT NOT NULL UNIQUE,
+					created_at DATETIME NOT NULL,
+					updated_at DATETIME NOT NULL
+				);`,
+		`CREATE TABLE IF NOT EXISTS node_tags (
+					id TEXT PRIMARY KEY,
+					name TEXT NOT NULL,
+					normalized_name TEXT NOT NULL UNIQUE,
+					color TEXT NOT NULL,
+					created_at DATETIME NOT NULL,
+					updated_at DATETIME NOT NULL
+				);`,
+		`CREATE TABLE IF NOT EXISTS node_tag_links (
+					node_id TEXT NOT NULL,
+					tag_id TEXT NOT NULL,
+					created_at DATETIME NOT NULL,
+					PRIMARY KEY (node_id, tag_id),
+					FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+					FOREIGN KEY (tag_id) REFERENCES node_tags(id) ON DELETE CASCADE
+				);`,
+		`CREATE INDEX IF NOT EXISTS idx_node_tag_links_node ON node_tag_links(node_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_node_tag_links_tag ON node_tag_links(tag_id);`,
 		`CREATE TABLE IF NOT EXISTS node_metrics (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					node_id TEXT NOT NULL,
@@ -93,6 +119,20 @@ func sqliteMigrationStatements() []string {
 					token TEXT NOT NULL UNIQUE,
 					created_at DATETIME NOT NULL
 				);`,
+		`CREATE TABLE IF NOT EXISTS node_connection_events (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					node_id TEXT NOT NULL,
+					event_type TEXT NOT NULL,
+					reason TEXT NOT NULL DEFAULT '',
+					agent_version TEXT NOT NULL DEFAULT '',
+					protocol_version INTEGER NOT NULL DEFAULT 0,
+					identity_source TEXT NOT NULL DEFAULT '',
+					hostname TEXT NOT NULL DEFAULT '',
+					remote_addr TEXT NOT NULL DEFAULT '',
+					created_at DATETIME NOT NULL,
+					FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+				);`,
+		`CREATE INDEX IF NOT EXISTS idx_node_connection_events_node_created ON node_connection_events(node_id, created_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS settings (
 					key TEXT PRIMARY KEY,
 					value TEXT NOT NULL,
@@ -125,6 +165,10 @@ func sqliteMigrationStatements() []string {
 					resolved_at DATETIME,
 					notification_sent INTEGER NOT NULL DEFAULT 0,
 					notification_error TEXT,
+					notification_attempted_at DATETIME,
+					recovery_notification_sent INTEGER NOT NULL DEFAULT 0,
+					recovery_notification_error TEXT,
+					recovery_notification_attempted_at DATETIME,
 					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 					FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
 				);`,
@@ -154,6 +198,7 @@ func mysqlMigrationStatements() []string {
 		`CREATE TABLE IF NOT EXISTS nodes (
 					id VARCHAR(191) PRIMARY KEY,
 					name VARCHAR(255) NOT NULL,
+					group_id VARCHAR(64),
 					hostname VARCHAR(255),
 					ip VARCHAR(64),
 					os VARCHAR(64),
@@ -165,7 +210,35 @@ func mysqlMigrationStatements() []string {
 					status VARCHAR(32) NOT NULL DEFAULT 'offline',
 					last_seen_at VARCHAR(64),
 					created_at VARCHAR(64) NOT NULL,
-					updated_at VARCHAR(64) NOT NULL
+					updated_at VARCHAR(64) NOT NULL,
+					INDEX idx_nodes_group (group_id)
+				);`,
+		`CREATE TABLE IF NOT EXISTS node_groups (
+					id VARCHAR(64) PRIMARY KEY,
+					name VARCHAR(255) NOT NULL,
+					normalized_name VARCHAR(255) NOT NULL,
+					created_at VARCHAR(64) NOT NULL,
+					updated_at VARCHAR(64) NOT NULL,
+					UNIQUE KEY uq_node_groups_normalized_name (normalized_name)
+				);`,
+		`CREATE TABLE IF NOT EXISTS node_tags (
+					id VARCHAR(64) PRIMARY KEY,
+					name VARCHAR(255) NOT NULL,
+					normalized_name VARCHAR(255) NOT NULL,
+					color VARCHAR(32) NOT NULL,
+					created_at VARCHAR(64) NOT NULL,
+					updated_at VARCHAR(64) NOT NULL,
+					UNIQUE KEY uq_node_tags_normalized_name (normalized_name)
+				);`,
+		`CREATE TABLE IF NOT EXISTS node_tag_links (
+					node_id VARCHAR(191) NOT NULL,
+					tag_id VARCHAR(64) NOT NULL,
+					created_at VARCHAR(64) NOT NULL,
+					PRIMARY KEY (node_id, tag_id),
+					INDEX idx_node_tag_links_node (node_id),
+					INDEX idx_node_tag_links_tag (tag_id),
+					FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+					FOREIGN KEY (tag_id) REFERENCES node_tags(id) ON DELETE CASCADE
 				);`,
 		`CREATE TABLE IF NOT EXISTS node_metrics (
 					id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -223,6 +296,20 @@ func mysqlMigrationStatements() []string {
 					token VARCHAR(255) NOT NULL UNIQUE,
 					created_at VARCHAR(64) NOT NULL
 				);`,
+		`CREATE TABLE IF NOT EXISTS node_connection_events (
+					id BIGINT AUTO_INCREMENT PRIMARY KEY,
+					node_id VARCHAR(191) NOT NULL,
+					event_type VARCHAR(64) NOT NULL,
+					reason VARCHAR(1024) NOT NULL DEFAULT '',
+					agent_version VARCHAR(64) NOT NULL DEFAULT '',
+					protocol_version INT NOT NULL DEFAULT 0,
+					identity_source VARCHAR(32) NOT NULL DEFAULT '',
+					hostname VARCHAR(255) NOT NULL DEFAULT '',
+					remote_addr VARCHAR(255) NOT NULL DEFAULT '',
+					created_at VARCHAR(64) NOT NULL,
+					INDEX idx_node_connection_events_node_created (node_id, created_at),
+					FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+				);`,
 		`CREATE TABLE IF NOT EXISTS settings (
 					` + "`key`" + ` VARCHAR(191) PRIMARY KEY,
 					value VARCHAR(255) NOT NULL,
@@ -255,6 +342,10 @@ func mysqlMigrationStatements() []string {
 					resolved_at VARCHAR(64),
 					notification_sent BOOLEAN NOT NULL DEFAULT 0,
 					notification_error TEXT,
+					notification_attempted_at VARCHAR(64),
+					recovery_notification_sent BOOLEAN NOT NULL DEFAULT 0,
+					recovery_notification_error TEXT,
+					recovery_notification_attempted_at VARCHAR(64),
 					created_at VARCHAR(64) NOT NULL,
 					FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
 				);`,
@@ -293,7 +384,17 @@ func migrateStatements(db *sql.DB, dialect Dialect, statements []string) error {
 			return err
 		}
 	}
+	for _, statement := range organizationIndexStatements(dialect) {
+		if _, err := db.Exec(statement); err != nil && !isIgnorableMigrationError(err) {
+			return err
+		}
+	}
 	for _, statement := range metricCompatibilityColumnStatements(dialect) {
+		if err := addColumnIfMissing(db, statement); err != nil {
+			return err
+		}
+	}
+	for _, statement := range alertHistoryCompatibilityColumnStatements(dialect) {
 		if err := addColumnIfMissing(db, statement); err != nil {
 			return err
 		}
@@ -307,19 +408,45 @@ func migrateStatements(db *sql.DB, dialect Dialect, statements []string) error {
 	return err
 }
 
+func alertHistoryCompatibilityColumnStatements(dialect Dialect) []string {
+	if dialect == DialectMySQL {
+		return []string{
+			`ALTER TABLE alert_history ADD COLUMN notification_attempted_at VARCHAR(64)`,
+			`ALTER TABLE alert_history ADD COLUMN recovery_notification_sent BOOLEAN NOT NULL DEFAULT 0`,
+			`ALTER TABLE alert_history ADD COLUMN recovery_notification_error TEXT`,
+			`ALTER TABLE alert_history ADD COLUMN recovery_notification_attempted_at VARCHAR(64)`,
+		}
+	}
+	return []string{
+		`ALTER TABLE alert_history ADD COLUMN notification_attempted_at DATETIME`,
+		`ALTER TABLE alert_history ADD COLUMN recovery_notification_sent INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE alert_history ADD COLUMN recovery_notification_error TEXT`,
+		`ALTER TABLE alert_history ADD COLUMN recovery_notification_attempted_at DATETIME`,
+	}
+}
+
 func nodeCompatibilityColumnStatements(dialect Dialect) []string {
 	if dialect == DialectMySQL {
 		return []string{
+			`ALTER TABLE nodes ADD COLUMN group_id VARCHAR(64)`,
 			`ALTER TABLE nodes ADD COLUMN agent_mode VARCHAR(32) NOT NULL DEFAULT 'normal'`,
 			`ALTER TABLE nodes ADD COLUMN agent_user VARCHAR(255) NOT NULL DEFAULT ''`,
 			`ALTER TABLE nodes ADD COLUMN terminal_enabled BOOLEAN NOT NULL DEFAULT 0`,
 		}
 	}
 	return []string{
+		`ALTER TABLE nodes ADD COLUMN group_id TEXT`,
 		`ALTER TABLE nodes ADD COLUMN agent_mode TEXT NOT NULL DEFAULT 'normal'`,
 		`ALTER TABLE nodes ADD COLUMN agent_user TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE nodes ADD COLUMN terminal_enabled INTEGER NOT NULL DEFAULT 0`,
 	}
+}
+
+func organizationIndexStatements(dialect Dialect) []string {
+	if dialect == DialectMySQL {
+		return []string{`CREATE INDEX idx_nodes_group ON nodes(group_id)`}
+	}
+	return []string{`CREATE INDEX IF NOT EXISTS idx_nodes_group ON nodes(group_id)`}
 }
 
 func metricCompatibilityColumnStatements(dialect Dialect) []string {

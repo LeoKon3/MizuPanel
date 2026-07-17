@@ -256,6 +256,10 @@ func (fakeAgentManagementHandler) Logs(int) protocol.AgentLogsResponse {
 	return protocol.AgentLogsResponse{Lines: 100, Content: "started", CollectedAt: 1710000000}
 }
 
+func (fakeAgentManagementHandler) Upgrade(protocol.AgentUpgradeRequest, func(protocol.AgentUpgradeResponse)) protocol.AgentUpgradeResponse {
+	return protocol.AgentUpgradeResponse{Accepted: true, Stage: "preparing"}
+}
+
 func TestSendHelloAndMetricSendsHelloBeforeMetric(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	messages := make(chan string, 2)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/mizupanel/mizupanel/internal/protocol"
+	"github.com/mizupanel/mizupanel/internal/version"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -486,7 +487,14 @@ type fakeNodeOperations struct {
 	agentRestartNodeID string
 	agentLogsNodeID    string
 	agentLogsLines     int
+	agentUpgradeNodeID string
+	agentUpgradeTarget string
 	disconnectedNodeID string
+	diagnostics        store.ConnectionDiagnostics
+}
+
+func (f *fakeNodeOperations) ConnectionDiagnostics(context.Context, string) (store.ConnectionDiagnostics, error) {
+	return f.diagnostics, nil
 }
 
 func (f *fakeNodeOperations) NodeTerminalEnabled(string) bool { return true }
@@ -555,6 +563,15 @@ func (f *fakeNodeOperations) AgentLogs(ctx context.Context, nodeID string, lines
 	return protocol.AgentLogsResponse{Type: protocol.MessageTypeAgentLogsResponse, NodeID: nodeID, Lines: lines, Content: "mizupanel-agent started", CollectedAt: 1710000001}, nil
 }
 
+func (f *fakeNodeOperations) AgentUpgrade(_ context.Context, nodeID string, targetVersion string) (protocol.AgentUpgradeResponse, error) {
+	f.agentUpgradeNodeID = nodeID
+	f.agentUpgradeTarget = targetVersion
+	return protocol.AgentUpgradeResponse{Accepted: true, Stage: "preparing"}, nil
+}
+func (f *fakeNodeOperations) AgentUpgradeStatus(nodeID string) protocol.AgentUpgradeStatus {
+	return protocol.AgentUpgradeStatus{NodeID: nodeID, Stage: "completed"}
+}
+
 func (f *fakeNodeOperations) DockerExec(ctx context.Context, nodeID string, command string) (protocol.DockerExecResponse, error) {
 	return protocol.DockerExecResponse{Type: protocol.MessageTypeDockerExecResponse, Accepted: true}, nil
 }
@@ -573,6 +590,20 @@ func (f *fakeNodeOperations) ContainerRestart(ctx context.Context, nodeID string
 
 func (f *fakeNodeOperations) ContainerDelete(ctx context.Context, nodeID string, containerID string, force bool) (protocol.ContainerDeleteResponse, error) {
 	return protocol.ContainerDeleteResponse{Type: protocol.MessageTypeContainerDeleteResponse, Success: true}, nil
+}
+
+func TestNodeConnectionDiagnostics(t *testing.T) {
+	_, nodes, metrics, _, _ := testRouter(t)
+	ops := &fakeNodeOperations{diagnostics: store.ConnectionDiagnostics{NodeID: "node-1", Online: true, Health: "identity_conflict", IdentityConflict: true, Events: []store.ConnectionEvent{{ID: 1, NodeID: "node-1", Type: store.ConnectionEventIdentityConflict}}}}
+	mux := NewRouter(nodes, metrics, ops)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/connection-diagnostics", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"health":"identity_conflict"`) || !strings.Contains(recorder.Body.String(), `"identity_conflict":true`) {
+		t.Fatalf("unexpected body: %s", recorder.Body.String())
+	}
 }
 
 func TestNodeFileOperationsForwardToAgentWithoutBrowserAuth(t *testing.T) {
@@ -674,6 +705,36 @@ func TestNodeAgentManagementRoutesForwardToAgent(t *testing.T) {
 	}
 	if logsResponse.Lines != 500 || !strings.Contains(logsResponse.Content, "mizupanel-agent started") {
 		t.Fatalf("logs response = %#v", logsResponse)
+	}
+
+	upgradeRecorder := httptest.NewRecorder()
+	upgradeRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/agent/upgrade", nil)
+	upgradeRequest.Header.Set("Origin", "http://example.com")
+	mux.ServeHTTP(upgradeRecorder, upgradeRequest)
+	if upgradeRecorder.Code != http.StatusOK || ops.agentUpgradeNodeID != "node-1" || ops.agentUpgradeTarget != version.Current {
+		t.Fatalf("upgrade code/node/target = %d/%q/%q body=%s", upgradeRecorder.Code, ops.agentUpgradeNodeID, ops.agentUpgradeTarget, upgradeRecorder.Body.String())
+	}
+
+	upgradeStatusRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(upgradeStatusRecorder, httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/agent/upgrade/status", nil))
+	if upgradeStatusRecorder.Code != http.StatusOK || !strings.Contains(upgradeStatusRecorder.Body.String(), `"stage":"completed"`) {
+		t.Fatalf("upgrade status code/body = %d/%s", upgradeStatusRecorder.Code, upgradeStatusRecorder.Body.String())
+	}
+}
+
+func TestNodeAgentUpgradeRejectsCrossOriginPost(t *testing.T) {
+	_, nodes, metrics, _, _ := testRouter(t)
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Oracle", OS: "linux", Status: "online", LastSeenAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	ops := &fakeNodeOperations{}
+	mux := NewRouter(nodes, metrics, ops)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/agent/upgrade", nil)
+	request.Header.Set("Origin", "https://evil.example")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || ops.agentUpgradeNodeID != "" {
+		t.Fatalf("cross-origin upgrade code/node = %d/%q body=%s", recorder.Code, ops.agentUpgradeNodeID, recorder.Body.String())
 	}
 }
 

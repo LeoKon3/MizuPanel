@@ -3,11 +3,17 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var legacyIdentityPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$`)
 
 type Config struct {
 	ServerURL      string
@@ -19,6 +25,7 @@ type Config struct {
 	EnableTerminal bool
 	AgentMode      string
 	Debug          bool
+	IdentitySource string
 }
 
 type fileConfig struct {
@@ -83,6 +90,7 @@ func Load(path string) (Config, error) {
 		EnableDocker:   false,
 		EnableTerminal: false,
 		AgentMode:      "normal",
+		IdentitySource: "legacy",
 	}
 	if cfg.NodeID == "" {
 		cfg.NodeID = hostname
@@ -110,6 +118,21 @@ func Load(path string) (Config, error) {
 	}
 	if err := applyEnvironmentConfig(&cfg); err != nil {
 		return Config{}, err
+	}
+	identityPath := filepath.Join(filepath.Dir(path), "agent-id")
+	identity, err := os.ReadFile(identityPath)
+	if err == nil {
+		value := strings.TrimSpace(string(identity))
+		if !uuidPattern.MatchString(value) && !legacyIdentityPattern.MatchString(value) {
+			return Config{}, fmt.Errorf("invalid agent identity in %s", identityPath)
+		}
+		cfg.NodeID = value
+		if uuidPattern.MatchString(value) {
+			cfg.NodeID = strings.ToLower(value)
+			cfg.IdentitySource = "persistent_uuid"
+		}
+	} else if !os.IsNotExist(err) {
+		return Config{}, fmt.Errorf("read agent identity %s: %w", identityPath, err)
 	}
 	return cfg, nil
 }

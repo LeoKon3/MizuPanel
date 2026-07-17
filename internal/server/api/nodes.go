@@ -1,27 +1,53 @@
 package api
 
 import (
+	"database/sql"
+	"errors"
+	"net/http"
 	"time"
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
 	"github.com/mizupanel/mizupanel/internal/server/store"
 )
 
+func (s *Server) handleNodeConnectionDiagnostics(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.diagnostics == nil {
+		writeError(w, http.StatusServiceUnavailable, "connection diagnostics unavailable")
+		return
+	}
+	diagnostics, err := s.diagnostics.ConnectionDiagnostics(r.Context(), nodeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, diagnostics)
+}
+
 type NodeResponse struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Hostname        string          `json:"hostname"`
-	IP              string          `json:"ip"`
-	OS              string          `json:"os"`
-	Arch            string          `json:"arch"`
-	Kernel          string          `json:"kernel"`
-	AgentVersion    string          `json:"agent_version"`
-	AgentMode       string          `json:"agent_mode"`
-	AgentUser       string          `json:"agent_user"`
-	Status          string          `json:"status"`
-	LastSeenAt      time.Time       `json:"last_seen_at"`
-	TerminalEnabled bool            `json:"terminal_enabled"`
-	LatestMetric    *MetricResponse `json:"latest_metric,omitempty"`
+	ID              string                  `json:"id"`
+	Name            string                  `json:"name"`
+	Hostname        string                  `json:"hostname"`
+	IP              string                  `json:"ip"`
+	OS              string                  `json:"os"`
+	Arch            string                  `json:"arch"`
+	Kernel          string                  `json:"kernel"`
+	AgentVersion    string                  `json:"agent_version"`
+	AgentMode       string                  `json:"agent_mode"`
+	AgentUser       string                  `json:"agent_user"`
+	Status          string                  `json:"status"`
+	LastSeenAt      time.Time               `json:"last_seen_at"`
+	TerminalEnabled bool                    `json:"terminal_enabled"`
+	LatestMetric    *MetricResponse         `json:"latest_metric,omitempty"`
+	Group           *store.NodeGroupSummary `json:"group"`
+	Tags            []store.NodeTagSummary  `json:"tags"`
 }
 
 type MetricResponse struct {
@@ -79,6 +105,7 @@ func nodeResponse(node store.Node) NodeResponse {
 		Status:          node.Status,
 		LastSeenAt:      node.LastSeenAt,
 		TerminalEnabled: node.TerminalEnabled,
+		Tags:            make([]store.NodeTagSummary, 0),
 	}
 }
 

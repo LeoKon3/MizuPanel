@@ -18,6 +18,27 @@ usage() {
   printf 'Usage: %s (--binary PATH | --binary-url URL | --binary-base-url URL) --server-url URL --token TOKEN --node-id ID --name NAME [--interval 5s] [--mode normal|ops] [--enable-docker] [--enable-terminal]\n' "$0"
 }
 
+valid_uuid() {
+  printf '%s' "$1" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+}
+
+valid_legacy_identity() {
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$'
+}
+
+generate_uuid() {
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+    return
+  fi
+  if [ -r /proc/sys/kernel/random/uuid ]; then
+    tr '[:upper:]' '[:lower:]' < /proc/sys/kernel/random/uuid
+    return
+  fi
+  printf 'Unable to generate Agent UUID: uuidgen and /proc/sys/kernel/random/uuid are unavailable.\n' >&2
+  exit 1
+}
+
 quote_yaml() {
   local value=${1//\\/\\\\}
   value=${value//\"/\\\"}
@@ -179,32 +200,73 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SERVICE_TEMPLATE="$SCRIPT_DIR/../systemd/mizupanel-agent.service"
 INSTALL_DIR="$DEST_ROOT/usr/local/mizupanel"
+BIN_DIR="$INSTALL_DIR/bin"
+ETC_DIR="$INSTALL_DIR/etc"
+VAR_DIR="$INSTALL_DIR/var"
+BACKUP_DIR="$VAR_DIR/backups"
+IDENTITY_PATH="$ETC_DIR/agent-id"
+CONFIG_PATH="$ETC_DIR/agent.yaml"
 SYSTEMD_DIR="$DEST_ROOT/etc/systemd/system"
 
 if [ -z "$DEST_ROOT" ] && ! id -u mizupanel-agent >/dev/null 2>&1; then
   useradd --system --no-create-home --shell /usr/sbin/nologin mizupanel-agent
 fi
 
-install -d -m 0755 "$INSTALL_DIR"
+install -d -m 0755 "$INSTALL_DIR" "$BIN_DIR" "$ETC_DIR" "$VAR_DIR" "$BACKUP_DIR"
 if [ -z "$DEST_ROOT" ]; then
   chown root:root "$INSTALL_DIR"
   chmod 0755 "$INSTALL_DIR"
 fi
 install -d -m 0755 "$SYSTEMD_DIR"
+
+if [ -f "$IDENTITY_PATH" ]; then
+  AGENT_ID=$(tr -d '[:space:]' < "$IDENTITY_PATH")
+  if ! valid_uuid "$AGENT_ID" && ! valid_legacy_identity "$AGENT_ID"; then
+    printf 'Invalid Agent identity in %s. Fix or explicitly remove it before reinstalling.\n' "$IDENTITY_PATH" >&2
+    exit 1
+  fi
+elif [ -f "$INSTALL_DIR/agent.yaml" ]; then
+  LEGACY_NODE_ID=$(awk '/^[[:space:]]*id:[[:space:]]*/ { sub(/^[[:space:]]*id:[[:space:]]*/, ""); gsub(/^"|"$/, ""); print; exit }' "$INSTALL_DIR/agent.yaml")
+  if valid_uuid "$LEGACY_NODE_ID"; then
+    AGENT_ID=$(printf '%s' "$LEGACY_NODE_ID" | tr '[:upper:]' '[:lower:]')
+  elif valid_legacy_identity "$LEGACY_NODE_ID"; then
+    AGENT_ID="$LEGACY_NODE_ID"
+  else
+    AGENT_ID=$(generate_uuid)
+  fi
+else
+  AGENT_ID=$(generate_uuid)
+fi
+IDENTITY_TMP=$(mktemp "$ETC_DIR/agent-id.XXXXXX")
+printf '%s\n' "$AGENT_ID" > "$IDENTITY_TMP"
+chmod 0600 "$IDENTITY_TMP"
+install -m 0600 "$IDENTITY_TMP" "$IDENTITY_PATH"
+rm -f "$IDENTITY_TMP"
+
 if [ -n "$BINARY_URL" ]; then
-  BINARY_TMP=$(mktemp "$INSTALL_DIR/mizupanel-agent.XXXXXX")
+  BINARY_TMP=$(mktemp "$BIN_DIR/mizupanel-agent.XXXXXX")
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$BINARY_URL" -o "$BINARY_TMP"
   else
     wget -qO "$BINARY_TMP" "$BINARY_URL"
   fi
-  install -m 0755 "$BINARY_TMP" "$INSTALL_DIR/mizupanel-agent"
+  if [ -f "$BIN_DIR/mizupanel-agent" ]; then
+    install -m 0755 "$BIN_DIR/mizupanel-agent" "$BACKUP_DIR/mizupanel-agent.previous"
+  elif [ -f "$INSTALL_DIR/mizupanel-agent" ]; then
+    install -m 0755 "$INSTALL_DIR/mizupanel-agent" "$BACKUP_DIR/mizupanel-agent.previous"
+  fi
+  install -m 0755 "$BINARY_TMP" "$BIN_DIR/mizupanel-agent"
   rm -f "$BINARY_TMP"
 else
-  install -m 0755 "$BINARY" "$INSTALL_DIR/mizupanel-agent"
+  if [ -f "$BIN_DIR/mizupanel-agent" ]; then
+    install -m 0755 "$BIN_DIR/mizupanel-agent" "$BACKUP_DIR/mizupanel-agent.previous"
+  elif [ -f "$INSTALL_DIR/mizupanel-agent" ]; then
+    install -m 0755 "$INSTALL_DIR/mizupanel-agent" "$BACKUP_DIR/mizupanel-agent.previous"
+  fi
+  install -m 0755 "$BINARY" "$BIN_DIR/mizupanel-agent"
 fi
 
-CONFIG_TMP=$(mktemp "$INSTALL_DIR/agent.yaml.XXXXXX")
+CONFIG_TMP=$(mktemp "$ETC_DIR/agent.yaml.XXXXXX")
 chmod 0600 "$CONFIG_TMP"
 {
   printf 'server:\n'
@@ -216,7 +278,7 @@ chmod 0600 "$CONFIG_TMP"
   printf '\n'
   printf 'node:\n'
   printf '  id: '
-  quote_yaml "$NODE_ID"
+  quote_yaml "$AGENT_ID"
   printf '\n'
   printf '  name: '
   quote_yaml "$NAME"
@@ -232,15 +294,15 @@ chmod 0600 "$CONFIG_TMP"
   printf '  docker: %s\n' "$ENABLE_DOCKER"
   printf '  terminal: %s\n' "$ENABLE_TERMINAL"
 } > "$CONFIG_TMP"
-install -m 0600 "$CONFIG_TMP" "$INSTALL_DIR/agent.yaml"
+install -m 0600 "$CONFIG_TMP" "$CONFIG_PATH"
 rm -f "$CONFIG_TMP"
 
 if [ -z "$DEST_ROOT" ]; then
-  chown root:root "$INSTALL_DIR" "$INSTALL_DIR/mizupanel-agent"
+  chown root:root "$INSTALL_DIR" "$BIN_DIR" "$ETC_DIR" "$VAR_DIR" "$BACKUP_DIR" "$BIN_DIR/mizupanel-agent" "$IDENTITY_PATH"
   if [ "$MODE" = "ops" ]; then
-    chown root:root "$INSTALL_DIR/agent.yaml"
+    chown root:root "$CONFIG_PATH"
   else
-    chown mizupanel-agent:mizupanel-agent "$INSTALL_DIR/agent.yaml"
+    chown mizupanel-agent:mizupanel-agent "$CONFIG_PATH" "$IDENTITY_PATH"
   fi
   if [ "$MODE" != "ops" ] && [ "$ENABLE_DOCKER" = "true" ]; then
     DOCKER_GROUP=$(docker_group) || {
@@ -266,7 +328,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/mizupanel/mizupanel-agent -config /usr/local/mizupanel/agent.yaml
+ExecStart=/usr/local/mizupanel/bin/mizupanel-agent -config /usr/local/mizupanel/etc/agent.yaml
 Restart=always
 RestartSec=5s
 User=mizupanel-agent
@@ -275,12 +337,17 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/usr/local/mizupanel/agent.yaml
+ReadWritePaths=/usr/local/mizupanel/etc/agent.yaml
 
 [Install]
 WantedBy=multi-user.target
 SERVICE
 fi
+
+sed -i \
+  -e 's#/usr/local/mizupanel/mizupanel-agent#/usr/local/mizupanel/bin/mizupanel-agent#g' \
+  -e 's#/usr/local/mizupanel/agent.yaml#/usr/local/mizupanel/etc/agent.yaml#g' \
+  "$SYSTEMD_DIR/mizupanel-agent.service"
 
 if [ "$MODE" = "ops" ]; then
   sed -i \
@@ -296,7 +363,14 @@ fi
 if [ -z "$DEST_ROOT" ]; then
   systemctl daemon-reload
   systemctl enable mizupanel-agent
-  systemctl restart mizupanel-agent
+  if ! systemctl restart mizupanel-agent || ! systemctl is-active --quiet mizupanel-agent; then
+    if [ -f "$BACKUP_DIR/mizupanel-agent.previous" ]; then
+      install -m 0755 "$BACKUP_DIR/mizupanel-agent.previous" "$BIN_DIR/mizupanel-agent"
+      systemctl restart mizupanel-agent || true
+    fi
+    printf 'MizuPanel agent upgrade failed; the previous binary was restored when available.\n' >&2
+    exit 1
+  fi
 fi
 
-printf 'MizuPanel agent installed. Config: %s\n' "$INSTALL_DIR/agent.yaml"
+printf 'MizuPanel agent installed or upgraded. Agent ID: %s Config: %s\n' "$AGENT_ID" "$CONFIG_PATH"
