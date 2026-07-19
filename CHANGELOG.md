@@ -54,6 +54,11 @@ All notable changes to MizuPanel will be documented in this file.
 - Added node groups and preset-color tags with relational SQLite/MySQL storage, enriched node APIs, and transactional batch metadata updates.
 - Added grouped host browsing, group/tag filters, a desktop batch-management table, and latest-version batch Agent upgrades with bounded frontend concurrency.
 - Added a single-host “分组与标签” editor in the host detail header, including offline editing, inline tag creation, and local node refresh after save.
+- Added structured Docker Compose project discovery and lifecycle operations through the Agent, including project/service status, image pull, start/recreate, restart, stop, and guarded down actions.
+- Added a desktop host-detail Docker view switch between individual containers and Compose projects, with service tables, capability/empty states, loading feedback, and custom destructive-action confirmation.
+- Added Agent-side persistence for discovered Compose projects under `/usr/local/mizupanel/var/compose-projects.json`, allowing projects to be listed and started again after `docker compose down`.
+- Added guarded Compose project logs (`--no-color --tail 200`) and configuration validation (`config --quiet`), plus service-level log and terminal entry points in the host detail view.
+- Added Compose service lifecycle actions for image pull, start/recreate, restart, and stop. These are scoped to an Agent-discovered service and presented in the service-row more menu.
 
 ### Changed
 
@@ -76,9 +81,15 @@ All notable changes to MizuPanel will be documented in this file.
 - Changed alert channel delivery to treat a notification as successful only when every configured channel succeeds, with sanitized per-channel failure summaries.
 - Changed the host workspace to separate single-host browsing from multi-host batch management while sharing search, status, group, and tag filters.
 - Changed the supported Dashboard surface to Windows desktop browsers: one persistent sidebar and one operational batch table with horizontal overflow, without phone-specific navigation or duplicate list rendering.
+- Changed Docker operations to advertise Compose capability through the Agent hello handshake while keeping older Agents compatible and lazily loading Compose data only when the view is opened.
+- Changed Compose project discovery to merge valid local cache entries with live Docker output, while ignoring missing configuration files and non-blocking cache I/O failures.
+- Changed Compose validation errors to hide sensitive values before returning them to the Server and Dashboard.
+- Changed Compose service actions to require an explicit Agent capability handshake; older Agents keep their existing project operations and never receive a service-scoped request.
+- Aligned the Server-bundled Agent version with the root `VERSION` file so existing 0.1.1 Agents can detect and install the current 0.1.2 build.
 
 ### Fixed
 
+- Fixed the Docker container toolbar so view tabs, status filters, search, refresh, and create controls no longer collapse into vertically wrapped text in constrained desktop detail panels.
 - Fixed Kubernetes cluster detail navigation, empty/null cluster response handling, and connection timeout behavior.
 - Fixed Overview "添加服务器" quick action so it opens the existing add-host dialog instead of doing nothing/use a browser alert.
 - Fixed long Kubernetes status badges overflowing table and drawer layouts.
@@ -89,6 +100,7 @@ All notable changes to MizuPanel will be documented in this file.
 - Fixed duplicate Agent connections with the same identity so the Server can distinguish replacement from suspected identity conflicts.
 - Fixed transient alert delivery loss by retrying network errors, HTTP 408/425/429, and 5xx responses while avoiding deterministic 4xx retries.
 - Fixed alert history so trigger and recovery delivery status remains distinguishable from unknown legacy rows.
+- Fixed the Compose service table so logs, terminal, and lifecycle operations are consolidated into one more menu instead of crowding the action column.
 
 ### Security
 
@@ -99,6 +111,7 @@ All notable changes to MizuPanel will be documented in this file.
 - Alert rules API endpoints are protected by authentication middleware when auth is enabled.
 - Agent upgrades accept only fixed Server-origin artifacts, cap downloads at 256 MiB, verify SHA-256 and executable ELF architecture, and arm rollback before replacing the running binary.
 - Connection and alert errors exposed to logs, APIs, and history omit tokens, Webhook URLs, secrets, and custom request headers.
+- Compose service actions use a fixed operation allowlist and require the requested service to be present in the Agent's current project discovery result.
 
 ## v0.0.4 - 2026-06-10
 

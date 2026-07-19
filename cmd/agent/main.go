@@ -49,8 +49,10 @@ func runAgent(ctx context.Context, configPath string) error {
 	collector := metrics.NewCollector()
 	processCollector := agentprocess.NewCollector()
 	var dockerCollector *agentdocker.Collector
+	var composeHandler *agentdocker.ComposeHandler
 	if cfg.EnableDocker {
 		dockerCollector = agentdocker.NewCollector()
+		composeHandler = agentdocker.NewComposeHandler()
 	}
 	initialSnapshot, err := collector.Collect()
 	if err != nil {
@@ -97,7 +99,7 @@ func runAgent(ctx context.Context, configPath string) error {
 	if dockerCollector != nil {
 		client.SetContainerLogsHandler(agentdocker.NewLogsHandler(dockerCollector))
 		client.SetDockerExecHandler(agentdocker.NewExecHandler())
-		client.SetContainerOperationsHandler(agentdocker.NewOperationsHandler(dockerCollector))
+		client.SetContainerOperationsHandler(agentdocker.NewOperationsHandlerWithCompose(dockerCollector, composeHandler))
 	}
 	if configPath != "" {
 		client.SetNodeTokenHandler(func(token string) error {
@@ -105,22 +107,24 @@ func runAgent(ctx context.Context, configPath string) error {
 		})
 	}
 	return client.RunForever(ctx, protocol.HelloMessage{
-		Type:            protocol.MessageTypeHello,
-		NodeID:          cfg.NodeID,
-		AgentVersion:    version.Current,
-		ProtocolVersion: protocol.CurrentProtocolVersion,
-		IdentitySource:  cfg.IdentitySource,
-		Hostname:        initialSnapshot.Hostname,
-		Name:            cfg.Name,
-		IP:              initialSnapshot.IP,
-		OS:              initialSnapshot.OS,
-		Arch:            initialSnapshot.Arch,
-		Kernel:          initialSnapshot.Kernel,
-		Terminal:        cfg.EnableTerminal && agentterminal.Supported(),
-		AgentMode:       cfg.AgentMode,
-		AgentUser:       currentUsername(),
-		AgentManagement: true,
-		AgentUpgrade:    cfg.AgentMode == "ops",
+		Type:                        protocol.MessageTypeHello,
+		NodeID:                      cfg.NodeID,
+		AgentVersion:                version.Current,
+		ProtocolVersion:             protocol.CurrentProtocolVersion,
+		IdentitySource:              cfg.IdentitySource,
+		Hostname:                    initialSnapshot.Hostname,
+		Name:                        cfg.Name,
+		IP:                          initialSnapshot.IP,
+		OS:                          initialSnapshot.OS,
+		Arch:                        initialSnapshot.Arch,
+		Kernel:                      initialSnapshot.Kernel,
+		Terminal:                    cfg.EnableTerminal && agentterminal.Supported(),
+		DockerCompose:               composeHandler != nil,
+		DockerComposeServiceActions: composeHandler != nil && composeHandler.SupportsServiceActions(),
+		AgentMode:                   cfg.AgentMode,
+		AgentUser:                   currentUsername(),
+		AgentManagement:             true,
+		AgentUpgrade:                cfg.AgentMode == "ops",
 	}, cfg.Interval, 3*time.Second, func(nodeID string, timestamp int64) (protocol.MetricsMessage, error) {
 		snapshot, err := collector.Collect()
 		if err != nil {

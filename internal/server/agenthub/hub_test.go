@@ -532,6 +532,20 @@ func TestAgentManagementRejectsConnectionsWithoutCapability(t *testing.T) {
 	}
 }
 
+func TestComposeServiceActionRejectsAgentWithoutServiceCapability(t *testing.T) {
+	handler := &Handler{connections: map[string]*agentConnection{
+		"node-1": {nodeID: "node-1", supportsDockerCompose: true, supportsDockerComposeServiceActions: false},
+	}}
+
+	response, err := handler.DockerComposeAction(t.Context(), "node-1", "demo", "web", "stop")
+	if err != nil {
+		t.Fatalf("DockerComposeAction returned error: %v", err)
+	}
+	if response.Success || response.Error != "当前 Agent 不支持 Compose 服务操作" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestAgentConnectionEnforcesCombinedTerminalSessionLimit(t *testing.T) {
 	agent := &agentConnection{
 		terminals:      make(map[string]*browserTerminal),

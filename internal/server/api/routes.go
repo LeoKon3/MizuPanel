@@ -49,6 +49,8 @@ type NodeOperations interface {
 	ContainerStop(ctx context.Context, nodeID string, containerID string) (protocol.ContainerStopResponse, error)
 	ContainerRestart(ctx context.Context, nodeID string, containerID string) (protocol.ContainerRestartResponse, error)
 	ContainerDelete(ctx context.Context, nodeID string, containerID string, force bool) (protocol.ContainerDeleteResponse, error)
+	DockerComposeList(ctx context.Context, nodeID string) (protocol.DockerComposeListResponse, error)
+	DockerComposeAction(ctx context.Context, nodeID string, projectName string, serviceName string, action string) (protocol.DockerComposeActionResponse, error)
 }
 
 type NodeDisconnecter interface {
@@ -452,6 +454,14 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "docker" {
 		s.handleNodeDocker(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "docker" && parts[2] == "compose" {
+		s.handleNodeDockerCompose(w, r, parts[0])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "docker" && parts[2] == "compose" && parts[3] == "action" {
+		s.handleNodeDockerComposeAction(w, r, parts[0])
 		return
 	}
 	if len(parts) == 2 && parts[1] == "files" {
@@ -1286,6 +1296,53 @@ func (s *Server) handleNodeDocker(w http.ResponseWriter, r *http.Request, nodeID
 				response.Containers = []protocol.ContainerInfo{}
 			}
 		}
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleNodeDockerCompose(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
+		return
+	}
+	response, err := s.agentOps.DockerComposeList(r.Context(), nodeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleNodeDockerComposeAction(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
+		return
+	}
+	var request struct {
+		ProjectName string `json:"project_name"`
+		ServiceName string `json:"service_name"`
+		Action      string `json:"action"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid Compose action request")
+		return
+	}
+	if strings.TrimSpace(request.ProjectName) == "" || strings.TrimSpace(request.Action) == "" {
+		writeError(w, http.StatusBadRequest, "Compose project_name and action are required")
+		return
+	}
+	response, err := s.agentOps.DockerComposeAction(r.Context(), nodeID, request.ProjectName, request.ServiceName, request.Action)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, response)
 }

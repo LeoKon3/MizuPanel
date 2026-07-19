@@ -491,6 +491,10 @@ type fakeNodeOperations struct {
 	agentUpgradeTarget string
 	disconnectedNodeID string
 	diagnostics        store.ConnectionDiagnostics
+	composeNodeID      string
+	composeProjectName string
+	composeServiceName string
+	composeAction      string
 }
 
 func (f *fakeNodeOperations) ConnectionDiagnostics(context.Context, string) (store.ConnectionDiagnostics, error) {
@@ -590,6 +594,40 @@ func (f *fakeNodeOperations) ContainerRestart(ctx context.Context, nodeID string
 
 func (f *fakeNodeOperations) ContainerDelete(ctx context.Context, nodeID string, containerID string, force bool) (protocol.ContainerDeleteResponse, error) {
 	return protocol.ContainerDeleteResponse{Type: protocol.MessageTypeContainerDeleteResponse, Success: true}, nil
+}
+
+func (f *fakeNodeOperations) DockerComposeList(ctx context.Context, nodeID string) (protocol.DockerComposeListResponse, error) {
+	f.composeNodeID = nodeID
+	return protocol.DockerComposeListResponse{Type: protocol.MessageTypeDockerComposeListResponse, Success: true, Supported: true, Projects: []protocol.DockerComposeProject{{Name: "demo", Services: []protocol.DockerComposeService{}}}}, nil
+}
+
+func (f *fakeNodeOperations) DockerComposeAction(ctx context.Context, nodeID string, projectName string, serviceName string, action string) (protocol.DockerComposeActionResponse, error) {
+	f.composeNodeID = nodeID
+	f.composeProjectName = projectName
+	f.composeServiceName = serviceName
+	f.composeAction = action
+	return protocol.DockerComposeActionResponse{Type: protocol.MessageTypeDockerComposeActionResponse, Success: true, ProjectName: projectName, ServiceName: serviceName, Action: action}, nil
+}
+
+func TestNodeDockerComposeRoutes(t *testing.T) {
+	_, nodes, metrics, _, _ := testRouter(t)
+	ops := &fakeNodeOperations{}
+	mux := NewRouter(nodes, metrics, ops)
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/docker/compose", nil)
+	listResponse := httptest.NewRecorder()
+	mux.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || ops.composeNodeID != "node-1" {
+		t.Fatalf("list status = %d, node = %q, body = %s", listResponse.Code, ops.composeNodeID, listResponse.Body.String())
+	}
+
+	actionRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/docker/compose/action", strings.NewReader(`{"project_name":"demo","service_name":"web","action":"restart"}`))
+	actionRequest.Header.Set("Content-Type", "application/json")
+	actionResponse := httptest.NewRecorder()
+	mux.ServeHTTP(actionResponse, actionRequest)
+	if actionResponse.Code != http.StatusOK || ops.composeProjectName != "demo" || ops.composeServiceName != "web" || ops.composeAction != "restart" {
+		t.Fatalf("action status = %d, project = %q, service = %q, action = %q, body = %s", actionResponse.Code, ops.composeProjectName, ops.composeServiceName, ops.composeAction, actionResponse.Body.String())
+	}
 }
 
 func TestNodeConnectionDiagnostics(t *testing.T) {

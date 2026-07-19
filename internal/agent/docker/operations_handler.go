@@ -9,11 +9,30 @@ import (
 // OperationsHandler handles container operation requests
 type OperationsHandler struct {
 	collector *Collector
+	compose   *ComposeHandler
 }
 
 // NewOperationsHandler creates a new container operations handler
 func NewOperationsHandler(collector *Collector) *OperationsHandler {
-	return &OperationsHandler{collector: collector}
+	return NewOperationsHandlerWithCompose(collector, NewComposeHandler())
+}
+
+func NewOperationsHandlerWithCompose(collector *Collector, compose *ComposeHandler) *OperationsHandler {
+	return &OperationsHandler{collector: collector, compose: compose}
+}
+
+func (h *OperationsHandler) HandleDockerComposeList(ctx context.Context, req protocol.DockerComposeListRequest) protocol.DockerComposeListResponse {
+	if h.compose == nil {
+		return protocol.DockerComposeListResponse{Type: protocol.MessageTypeDockerComposeListResponse, RequestID: req.RequestID, Error: "Docker Compose CLI 不可用"}
+	}
+	return h.compose.HandleDockerComposeList(ctx, req)
+}
+
+func (h *OperationsHandler) HandleDockerComposeAction(ctx context.Context, req protocol.DockerComposeActionRequest) protocol.DockerComposeActionResponse {
+	if h.compose == nil {
+		return protocol.DockerComposeActionResponse{Type: protocol.MessageTypeDockerComposeActionResponse, RequestID: req.RequestID, Error: "Docker Compose CLI 不可用"}
+	}
+	return h.compose.HandleDockerComposeAction(ctx, req)
 }
 
 func (h *OperationsHandler) HandleContainerStart(ctx context.Context, req protocol.ContainerStartRequest) protocol.ContainerStartResponse {

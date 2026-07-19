@@ -289,9 +289,16 @@ describe('node monitoring detail', () => {
     const dockerRegion = await screen.findByRole('region', { name: 'Docker 容器' })
     const scrollArea = dockerRegion.querySelector('[data-testid="docker-table-scroll"]')
     const table = dockerRegion.querySelector('table')
+    const toolbar = within(dockerRegion).getByTestId('docker-container-toolbar')
 
     expect(scrollArea).toHaveClass('min-w-0', 'max-w-full', 'overflow-x-auto')
     expect(table).toHaveClass('w-full', 'min-w-0')
+    expect(toolbar).toHaveClass('flex-wrap')
+    for (const label of ['全部', '运行中', '已停止', '异常']) {
+      expect(within(toolbar).getByRole('button', { name: label })).toHaveClass('whitespace-nowrap')
+    }
+    expect(within(toolbar).getByRole('button', { name: '刷新容器列表' })).toHaveClass('h-10', 'w-10')
+    expect(within(toolbar).getByRole('button', { name: '创建容器' })).toHaveClass('h-10', 'w-10')
     expect(within(dockerRegion).getByTitle('registry.example.com/namespace/very/very/very/long/image/name/that/used/to/stretch/the/page:latest')).toHaveClass('line-clamp-2')
   })
 

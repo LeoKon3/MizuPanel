@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, K8sClustersResponse, SystemAboutResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeListResponse, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, K8sClustersResponse, SystemAboutResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -176,6 +176,18 @@ export function getNodeProcesses(nodeID: string): Promise<ProcessSnapshotRespons
 
 export function getNodeDocker(nodeID: string): Promise<DockerSnapshotResponse> {
   return request<DockerSnapshotResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker`)
+}
+
+export function getNodeDockerCompose(nodeID: string): Promise<DockerComposeListResponse> {
+  return request<DockerComposeListResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker/compose`)
+}
+
+export function runNodeDockerComposeAction(nodeID: string, projectName: string, action: DockerComposeAction, serviceName?: string): Promise<DockerComposeActionResponse> {
+  return request<DockerComposeActionResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker/compose/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_name: projectName, action, ...(serviceName ? { service_name: serviceName } : {}) })
+  })
 }
 
 export function getNodeFiles(nodeID: string, path: string): Promise<FileListResponse> {

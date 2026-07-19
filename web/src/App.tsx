@@ -2,7 +2,7 @@ import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState }
 import { X } from 'lucide-react'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 
-import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAgentUpgradeStatus, getAuthSession, getConnectionDiagnostics, getNodeDocker, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, setUnauthorizedHandler, startSSHUninstall, updateSettings, upgradeAgent, uploadNodeFile, writeNodeFile } from './api/client'
+import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAgentUpgradeStatus, getAuthSession, getConnectionDiagnostics, getNodeDocker, getNodeDockerCompose, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, runNodeDockerComposeAction, setUnauthorizedHandler, startSSHUninstall, updateSettings, upgradeAgent, uploadNodeFile, writeNodeFile } from './api/client'
 import { BrandLogo } from './components/BrandLogo'
 import { HostBatchTable } from './components/HostBatchTable'
 import { MetricCard } from './components/MetricCard'
@@ -18,7 +18,7 @@ import { TerminalPage } from './pages/TerminalPage'
 import { K8sClustersPage } from './pages/K8sClustersPage'
 import { K8sClusterDetailPage } from './pages/K8sClusterDetailPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
-import type { DockerContainer, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse } from './types'
+import type { DockerComposeAction, DockerComposeListResponse, DockerContainer, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse } from './types'
 
 function decodeRouteNodeID(value?: string) {
   if (!value) return undefined
@@ -130,6 +130,7 @@ export default function App() {
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [processSnapshot, setProcessSnapshot] = useState<ProcessSnapshotResponse>()
   const [dockerSnapshot, setDockerSnapshot] = useState<DockerSnapshotResponse>()
+  const [dockerCompose, setDockerCompose] = useState<DockerComposeListResponse>()
   const [monitoringLoading, setMonitoringLoading] = useState(false)
   const [range, setRange] = useState<RangeOption>('1h')
   const [error, setError] = useState<string>()
@@ -290,16 +291,32 @@ export default function App() {
     }
   }
 
+  const refreshDockerCompose = async (nodeID: string) => {
+    try {
+      setDockerCompose(await getNodeDockerCompose(nodeID))
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Compose 项目刷新失败')
+    }
+  }
+
+  const runDockerComposeAction = async (nodeID: string, projectName: string, action: DockerComposeAction, serviceName?: string) => {
+    const response = await runNodeDockerComposeAction(nodeID, projectName, action, serviceName)
+    if (!response.success) throw new Error(response.error || 'Compose 操作失败')
+    return response
+  }
+
   useEffect(() => {
     if (!selectedNodeID) {
       setProcessSnapshot(undefined)
       setDockerSnapshot(undefined)
+      setDockerCompose(undefined)
       setMonitoringLoading(false)
       return
     }
     let cancelled = false
     setProcessSnapshot(undefined)
     setDockerSnapshot(undefined)
+    setDockerCompose(undefined)
     setMonitoringLoading(true)
     Promise.all([getNodeProcesses(selectedNodeID), getNodeDocker(selectedNodeID)])
       .then(([processes, docker]) => {
@@ -313,6 +330,9 @@ export default function App() {
       })
       .finally(() => {
         if (!cancelled) setMonitoringLoading(false)
+      })
+      .catch(() => {
+        if (!cancelled) setDockerCompose({ success: false, supported: false, projects: [], error: '当前 Agent 不支持 Compose 管理' })
       })
     return () => {
       cancelled = true
@@ -391,6 +411,7 @@ export default function App() {
   const selectedMetrics = useMemo(() => selectedNodeID ? metrics.filter((metric) => metric.node_id === selectedNodeID) : [], [metrics, selectedNodeID])
   const selectedProcessSnapshot = processSnapshot?.node_id === selectedNodeID ? processSnapshot : undefined
   const selectedDockerSnapshot = dockerSnapshot?.node_id === selectedNodeID ? dockerSnapshot : undefined
+  const selectedDockerCompose = selectedNodeID ? dockerCompose : undefined
   const routeNode = useMemo(() => route.kind === 'node-detail' || route.kind === 'node-terminal' || route.kind === 'container-exec' ? nodes.find((node) => node.id === route.nodeID) : undefined, [nodes, route])
   const routeContainer = useMemo<DockerContainer | undefined>(() => {
     if (route.kind !== 'container-exec') return undefined
@@ -882,7 +903,7 @@ export default function App() {
               <span>当前显示 {filteredNodes.length} 台</span>
             </div>
           </section>
-          <NodeDetail node={visibleSelectedNode} metrics={selectedMetrics} processSnapshot={selectedProcessSnapshot} dockerSnapshot={selectedDockerSnapshot} monitoringLoading={monitoringLoading} range={range} onRangeChange={setRange} onLoadFiles={getNodeFiles} onReadFile={readNodeFile} onWriteFile={writeNodeFile} onUploadFile={uploadNodeFile} onDeletePath={deleteNodePath} onRebootNode={rebootNode} onSSHUninstall={startSSHUninstall} onGetAgentStatus={getAgentStatus} onGetConnectionDiagnostics={getConnectionDiagnostics} onUpgradeAgent={upgradeAgent} onGetAgentUpgradeStatus={getAgentUpgradeStatus} onGetLegacyAgentUpgradeCommand={getLegacyAgentUpgradeCommand} onRestartAgent={restartAgent} onGetAgentLogs={getAgentLogs} onRefreshDocker={refreshDockerSnapshot} onNodeOrganizationChanged={loadNodes} />
+          <NodeDetail node={visibleSelectedNode} metrics={selectedMetrics} processSnapshot={selectedProcessSnapshot} dockerSnapshot={selectedDockerSnapshot} dockerCompose={selectedDockerCompose} monitoringLoading={monitoringLoading} range={range} onRangeChange={setRange} onLoadFiles={getNodeFiles} onReadFile={readNodeFile} onWriteFile={writeNodeFile} onUploadFile={uploadNodeFile} onDeletePath={deleteNodePath} onRebootNode={rebootNode} onSSHUninstall={startSSHUninstall} onGetAgentStatus={getAgentStatus} onGetConnectionDiagnostics={getConnectionDiagnostics} onUpgradeAgent={upgradeAgent} onGetAgentUpgradeStatus={getAgentUpgradeStatus} onGetLegacyAgentUpgradeCommand={getLegacyAgentUpgradeCommand} onRestartAgent={restartAgent} onGetAgentLogs={getAgentLogs} onRefreshDocker={refreshDockerSnapshot} onRefreshDockerCompose={refreshDockerCompose} onDockerComposeAction={runDockerComposeAction} onNodeOrganizationChanged={loadNodes} />
         </div>
       )}
     </div>

@@ -1,9 +1,9 @@
 import type { ReactNode, MouseEvent as ReactMouseEvent } from 'react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Copy, MoreHorizontal, Play, RotateCw, ScrollText, ShieldAlert, Square, Tags, Terminal, Trash2, Wifi, WifiOff, X } from 'lucide-react'
+import { Copy, Download, FileCheck2, MoreHorizontal, Play, Plus, RotateCw, ScrollText, ShieldAlert, Square, Tags, Terminal, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, ConnectionDiagnostics, DockerContainer, DockerSnapshotResponse, FileDeleteResponse, FileEntry, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, Metric, Node, ProcessInfo, ProcessSnapshotResponse, RangeOption, RebootResponse, SSHAuthType, SSHJobResponse, SSHProgressEvent, SSHUninstallRequest } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, ConnectionDiagnostics, DockerComposeAction, DockerComposeListResponse, DockerContainer, DockerSnapshotResponse, FileDeleteResponse, FileEntry, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, Metric, Node, ProcessInfo, ProcessSnapshotResponse, RangeOption, RebootResponse, SSHAuthType, SSHJobResponse, SSHProgressEvent, SSHUninstallRequest } from '../types'
 import { formatBytes, formatPercent, formatSpeed } from '../lib/format'
 import { MetricsChart } from '../components/MetricsChart'
 import LogViewer from '../components/LogViewer'
@@ -17,6 +17,7 @@ type NodeDetailProps = {
   metrics: Metric[]
   processSnapshot?: ProcessSnapshotResponse
   dockerSnapshot?: DockerSnapshotResponse
+  dockerCompose?: DockerComposeListResponse
   monitoringLoading?: boolean
   range: RangeOption
   onRangeChange: (range: RangeOption) => void
@@ -35,6 +36,8 @@ type NodeDetailProps = {
   onRestartAgent?: (nodeID: string) => Promise<AgentRestartResponse>
   onGetAgentLogs?: (nodeID: string, lines: number) => Promise<AgentLogsResponse>
   onRefreshDocker?: (nodeID: string) => Promise<void>
+  onRefreshDockerCompose?: (nodeID: string) => Promise<void>
+  onDockerComposeAction?: (nodeID: string, projectName: string, action: DockerComposeAction, serviceName?: string) => Promise<{ success: boolean, output?: string, error?: string }>
   onNodeOrganizationChanged?: () => Promise<void> | void
 }
 
@@ -87,12 +90,31 @@ function mergeSSHProgressEvent(current: SSHProgressEventLog[], progress: SSHProg
   return next
 }
 
-export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onGetConnectionDiagnostics, onUpgradeAgent, onGetAgentUpgradeStatus, onGetLegacyAgentUpgradeCommand, onRestartAgent, onGetAgentLogs, onRefreshDocker, onNodeOrganizationChanged }: NodeDetailProps) {
+export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, dockerCompose, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onGetConnectionDiagnostics, onUpgradeAgent, onGetAgentUpgradeStatus, onGetLegacyAgentUpgradeCommand, onRestartAgent, onGetAgentLogs, onRefreshDocker, onRefreshDockerCompose, onDockerComposeAction, onNodeOrganizationChanged }: NodeDetailProps) {
   const [activeSection, setActiveSection] = useState<DetailSection>('overview')
   const [processSort, setProcessSort] = useState<ProcessSort>('cpu')
   const [processSearch, setProcessSearch] = useState('')
   const [dockerFilter, setDockerFilter] = useState<DockerFilter>('all')
   const [dockerSearch, setDockerSearch] = useState('')
+  const [dockerView, setDockerView] = useState<'containers' | 'compose'>('containers')
+  const [composeActionLoading, setComposeActionLoading] = useState<string>()
+  const [composeLoading, setComposeLoading] = useState(false)
+  const [pendingComposeDown, setPendingComposeDown] = useState<string>()
+  const [composeLogsModal, setComposeLogsModal] = useState<{ projectName: string; output: string }>()
+
+  useEffect(() => {
+    setDockerView('containers')
+    setComposeActionLoading(undefined)
+    setComposeLoading(false)
+    setPendingComposeDown(undefined)
+    setComposeLogsModal(undefined)
+  }, [node?.id])
+
+  useEffect(() => {
+    if (!node || activeSection !== 'containers' || dockerView !== 'compose' || !onRefreshDockerCompose) return
+    setComposeLoading(true)
+    void onRefreshDockerCompose(node.id).finally(() => setComposeLoading(false))
+  }, [activeSection, dockerView, node?.id])
   const [containerLogsModal, setContainerLogsModal] = useState<{ open: boolean; containerId: string; containerName: string }>({
     open: false,
     containerId: '',
@@ -731,6 +753,34 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
     }
   }
 
+  const runComposeAction = async (projectName: string, action: DockerComposeAction, serviceName?: string) => {
+    if (!node || !onDockerComposeAction) return
+    setComposeActionLoading(`${projectName}:${serviceName || 'project'}:${action}`)
+    const target = serviceName ? `Compose 服务 ${serviceName}` : 'Compose 项目'
+    try {
+      // Keep project-level invocations at three arguments. Existing integrations can
+      // continue to receive exactly the request shape they supported before this feature.
+      const result = serviceName
+        ? await onDockerComposeAction(node.id, projectName, action, serviceName)
+        : await onDockerComposeAction(node.id, projectName, action)
+      if (!result.success) {
+        setToast({ message: `${target}${composeActionText(action)}失败: ${result.error || result.output || '未知错误'}`, type: 'error' })
+      } else if (action === 'logs') {
+        setComposeLogsModal({ projectName, output: result.output || '暂无日志输出' })
+      } else if (action === 'validate') {
+        setToast({ message: 'Compose 配置校验成功', type: 'success' })
+      } else {
+        setToast({ message: `${target}${composeActionText(action)}成功`, type: 'success' })
+        await onRefreshDockerCompose?.(node.id)
+      }
+    } catch (error) {
+      setToast({ message: `${target}${composeActionText(action)}失败: ${error instanceof Error ? error.message : '网络错误'}`, type: 'error' })
+    } finally {
+      setComposeActionLoading(undefined)
+      setPendingComposeDown(undefined)
+    }
+  }
+
   return (
     <section className="min-w-0 space-y-2">
       <div className="rounded-[14px] border border-border bg-card p-3 shadow-sm">
@@ -875,61 +925,83 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
 
       {activeSection === 'containers' ? (
         <section aria-label="Docker 容器" className="overflow-hidden rounded-[28px] border border-border bg-card shadow-sm">
-          <div className="flex flex-col gap-3 border-b border-border bg-surface p-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-500">Docker Snapshot</p>
-              <h3 className="mt-1 text-lg font-black text-foreground">Docker 容器</h3>
+          <div className="border-b border-border bg-surface p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+              <p className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-500">{dockerView === 'containers' ? 'Docker Snapshot' : 'Compose Projects'}</p>
+              <h3 className="mt-1 text-lg font-black text-foreground">{dockerView === 'containers' ? 'Docker 容器' : 'Compose 项目'}</h3>
               <p className="mt-1 text-xs font-bold text-muted-foreground">
-                {dockerSnapshot?.available ? `Docker ${dockerSnapshot.version || '版本未知'} · ${formatUnixTime(dockerSnapshot.collected_at)}` : 'Docker 状态随 Agent 快照展示'}
+                {dockerView === 'containers'
+                  ? (dockerSnapshot?.available ? `Docker ${dockerSnapshot.version || '版本未知'} · ${formatUnixTime(dockerSnapshot.collected_at)}` : 'Docker 状态随 Agent 快照展示')
+                  : '实时读取 Agent 所在主机的 Docker Compose 项目'}
               </p>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <div className="flex rounded-2xl border border-border bg-card p-1 shadow-inner">
-                {([
-                  ['all', '全部'],
-                  ['running', '运行中'],
-                  ['stopped', '已停止'],
-                  ['abnormal', '异常']
-                ] as const).map(([filter, label]) => (
-                  <button
-                    key={filter}
-                    type="button"
-                    aria-pressed={dockerFilter === filter}
-                    onClick={() => setDockerFilter(filter)}
-                    className={`min-h-9 cursor-pointer rounded-xl px-3 text-xs font-black transition focus:outline-none focus:ring-4 focus:ring-cyan-100 ${dockerFilter === filter ? 'bg-slate-950 text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
-                  >
-                    {label}
-                  </button>
-                ))}
               </div>
-              <input
-                aria-label="搜索容器"
-                value={dockerSearch}
-                onChange={(event) => setDockerSearch(event.target.value)}
-                placeholder="搜索容器名、镜像或 ID"
-                className="min-h-10 rounded-2xl border border-border bg-card px-4 text-sm font-semibold text-foreground outline-none placeholder:text-muted-foreground focus:border-cyan-400 focus:ring-4 focus:ring-cyan-100"
-              />
-              <button
-                type="button"
-                aria-label="刷新容器列表"
-                onClick={() => node && onRefreshDocker?.(node.id)}
-                disabled={!online}
-                className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground transition hover:text-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                ↻ 刷新
-              </button>
-              <button
-                type="button"
-                aria-label="创建容器"
-                onClick={() => setCreateContainerModal(true)}
-                disabled={!online}
-                className="min-h-10 rounded-2xl border border-primary/30 bg-primary/10 px-4 text-xs font-black text-primary transition hover:bg-primary/15 focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                + 创建容器
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                <div className="flex shrink-0 rounded-2xl border border-border bg-card p-1 shadow-inner" role="tablist" aria-label="Docker 视图">
+                  <button type="button" role="tab" aria-selected={dockerView === 'containers'} onClick={() => setDockerView('containers')} className={`min-h-9 whitespace-nowrap rounded-xl px-3 text-xs font-black transition ${dockerView === 'containers' ? 'bg-slate-950 text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>容器</button>
+                  <button type="button" role="tab" aria-selected={dockerView === 'compose'} onClick={() => setDockerView('compose')} className={`min-h-9 whitespace-nowrap rounded-xl px-3 text-xs font-black transition ${dockerView === 'compose' ? 'bg-slate-950 text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>Compose</button>
+                </div>
+                {dockerView === 'compose' ? (
+                <button type="button" aria-label="刷新 Compose 项目" title="刷新 Compose 项目" onClick={() => {
+                  if (!node || !onRefreshDockerCompose) return
+                  setComposeLoading(true)
+                  void onRefreshDockerCompose(node.id).finally(() => setComposeLoading(false))
+                }} disabled={!online || Boolean(composeActionLoading) || composeLoading} className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-border bg-card text-muted-foreground transition hover:border-primary/30 hover:bg-primary/10 hover:text-primary focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"><RotateCw size={16} aria-hidden="true" /></button>
+                ) : null}
+              </div>
             </div>
+            {dockerView === 'containers' ? (
+              <div data-testid="docker-container-toolbar" className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/70 pt-3">
+                <div className="flex shrink-0 rounded-2xl border border-border bg-card p-1 shadow-inner">
+                  {([
+                    ['all', '全部'],
+                    ['running', '运行中'],
+                    ['stopped', '已停止'],
+                    ['abnormal', '异常']
+                  ] as const).map(([filter, label]) => (
+                    <button
+                      key={filter}
+                      type="button"
+                      aria-pressed={dockerFilter === filter}
+                      onClick={() => setDockerFilter(filter)}
+                      className={`min-h-9 cursor-pointer whitespace-nowrap rounded-xl px-3 text-xs font-black transition focus:outline-none focus:ring-4 focus:ring-cyan-100 ${dockerFilter === filter ? 'bg-slate-950 text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  aria-label="搜索容器"
+                  value={dockerSearch}
+                  onChange={(event) => setDockerSearch(event.target.value)}
+                  placeholder="搜索容器名、镜像或 ID"
+                  className="min-h-10 min-w-[240px] flex-1 rounded-2xl border border-border bg-card px-4 text-sm font-semibold text-foreground outline-none placeholder:text-muted-foreground focus:border-cyan-400 focus:ring-4 focus:ring-cyan-100"
+                />
+                <button
+                  type="button"
+                  aria-label="刷新容器列表"
+                  title="刷新容器列表"
+                  onClick={() => node && onRefreshDocker?.(node.id)}
+                  disabled={!online}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-card text-muted-foreground transition hover:border-primary/30 hover:bg-primary/10 hover:text-primary focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <RotateCw size={16} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="创建容器"
+                  title="创建容器"
+                  onClick={() => setCreateContainerModal(true)}
+                  disabled={!online}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 text-primary transition hover:bg-primary/15 focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Plus size={17} aria-hidden="true" />
+                </button>
+              </div>
+            ) : null}
           </div>
 
+          {dockerView === 'containers' ? <>
           {/* containerd 提示 */}
           <div className="mx-4 mt-4 rounded-xl border border-warning/30 bg-warning/5 p-3">
             <div className="flex items-start gap-2">
@@ -968,6 +1040,23 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
               }}
             />
           ) : null}
+          </> : (
+            <DockerComposePanel
+              response={dockerCompose}
+              loading={composeLoading}
+              online={online}
+              actionLoading={composeActionLoading}
+              onAction={(projectName, action, serviceName) => {
+                if (action === 'down') {
+                  setPendingComposeDown(projectName)
+                  return
+                }
+                void runComposeAction(projectName, action, serviceName)
+              }}
+              onOpenLogs={(containerID, containerName) => setContainerLogsModal({ open: true, containerId: containerID, containerName })}
+              onOpenTerminal={(containerID) => openContainerExecPage(node.id, containerID)}
+            />
+          )}
         </section>
       ) : null}
 
@@ -1365,6 +1454,26 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
         />
       )}
 
+      {composeLogsModal ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 p-4" onClick={() => setComposeLogsModal(undefined)}>
+          <section role="dialog" aria-modal="true" aria-label={`Compose 项目日志 ${composeLogsModal.projectName}`} className="flex h-[78vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border bg-surface px-5 py-4">
+              <div className="min-w-0">
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-500">Compose Logs</p>
+                <h3 className="mt-1 truncate font-mono text-lg font-black text-foreground">{composeLogsModal.projectName}</h3>
+              </div>
+              <button type="button" aria-label="关闭 Compose 日志" title="关闭" onClick={() => setComposeLogsModal(undefined)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-card text-muted-foreground transition hover:bg-muted hover:text-foreground">
+                <X size={17} aria-hidden="true" />
+              </button>
+            </div>
+            <pre className="min-h-0 flex-1 overflow-auto bg-slate-950 px-5 py-4 font-mono text-xs font-semibold leading-5 text-slate-100">{composeLogsModal.output}</pre>
+            <div className="flex justify-end border-t border-border bg-surface px-5 py-3">
+              <button type="button" onClick={() => setComposeLogsModal(undefined)} className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground transition hover:text-foreground">关闭</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       <CreateContainerModal
         open={createContainerModal}
         nodeId={node.id}
@@ -1381,6 +1490,24 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, mon
             setToast({ message: '主机组织信息调整成功', type: 'success' })
           }}
         />
+      ) : null}
+
+      {pendingComposeDown ? (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/35 p-4">
+          <section role="dialog" aria-modal="true" aria-label="移除 Compose 项目" className="w-full max-w-md overflow-hidden rounded-[28px] border border-border bg-card shadow-2xl">
+            <div className="border-b border-danger/20 bg-danger/10 px-5 py-4">
+              <h3 className="text-lg font-black text-foreground">移除 Compose 项目</h3>
+              <p className="mt-1 text-xs font-bold leading-5 text-muted-foreground">将执行 `docker compose down`，停止并移除项目创建的容器和网络，不删除 Compose 文件。</p>
+            </div>
+            <div className="px-5 py-5">
+              <p className="text-sm font-bold text-foreground">确认操作项目：<span className="font-mono">{pendingComposeDown}</span></p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border bg-surface px-5 py-4">
+              <button type="button" onClick={() => setPendingComposeDown(undefined)} disabled={Boolean(composeActionLoading)} className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground disabled:opacity-60">取消</button>
+              <button type="button" onClick={() => void runComposeAction(pendingComposeDown, 'down')} disabled={Boolean(composeActionLoading)} className="min-h-10 rounded-2xl bg-danger px-4 text-xs font-black text-white disabled:opacity-60">{composeActionLoading ? '正在移除...' : '确认移除'}</button>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {/* Toast Notification */}
@@ -1978,6 +2105,184 @@ function ContainerActionMenuItem({ icon, label, danger, disabled, onClick }: { i
       {label}
     </button>
   )
+}
+
+function DockerComposePanel({ response, loading, online, actionLoading, onAction, onOpenLogs, onOpenTerminal }: { response?: DockerComposeListResponse; loading: boolean; online: boolean; actionLoading?: string; onAction: (projectName: string, action: DockerComposeAction, serviceName?: string) => void; onOpenLogs: (containerID: string, containerName: string) => void; onOpenTerminal: (containerID: string) => void }) {
+  if (!response) {
+    return <div className="m-4 rounded-2xl border border-dashed border-border bg-surface px-4 py-8 text-center text-sm font-bold text-muted-foreground">{loading ? '正在读取 Compose 项目...' : '切换到 Compose 视图后刷新项目列表。'}</div>
+  }
+  if (!response.supported) {
+    return <div className="m-4 rounded-2xl border border-warning/30 bg-warning/10 px-4 py-4 text-sm font-bold text-warning">{response.error || '当前 Agent 未检测到 Docker Compose CLI，请安装 Docker Compose 插件并升级 Agent。'}</div>
+  }
+  if (response.error && !response.success) {
+    return <div className="m-4 rounded-2xl border border-danger/30 bg-danger/10 px-4 py-4 text-sm font-bold text-danger">Compose 项目加载失败: {response.error}</div>
+  }
+  if (response.projects.length === 0) {
+    return <div className="m-4 rounded-2xl border border-dashed border-border bg-surface px-4 py-8 text-center"><p className="text-sm font-black text-foreground">未发现 Compose 项目</p><p className="mt-1 text-xs font-semibold text-muted-foreground">Agent 只展示 Docker Compose 当前可识别的项目，不扫描主机文件系统。</p></div>
+  }
+  const serviceActionsSupported = response.service_actions_supported === true
+  return (
+    <div className="m-4 overflow-hidden rounded-2xl border border-border">
+      {response.projects.map((project) => {
+        const running = project.services.filter((service) => service.state?.toLowerCase() === 'running').length
+        const busy = actionLoading?.startsWith(`${project.name}:`) ?? false
+        return (
+          <article key={project.name} className="overflow-hidden border-b border-border bg-surface/35 last:border-b-0">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border bg-surface px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h4 className="font-mono text-sm font-black text-foreground">{project.name}</h4>
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${running > 0 ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>{running}/{project.services.length} 运行</span>
+                </div>
+                <p className="mt-1 truncate text-xs font-semibold text-muted-foreground" title={project.config_files?.join(', ')}>{project.config_files?.join(' · ') || '配置文件路径不可用'}</p>
+                {project.error ? <p className="mt-2 text-xs font-bold text-warning">{project.error}</p> : null}
+              </div>
+              <div className="flex flex-wrap gap-2" role="toolbar" aria-label={`${project.name} Compose 操作`}>
+                <ComposeActionButton icon={<Download size={14} aria-hidden="true" />} label="拉取镜像" disabled={!online || busy} onClick={() => onAction(project.name, 'pull')} />
+                <ComposeActionButton icon={<Play size={14} aria-hidden="true" />} label="启动 / 重建" primary disabled={!online || busy} onClick={() => onAction(project.name, 'up')} />
+                <ComposeActionButton icon={<RotateCw size={14} aria-hidden="true" />} label="重启" disabled={!online || busy || running === 0} onClick={() => onAction(project.name, 'restart')} />
+                <ComposeActionButton icon={<Square size={14} aria-hidden="true" />} label="停止" disabled={!online || busy || running === 0} onClick={() => onAction(project.name, 'stop')} />
+                <ComposeActionButton icon={<ScrollText size={14} aria-hidden="true" />} label="日志" disabled={!online || busy} onClick={() => onAction(project.name, 'logs')} />
+                <ComposeActionButton icon={<FileCheck2 size={14} aria-hidden="true" />} label="校验配置" disabled={!online || busy} onClick={() => onAction(project.name, 'validate')} />
+                <ComposeActionButton icon={<Trash2 size={14} aria-hidden="true" />} label="移除" danger disabled={!online || busy} onClick={() => onAction(project.name, 'down')} />
+              </div>
+            </div>
+            {busy ? <div className="border-b border-primary/20 bg-primary/5 px-4 py-2 text-xs font-black text-primary">正在执行 {composeActionText(actionLoading!.split(':').pop() as DockerComposeAction)}，请稍候...</div> : null}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="bg-card text-[11px] font-black uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-4 py-3">服务</th><th className="px-4 py-3">容器</th><th className="px-4 py-3">镜像</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">端口</th><th className="w-20 px-4 py-3">操作</th></tr></thead>
+                <tbody className="divide-y divide-border">
+                  {project.services.length > 0 ? project.services.map((service) => {
+                    const containerID = service.container_id || ''
+                    const runningService = service.state?.toLowerCase() === 'running'
+                    return (
+                      <tr key={`${service.name}-${service.container_id || service.container_name}`} className="hover:bg-surface">
+                        <td className="px-4 py-3 font-black text-foreground">{service.name}</td>
+                        <td className="max-w-[180px] truncate px-4 py-3 font-mono text-xs font-bold text-muted-foreground" title={service.container_name}>{service.container_name || '—'}</td>
+                        <td className="max-w-[220px] truncate px-4 py-3 text-xs font-semibold text-foreground" title={service.image}>{service.image || '—'}</td>
+                        <td className="px-4 py-3"><StatusPill value={service.health || service.state || service.status || 'unknown'} /></td>
+                        <td className="max-w-[150px] truncate px-4 py-3 font-mono text-xs font-semibold text-muted-foreground" title={service.ports?.join(', ')}>{service.ports?.join(', ') || '—'}</td>
+                        <td className="w-20 px-4 py-3">
+                          <ComposeServiceActionMenu
+                            projectName={project.name}
+                            serviceName={service.name}
+                            containerID={containerID}
+                            containerName={service.container_name || service.name}
+                            online={online}
+                            running={runningService}
+                            busy={busy}
+                            lifecycleSupported={serviceActionsSupported}
+                            onAction={(action) => onAction(project.name, action, service.name)}
+                            onOpenLogs={() => onOpenLogs(containerID, service.container_name || service.name)}
+                            onOpenTerminal={() => onOpenTerminal(containerID)}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  }) : <tr><td colSpan={6} className="px-4 py-6 text-center text-sm font-bold text-muted-foreground">项目当前没有容器，使用“启动 / 重建”创建服务。</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
+function ComposeServiceActionMenu({ projectName, serviceName, containerID, containerName, online, running, busy, lifecycleSupported, onAction, onOpenLogs, onOpenTerminal }: { projectName: string; serviceName: string; containerID: string; containerName: string; online: boolean; running: boolean; busy: boolean; lifecycleSupported: boolean; onAction: (action: 'pull' | 'up' | 'restart' | 'stop') => void; onOpenLogs: () => void; onOpenTerminal: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number }>()
+  const menuId = useId()
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      let element = event.target instanceof Element ? event.target : null
+      while (element) {
+        if (element.getAttribute('data-compose-service-actions-menu') === menuId) return
+        element = element.parentElement
+      }
+      setOpen(false)
+    }
+    const timeoutID = window.setTimeout(() => document.addEventListener('click', closeOnOutsideClick), 0)
+    return () => {
+      window.clearTimeout(timeoutID)
+      document.removeEventListener('click', closeOnOutsideClick)
+    }
+  }, [menuId, open])
+
+  const toggleMenu = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const menuWidth = 176
+    const menuHeight = lifecycleSupported ? 300 : 120
+    setMenuPosition({
+      top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuHeight - 8)),
+      left: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
+    })
+    setOpen((value) => !value)
+  }
+
+  const chooseAction = (action: 'logs' | 'terminal' | 'pull' | 'up' | 'restart' | 'stop') => {
+    setOpen(false)
+    if (action === 'logs') {
+      onOpenLogs()
+      return
+    }
+    if (action === 'terminal') {
+      onOpenTerminal()
+      return
+    }
+    onAction(action)
+  }
+
+  return (
+    <div className="relative flex items-center justify-center">
+      <button
+        type="button"
+        aria-label={`${serviceName} 服务操作`}
+        title={`${serviceName} 服务操作`}
+        data-compose-service-actions-menu={menuId}
+        onClick={toggleMenu}
+        disabled={busy}
+        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition hover:border-primary/30 hover:bg-primary/10 hover:text-primary focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <MoreHorizontal size={16} aria-hidden="true" />
+      </button>
+      {open && !busy && menuPosition ? createPortal(
+        <div
+          role="menu"
+          aria-label={`${serviceName} 服务操作菜单`}
+          data-compose-service-actions-menu={menuId}
+          className="fixed z-[70] w-44 rounded-2xl border border-border/80 bg-card/95 p-1.5 text-left shadow-[0_18px_45px_rgb(15_23_42/0.16)] backdrop-blur"
+          style={{ top: menuPosition.top, left: menuPosition.left }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <p className="px-3 pb-1 pt-1.5 font-mono text-[10px] font-black text-muted-foreground" title={`${projectName} / ${containerName}`}>{serviceName}</p>
+          <ContainerActionMenuItem icon={<ScrollText size={15} />} label="查看日志" disabled={!online || !containerID} onClick={() => chooseAction('logs')} />
+          <ContainerActionMenuItem icon={<Terminal size={15} />} label="进入终端" disabled={!online || !containerID || !running} onClick={() => chooseAction('terminal')} />
+          {lifecycleSupported ? <>
+            <div className="my-1 h-px bg-border/70" />
+            <ContainerActionMenuItem icon={<Download size={15} />} label="拉取镜像" disabled={!online} onClick={() => chooseAction('pull')} />
+            <ContainerActionMenuItem icon={<Play size={15} />} label="启动 / 重建" disabled={!online} onClick={() => chooseAction('up')} />
+            <ContainerActionMenuItem icon={<RotateCw size={15} />} label="重启" disabled={!online || !running} onClick={() => chooseAction('restart')} />
+            <ContainerActionMenuItem icon={<Square size={15} />} label="停止" disabled={!online || !running} onClick={() => chooseAction('stop')} />
+          </> : null}
+        </div>,
+        document.body
+      ) : null}
+    </div>
+  )
+}
+
+function ComposeActionButton({ icon, label, primary, danger, disabled, onClick }: { icon?: ReactNode; label: string; primary?: boolean; danger?: boolean; disabled?: boolean; onClick: () => void }) {
+  const tone = danger ? 'border-danger/30 bg-danger/10 text-danger hover:bg-danger/15' : primary ? 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/15' : 'border-border bg-card text-muted-foreground hover:text-foreground'
+  return <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex min-h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-45 ${tone}`}>{icon}<span>{label}</span></button>
+}
+
+function composeActionText(action: DockerComposeAction) {
+  return action === 'pull' ? '拉取镜像' : action === 'up' ? '启动/重建' : action === 'restart' ? '重启' : action === 'stop' ? '停止' : action === 'down' ? '移除' : action === 'logs' ? '查看日志' : '校验配置'
 }
 
 function compareProcesses(left: ProcessInfo, right: ProcessInfo, sort: ProcessSort) {

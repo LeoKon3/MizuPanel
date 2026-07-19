@@ -61,14 +61,18 @@ const (
 	MessageTypeDockerExecRequest  = "docker_exec_request"
 	MessageTypeDockerExecResponse = "docker_exec_response"
 
-	MessageTypeContainerStartRequest    = "container_start_request"
-	MessageTypeContainerStartResponse   = "container_start_response"
-	MessageTypeContainerStopRequest     = "container_stop_request"
-	MessageTypeContainerStopResponse    = "container_stop_response"
-	MessageTypeContainerRestartRequest  = "container_restart_request"
-	MessageTypeContainerRestartResponse = "container_restart_response"
-	MessageTypeContainerDeleteRequest   = "container_delete_request"
-	MessageTypeContainerDeleteResponse  = "container_delete_response"
+	MessageTypeContainerStartRequest       = "container_start_request"
+	MessageTypeContainerStartResponse      = "container_start_response"
+	MessageTypeContainerStopRequest        = "container_stop_request"
+	MessageTypeContainerStopResponse       = "container_stop_response"
+	MessageTypeContainerRestartRequest     = "container_restart_request"
+	MessageTypeContainerRestartResponse    = "container_restart_response"
+	MessageTypeContainerDeleteRequest      = "container_delete_request"
+	MessageTypeContainerDeleteResponse     = "container_delete_response"
+	MessageTypeDockerComposeListRequest    = "docker_compose_list_request"
+	MessageTypeDockerComposeListResponse   = "docker_compose_list_response"
+	MessageTypeDockerComposeActionRequest  = "docker_compose_action_request"
+	MessageTypeDockerComposeActionResponse = "docker_compose_action_response"
 
 	// K8s 集群管理相关消息类型
 	MessageTypeK8sClusterConnect        = "k8s_cluster_connect"
@@ -102,22 +106,24 @@ const (
 )
 
 type HelloMessage struct {
-	Type            string `json:"type"`
-	NodeID          string `json:"node_id"`
-	AgentVersion    string `json:"agent_version"`
-	ProtocolVersion int    `json:"protocol_version,omitempty"`
-	IdentitySource  string `json:"identity_source,omitempty"`
-	Hostname        string `json:"hostname"`
-	Name            string `json:"name"`
-	IP              string `json:"ip"`
-	OS              string `json:"os"`
-	Arch            string `json:"arch"`
-	Kernel          string `json:"kernel"`
-	Terminal        bool   `json:"terminal"`
-	AgentMode       string `json:"agent_mode,omitempty"`
-	AgentUser       string `json:"agent_user,omitempty"`
-	AgentManagement bool   `json:"agent_management,omitempty"`
-	AgentUpgrade    bool   `json:"agent_upgrade,omitempty"`
+	Type                        string `json:"type"`
+	NodeID                      string `json:"node_id"`
+	AgentVersion                string `json:"agent_version"`
+	ProtocolVersion             int    `json:"protocol_version,omitempty"`
+	IdentitySource              string `json:"identity_source,omitempty"`
+	Hostname                    string `json:"hostname"`
+	Name                        string `json:"name"`
+	IP                          string `json:"ip"`
+	OS                          string `json:"os"`
+	Arch                        string `json:"arch"`
+	Kernel                      string `json:"kernel"`
+	Terminal                    bool   `json:"terminal"`
+	DockerCompose               bool   `json:"docker_compose,omitempty"`
+	DockerComposeServiceActions bool   `json:"docker_compose_service_actions,omitempty"`
+	AgentMode                   string `json:"agent_mode,omitempty"`
+	AgentUser                   string `json:"agent_user,omitempty"`
+	AgentManagement             bool   `json:"agent_management,omitempty"`
+	AgentUpgrade                bool   `json:"agent_upgrade,omitempty"`
 }
 
 type HelloAckMessage struct {
@@ -608,6 +614,61 @@ type ContainerDeleteResponse struct {
 	RequestID string `json:"request_id,omitempty"`
 	Success   bool   `json:"success"`
 	Error     string `json:"error,omitempty"`
+}
+
+type DockerComposeListRequest struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+}
+
+type DockerComposeListResponse struct {
+	Type                    string                 `json:"type"`
+	RequestID               string                 `json:"request_id,omitempty"`
+	Success                 bool                   `json:"success"`
+	Supported               bool                   `json:"supported"`
+	ServiceActionsSupported bool                   `json:"service_actions_supported"`
+	Projects                []DockerComposeProject `json:"projects"`
+	Error                   string                 `json:"error,omitempty"`
+}
+
+type DockerComposeProject struct {
+	Name        string                 `json:"name"`
+	Status      string                 `json:"status,omitempty"`
+	ConfigFiles []string               `json:"config_files,omitempty"`
+	Services    []DockerComposeService `json:"services"`
+	Error       string                 `json:"error,omitempty"`
+}
+
+type DockerComposeService struct {
+	Name          string   `json:"name"`
+	ContainerName string   `json:"container_name,omitempty"`
+	ContainerID   string   `json:"container_id,omitempty"`
+	Image         string   `json:"image,omitempty"`
+	State         string   `json:"state,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	Health        string   `json:"health,omitempty"`
+	Ports         []string `json:"ports,omitempty"`
+}
+
+type DockerComposeActionRequest struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"request_id,omitempty"`
+	NodeID      string `json:"node_id,omitempty"`
+	ProjectName string `json:"project_name"`
+	ServiceName string `json:"service_name,omitempty"`
+	Action      string `json:"action"`
+}
+
+type DockerComposeActionResponse struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"request_id,omitempty"`
+	Success     bool   `json:"success"`
+	ProjectName string `json:"project_name,omitempty"`
+	ServiceName string `json:"service_name,omitempty"`
+	Action      string `json:"action,omitempty"`
+	Output      string `json:"output,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // K8s 集群连接验证

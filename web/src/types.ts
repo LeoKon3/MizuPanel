@@ -222,6 +222,46 @@ export type DockerSnapshotResponse = {
   containers: DockerContainer[]
 }
 
+export type DockerComposeService = {
+  name: string
+  container_name?: string
+  container_id?: string
+  image?: string
+  state?: string
+  status?: string
+  health?: string
+  ports?: string[]
+}
+
+export type DockerComposeProject = {
+  name: string
+  status?: string
+  config_files?: string[]
+  services: DockerComposeService[]
+  error?: string
+}
+
+export type DockerComposeListResponse = {
+  type?: string
+  success: boolean
+  supported: boolean
+  service_actions_supported?: boolean
+  projects: DockerComposeProject[]
+  error?: string
+}
+
+export type DockerComposeAction = 'pull' | 'up' | 'restart' | 'stop' | 'down' | 'logs' | 'validate'
+
+export type DockerComposeActionResponse = {
+  type?: string
+  success: boolean
+  project_name?: string
+  service_name?: string
+  action?: DockerComposeAction
+  output?: string
+  error?: string
+}
+
 export type ContainerLogsRequest = {
   type: 'container_logs_request'
   session_id: string

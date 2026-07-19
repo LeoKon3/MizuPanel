@@ -85,6 +85,8 @@ type ContainerOperationsHandler interface {
 	HandleContainerStop(context.Context, protocol.ContainerStopRequest) protocol.ContainerStopResponse
 	HandleContainerRestart(context.Context, protocol.ContainerRestartRequest) protocol.ContainerRestartResponse
 	HandleContainerDelete(context.Context, protocol.ContainerDeleteRequest) protocol.ContainerDeleteResponse
+	HandleDockerComposeList(context.Context, protocol.DockerComposeListRequest) protocol.DockerComposeListResponse
+	HandleDockerComposeAction(context.Context, protocol.DockerComposeActionRequest) protocol.DockerComposeActionResponse
 }
 
 type KubectlHandler interface {
@@ -513,6 +515,32 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 			if err := writer.writeJSON(response); err != nil {
 				continue
 			}
+		case protocol.MessageTypeDockerComposeListRequest:
+			if c.containerOpsHandler == nil {
+				continue
+			}
+			var request protocol.DockerComposeListRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			go func() {
+				response := c.containerOpsHandler.HandleDockerComposeList(ctx, request)
+				response.RequestID = request.RequestID
+				_ = writer.writeJSON(response)
+			}()
+		case protocol.MessageTypeDockerComposeActionRequest:
+			if c.containerOpsHandler == nil {
+				continue
+			}
+			var request protocol.DockerComposeActionRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			go func() {
+				response := c.containerOpsHandler.HandleDockerComposeAction(ctx, request)
+				response.RequestID = request.RequestID
+				_ = writer.writeJSON(response)
+			}()
 		case protocol.MessageTypeK8sClusterConnect,
 			protocol.MessageTypeK8sGetSummary,
 			protocol.MessageTypeK8sGetNamespaces,
