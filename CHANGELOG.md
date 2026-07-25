@@ -2,6 +2,16 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.6 - 2026-07-25
+
+### Added
+
+- Added configuration-independent `version`, `--version`, and `-v` commands to both Server and Agent binaries.
+
+### Changed
+
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.6.
+
 ## v0.1.5 - 2026-07-25
 
 ### Added

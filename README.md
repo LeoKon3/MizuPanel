@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.5-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.6-14B8A6">
 </p>
 
 <p align="center">
@@ -111,6 +111,15 @@ server:
 ```bash
 ./mizupanel-server -config server.yaml
 ```
+
+无需读取配置即可查看 Server 或已安装 Agent 的版本：
+
+```bash
+./mizupanel-server version
+/usr/local/mizupanel/bin/mizupanel-agent version
+```
+
+`--version` 和 `-v` 也支持相同输出。
 
 打开 `http://你的服务器IP:8080`，进入 Dashboard 后点击 **添加服务器**，复制 Linux 或 Windows Agent 安装命令到目标主机执行。
 

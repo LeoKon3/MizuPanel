@@ -15,9 +15,18 @@ import (
 	serverdb "github.com/mizupanel/mizupanel/internal/server/db"
 	"github.com/mizupanel/mizupanel/internal/server/retention"
 	"github.com/mizupanel/mizupanel/internal/server/store"
+	"github.com/mizupanel/mizupanel/internal/version"
 )
 
 func main() {
+	handled, err := version.PrintCommand(os.Args[1:], "Server", os.Stdout)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if handled {
+		return
+	}
+
 	configPath := flag.String("config", "", "path to server config file")
 	flag.Parse()
 

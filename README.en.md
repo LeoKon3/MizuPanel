@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.5-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.6-14B8A6">
 </p>
 
 <p align="center">
@@ -111,6 +111,15 @@ Start the Server:
 ```bash
 ./mizupanel-server -config server.yaml
 ```
+
+Check the Server or installed Agent version without loading configuration:
+
+```bash
+./mizupanel-server version
+/usr/local/mizupanel/bin/mizupanel-agent version
+```
+
+The `--version` and `-v` aliases produce the same output.
 
 Open `http://your-server-ip:8080`, then click **Add Server** in the Dashboard to copy the Linux or Windows Agent install command.
 

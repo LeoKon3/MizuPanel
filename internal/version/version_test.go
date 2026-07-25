@@ -1,6 +1,7 @@
 package version
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,44 @@ import (
 )
 
 var semanticVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
+func TestPrintCommand(t *testing.T) {
+	t.Parallel()
+
+	for _, argument := range []string{"version", "--version", "-v"} {
+		argument := argument
+		t.Run(argument, func(t *testing.T) {
+			t.Parallel()
+
+			var output bytes.Buffer
+			handled, err := PrintCommand([]string{argument}, "Agent", &output)
+			if err != nil {
+				t.Fatalf("PrintCommand returned error: %v", err)
+			}
+			if !handled {
+				t.Fatal("PrintCommand did not handle version argument")
+			}
+			if want := "MizuPanel Agent v" + Current + "\n"; output.String() != want {
+				t.Fatalf("output = %q, want %q", output.String(), want)
+			}
+		})
+	}
+}
+
+func TestPrintCommandLeavesNormalStartupArgumentsUntouched(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{nil, {"--config", "agent.yaml"}, {"version", "extra"}} {
+		var output bytes.Buffer
+		handled, err := PrintCommand(args, "Agent", &output)
+		if err != nil {
+			t.Fatalf("PrintCommand(%q) returned error: %v", args, err)
+		}
+		if handled || output.Len() != 0 {
+			t.Fatalf("PrintCommand(%q) handled normal startup arguments", args)
+		}
+	}
+}
 
 func TestReleaseVersionSurfacesStayInSync(t *testing.T) {
 	t.Parallel()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"os"
 	"os/user"
 	"time"
 
@@ -23,6 +24,14 @@ import (
 )
 
 func main() {
+	handled, err := version.PrintCommand(os.Args[1:], "Agent", os.Stdout)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if handled {
+		return
+	}
+
 	configPath := flag.String("config", "", "path to agent config file")
 	flag.Parse()
 
