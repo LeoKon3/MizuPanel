@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.4-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.5-14B8A6">
 </p>
 
 <p align="center">
@@ -57,7 +57,7 @@
     <td width="33%"><strong>Agent 生命周期</strong><br /><sub>安装、连接诊断、日志、重启、身份持久化和安全升级到最新版。</sub></td>
   </tr>
   <tr>
-    <td width="33%"><strong>Docker 工作区</strong><br /><sub>容器、Compose、镜像、数据卷、网络、磁盘占用、日志、终端和安全操作。</sub></td>
+    <td width="33%"><strong>Docker 工作区</strong><br /><sub>容器、受控 Compose 应用部署/更新/回滚/归档、镜像、数据卷、网络、日志和终端。</sub></td>
     <td width="33%"><strong>主机运维</strong><br /><sub>进程、Systemd 服务、文件管理、Web 终端和受控重启。</sub></td>
     <td width="33%"><strong>告警与通知</strong><br /><sub>指标规则、触发与恢复通知、Webhook、钉钉、飞书、重试和历史状态。</sub></td>
   </tr>

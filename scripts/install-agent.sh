@@ -204,6 +204,7 @@ BIN_DIR="$INSTALL_DIR/bin"
 ETC_DIR="$INSTALL_DIR/etc"
 VAR_DIR="$INSTALL_DIR/var"
 BACKUP_DIR="$VAR_DIR/backups"
+COMPOSE_DIR="$DEST_ROOT/var/lib/mizupanel/compose"
 IDENTITY_PATH="$ETC_DIR/agent-id"
 CONFIG_PATH="$ETC_DIR/agent.yaml"
 SYSTEMD_DIR="$DEST_ROOT/etc/systemd/system"
@@ -213,6 +214,7 @@ if [ -z "$DEST_ROOT" ] && ! id -u mizupanel-agent >/dev/null 2>&1; then
 fi
 
 install -d -m 0755 "$INSTALL_DIR" "$BIN_DIR" "$ETC_DIR" "$VAR_DIR" "$BACKUP_DIR"
+install -d -m 0750 "$COMPOSE_DIR"
 if [ -z "$DEST_ROOT" ]; then
   chown root:root "$INSTALL_DIR"
   chmod 0755 "$INSTALL_DIR"
@@ -298,11 +300,13 @@ install -m 0600 "$CONFIG_TMP" "$CONFIG_PATH"
 rm -f "$CONFIG_TMP"
 
 if [ -z "$DEST_ROOT" ]; then
-  chown root:root "$INSTALL_DIR" "$BIN_DIR" "$ETC_DIR" "$VAR_DIR" "$BACKUP_DIR" "$BIN_DIR/mizupanel-agent" "$IDENTITY_PATH"
+  chown root:root "$INSTALL_DIR" "$BIN_DIR" "$ETC_DIR" "$VAR_DIR" "$BACKUP_DIR" "$COMPOSE_DIR" "$BIN_DIR/mizupanel-agent" "$IDENTITY_PATH"
   if [ "$MODE" = "ops" ]; then
     chown root:root "$CONFIG_PATH"
   else
     chown mizupanel-agent:mizupanel-agent "$CONFIG_PATH" "$IDENTITY_PATH"
+    chown mizupanel-agent:mizupanel-agent "$COMPOSE_DIR"
+    chmod 0750 "$COMPOSE_DIR"
   fi
   if [ "$MODE" != "ops" ] && [ "$ENABLE_DOCKER" = "true" ]; then
     DOCKER_GROUP=$(docker_group) || {
@@ -337,7 +341,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/usr/local/mizupanel/etc/agent.yaml
+ReadWritePaths=/usr/local/mizupanel/etc/agent.yaml /var/lib/mizupanel/compose
 
 [Install]
 WantedBy=multi-user.target

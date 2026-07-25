@@ -121,6 +121,19 @@ func (h *OperationsHandler) HandleDockerComposeAction(ctx context.Context, req p
 	return h.compose.HandleDockerComposeAction(ctx, req)
 }
 
+func (h *OperationsHandler) HandleDockerComposeDeployment(ctx context.Context, req protocol.DockerComposeDeploymentRequest) protocol.DockerComposeDeploymentResponse {
+	if h.compose == nil {
+		return protocol.DockerComposeDeploymentResponse{
+			Type:      protocol.MessageTypeDockerComposeDeploymentResponse,
+			RequestID: req.RequestID,
+			Supported: false,
+			Risks:     []protocol.DockerComposeRisk{},
+			Error:     "Docker Compose CLI 不可用",
+		}
+	}
+	return h.compose.HandleDockerComposeDeployment(ctx, req)
+}
+
 func (h *OperationsHandler) HandleContainerStart(ctx context.Context, req protocol.ContainerStartRequest) protocol.ContainerStartResponse {
 	err := h.collector.ContainerStart(ctx, req.ContainerID)
 	if err != nil {

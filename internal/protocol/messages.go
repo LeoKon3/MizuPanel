@@ -61,26 +61,28 @@ const (
 	MessageTypeDockerExecRequest  = "docker_exec_request"
 	MessageTypeDockerExecResponse = "docker_exec_response"
 
-	MessageTypeContainerStartRequest        = "container_start_request"
-	MessageTypeContainerStartResponse       = "container_start_response"
-	MessageTypeContainerStopRequest         = "container_stop_request"
-	MessageTypeContainerStopResponse        = "container_stop_response"
-	MessageTypeContainerRestartRequest      = "container_restart_request"
-	MessageTypeContainerRestartResponse     = "container_restart_response"
-	MessageTypeContainerDeleteRequest       = "container_delete_request"
-	MessageTypeContainerDeleteResponse      = "container_delete_response"
-	MessageTypeDockerComposeListRequest     = "docker_compose_list_request"
-	MessageTypeDockerComposeListResponse    = "docker_compose_list_response"
-	MessageTypeDockerComposeActionRequest   = "docker_compose_action_request"
-	MessageTypeDockerComposeActionResponse  = "docker_compose_action_response"
-	MessageTypeDockerResourceListRequest    = "docker_resource_list_request"
-	MessageTypeDockerResourceListResponse   = "docker_resource_list_response"
-	MessageTypeDockerResourceActionRequest  = "docker_resource_action_request"
-	MessageTypeDockerResourceActionResponse = "docker_resource_action_response"
-	MessageTypeSystemdServiceListRequest    = "systemd_service_list_request"
-	MessageTypeSystemdServiceListResponse   = "systemd_service_list_response"
-	MessageTypeSystemdServiceActionRequest  = "systemd_service_action_request"
-	MessageTypeSystemdServiceActionResponse = "systemd_service_action_response"
+	MessageTypeContainerStartRequest           = "container_start_request"
+	MessageTypeContainerStartResponse          = "container_start_response"
+	MessageTypeContainerStopRequest            = "container_stop_request"
+	MessageTypeContainerStopResponse           = "container_stop_response"
+	MessageTypeContainerRestartRequest         = "container_restart_request"
+	MessageTypeContainerRestartResponse        = "container_restart_response"
+	MessageTypeContainerDeleteRequest          = "container_delete_request"
+	MessageTypeContainerDeleteResponse         = "container_delete_response"
+	MessageTypeDockerComposeListRequest        = "docker_compose_list_request"
+	MessageTypeDockerComposeListResponse       = "docker_compose_list_response"
+	MessageTypeDockerComposeActionRequest      = "docker_compose_action_request"
+	MessageTypeDockerComposeActionResponse     = "docker_compose_action_response"
+	MessageTypeDockerComposeDeploymentRequest  = "docker_compose_deployment_request"
+	MessageTypeDockerComposeDeploymentResponse = "docker_compose_deployment_response"
+	MessageTypeDockerResourceListRequest       = "docker_resource_list_request"
+	MessageTypeDockerResourceListResponse      = "docker_resource_list_response"
+	MessageTypeDockerResourceActionRequest     = "docker_resource_action_request"
+	MessageTypeDockerResourceActionResponse    = "docker_resource_action_response"
+	MessageTypeSystemdServiceListRequest       = "systemd_service_list_request"
+	MessageTypeSystemdServiceListResponse      = "systemd_service_list_response"
+	MessageTypeSystemdServiceActionRequest     = "systemd_service_action_request"
+	MessageTypeSystemdServiceActionResponse    = "systemd_service_action_response"
 
 	// K8s 集群管理相关消息类型
 	MessageTypeK8sClusterConnect        = "k8s_cluster_connect"
@@ -128,6 +130,7 @@ type HelloMessage struct {
 	Terminal                    bool   `json:"terminal"`
 	DockerCompose               bool   `json:"docker_compose,omitempty"`
 	DockerComposeServiceActions bool   `json:"docker_compose_service_actions,omitempty"`
+	DockerComposeDeployment     bool   `json:"docker_compose_deployment,omitempty"`
 	DockerResources             bool   `json:"docker_resources,omitempty"`
 	SystemdServices             bool   `json:"systemd_services,omitempty"`
 	AgentMode                   string `json:"agent_mode,omitempty"`
@@ -638,16 +641,22 @@ type DockerComposeListResponse struct {
 	Success                 bool                   `json:"success"`
 	Supported               bool                   `json:"supported"`
 	ServiceActionsSupported bool                   `json:"service_actions_supported"`
+	DeploymentSupported     bool                   `json:"deployment_supported"`
 	Projects                []DockerComposeProject `json:"projects"`
 	Error                   string                 `json:"error,omitempty"`
 }
 
 type DockerComposeProject struct {
-	Name        string                 `json:"name"`
-	Status      string                 `json:"status,omitempty"`
-	ConfigFiles []string               `json:"config_files,omitempty"`
-	Services    []DockerComposeService `json:"services"`
-	Error       string                 `json:"error,omitempty"`
+	Name              string                 `json:"name"`
+	Status            string                 `json:"status,omitempty"`
+	ConfigFiles       []string               `json:"config_files,omitempty"`
+	Services          []DockerComposeService `json:"services"`
+	Error             string                 `json:"error,omitempty"`
+	Management        string                 `json:"management,omitempty"`
+	ManagedProjectID  string                 `json:"managed_project_id,omitempty"`
+	DisplayName       string                 `json:"display_name,omitempty"`
+	Revision          int                    `json:"revision,omitempty"`
+	RollbackAvailable bool                   `json:"rollback_available,omitempty"`
 }
 
 type DockerComposeService struct {
@@ -679,6 +688,41 @@ type DockerComposeActionResponse struct {
 	Action      string `json:"action,omitempty"`
 	Output      string `json:"output,omitempty"`
 	Error       string `json:"error,omitempty"`
+}
+
+// DockerComposeDeploymentRequest is the only path for creating and changing
+// MizuPanel-managed Compose projects. ComposeYAML and EnvFile are transient
+// request data and must never be saved by the Server or echoed in responses.
+type DockerComposeDeploymentRequest struct {
+	Type              string `json:"type"`
+	RequestID         string `json:"request_id,omitempty"`
+	NodeID            string `json:"node_id,omitempty"`
+	Action            string `json:"action"`
+	ProjectID         string `json:"project_id,omitempty"`
+	DisplayName       string `json:"display_name,omitempty"`
+	ComposeYAML       string `json:"compose_yaml,omitempty"`
+	EnvFile           string `json:"env_file,omitempty"`
+	PullImages        bool   `json:"pull_images,omitempty"`
+	ConfirmationToken string `json:"confirmation_token,omitempty"`
+}
+
+type DockerComposeRisk struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+type DockerComposeDeploymentResponse struct {
+	Type              string               `json:"type"`
+	RequestID         string               `json:"request_id,omitempty"`
+	Success           bool                 `json:"success"`
+	Supported         bool                 `json:"supported"`
+	Action            string               `json:"action,omitempty"`
+	Project           DockerComposeProject `json:"project"`
+	Risks             []DockerComposeRisk  `json:"risks"`
+	ConfirmationToken string               `json:"confirmation_token,omitempty"`
+	Output            string               `json:"output,omitempty"`
+	Error             string               `json:"error,omitempty"`
 }
 
 type DockerResourceListRequest struct {

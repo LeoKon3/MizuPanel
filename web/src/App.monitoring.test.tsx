@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import App from './App'
-import { getAgentLogs, getAgentStatus, getNodeDocker, getNodeMetrics, getNodeProcesses, getNodes, restartAgent } from './api/client'
+import { getAgentLogs, getAgentStatus, getNodeDocker, getNodeDockerCompose, getNodeMetrics, getNodeProcesses, getNodes, restartAgent } from './api/client'
 import type { DockerSnapshotResponse, MetricsResponse, NodesResponse, ProcessSnapshotResponse } from './types'
 
 vi.mock('./api/client', () => ({
@@ -13,6 +13,8 @@ vi.mock('./api/client', () => ({
   getNodeMetrics: vi.fn(),
   getNodeProcesses: vi.fn(),
   getNodeDocker: vi.fn(),
+  getNodeDockerCompose: vi.fn(),
+  runNodeDockerComposeDeployment: vi.fn(async () => ({ success: true, supported: true })),
   getNodeSystemdServices: vi.fn(async () => ({ success: false, supported: false, services: [], error: '当前 Agent 不支持 systemd 服务管理' })),
   getAgentStatus: vi.fn(async () => ({ version: '0.1.0', user: 'root', mode: 'ops', terminal_enabled: true, docker_available: true, service_name: 'mizupanel-agent', uptime: 3600, collected_at: 1710000000 })),
   restartAgent: vi.fn(async () => ({ accepted: true, message: '重启命令已下发，等待 Agent 重新连接' })),
@@ -118,6 +120,7 @@ describe('node monitoring detail', () => {
     vi.mocked(getNodeMetrics).mockReset()
     vi.mocked(getNodeProcesses).mockReset()
     vi.mocked(getNodeDocker).mockReset()
+    vi.mocked(getNodeDockerCompose).mockReset()
     vi.mocked(getAgentStatus).mockReset()
     vi.mocked(getAgentLogs).mockReset()
     vi.mocked(restartAgent).mockReset()
@@ -125,6 +128,7 @@ describe('node monitoring detail', () => {
     vi.mocked(getNodeMetrics).mockResolvedValue(emptyMetrics)
     vi.mocked(getNodeProcesses).mockResolvedValue(processSnapshot)
     vi.mocked(getNodeDocker).mockResolvedValue(dockerSnapshot)
+    vi.mocked(getNodeDockerCompose).mockResolvedValue({ success: true, supported: true, projects: [] })
     vi.mocked(getAgentStatus).mockResolvedValue({ version: '0.1.0', user: 'root', mode: 'ops', terminal_enabled: true, docker_available: true, service_name: 'mizupanel-agent', uptime: 3600, collected_at: 1710000000 })
     vi.mocked(getAgentLogs).mockResolvedValue({ lines: 100, content: 'mizupanel-agent started', collected_at: 1710000001 })
     vi.mocked(restartAgent).mockResolvedValue({ accepted: true, message: '重启命令已下发，等待 Agent 重新连接' })
@@ -180,6 +184,34 @@ describe('node monitoring detail', () => {
     expect(screen.getByRole('region', { name: 'Docker 容器' })).toHaveTextContent('Docker 24.0.0')
     expect(screen.getByRole('region', { name: 'Docker 容器' })).toHaveTextContent('nginx:latest')
     expect(screen.queryByRole('region', { name: '进程 Top' })).not.toBeInTheDocument()
+  })
+
+  test('does not render a late Compose response after the selected node changes', async () => {
+    let resolveFirstResponse: ((value: { success: boolean; supported: boolean; projects: Array<{ name: string; config_files: string[]; services: [] }> }) => void) | undefined
+    const firstResponse = new Promise<{ success: boolean; supported: boolean; projects: Array<{ name: string; config_files: string[]; services: [] }> }>((resolve) => {
+      resolveFirstResponse = resolve
+    })
+    vi.mocked(getNodeDockerCompose)
+      .mockReturnValueOnce(firstResponse)
+      .mockResolvedValueOnce({ success: true, supported: true, projects: [{ name: 'tokyo-compose', config_files: ['/srv/tokyo/compose.yaml'], services: [] }] })
+
+    render(<App />)
+
+    await screen.findByRole('heading', { name: 'Oracle SG' })
+    fireEvent.click(screen.getByRole('button', { name: '容器信息' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Compose' }))
+    await waitFor(() => expect(getNodeDockerCompose).toHaveBeenCalledWith('node-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: /Tokyo JP/ }))
+    await screen.findByRole('heading', { name: 'Tokyo JP' })
+    fireEvent.click(screen.getByRole('button', { name: '容器信息' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Compose' }))
+    expect(await screen.findByText('tokyo-compose')).toBeInTheDocument()
+
+    resolveFirstResponse?.({ success: true, supported: true, projects: [{ name: 'late-node-one-compose', config_files: ['/srv/late/compose.yaml'], services: [] }] })
+    await Promise.resolve()
+    await waitFor(() => expect(screen.queryByText('late-node-one-compose')).not.toBeInTheDocument())
+    window.history.replaceState({}, '', '/')
   })
 
   test('wires Agent management actions through the API client', async () => {

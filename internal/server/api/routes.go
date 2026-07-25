@@ -51,6 +51,7 @@ type NodeOperations interface {
 	ContainerDelete(ctx context.Context, nodeID string, containerID string, force bool) (protocol.ContainerDeleteResponse, error)
 	DockerComposeList(ctx context.Context, nodeID string) (protocol.DockerComposeListResponse, error)
 	DockerComposeAction(ctx context.Context, nodeID string, projectName string, serviceName string, action string) (protocol.DockerComposeActionResponse, error)
+	DockerComposeDeployment(ctx context.Context, nodeID string, request protocol.DockerComposeDeploymentRequest) (protocol.DockerComposeDeploymentResponse, error)
 	DockerResourceList(ctx context.Context, nodeID string) (protocol.DockerResourceListResponse, error)
 	DockerResourceAction(ctx context.Context, nodeID string, resourceType string, resourceID string, action string) (protocol.DockerResourceActionResponse, error)
 	SystemdServiceList(ctx context.Context, nodeID string) (protocol.SystemdServiceListResponse, error)
@@ -134,6 +135,10 @@ const (
 	maxTerminalTokens              = 256
 	maxTerminalWebSocketBytes      = 128 * 1024
 	maxNodeOperationBodyBytes      = 1024 * 1024
+	// JSON escaping can make an Agent-valid 1 MiB Compose YAML plus a 256 KiB
+	// .env substantially larger on the wire. Keep this bounded but large enough
+	// for the complete deployment contract.
+	maxDockerComposeDeploymentBodyBytes = 4 * 1024 * 1024
 )
 
 func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...any) *http.ServeMux {
@@ -466,6 +471,10 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 4 && parts[1] == "docker" && parts[2] == "compose" && parts[3] == "action" {
 		s.handleNodeDockerComposeAction(w, r, parts[0])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "docker" && parts[2] == "compose" && parts[3] == "deployment" {
+		s.handleNodeDockerComposeDeployment(w, r, parts[0])
 		return
 	}
 	if len(parts) == 3 && parts[1] == "docker" && parts[2] == "resources" {
@@ -1360,6 +1369,62 @@ func (s *Server) handleNodeDockerComposeAction(w http.ResponseWriter, r *http.Re
 		return
 	}
 	response, err := s.agentOps.DockerComposeAction(r.Context(), nodeID, request.ProjectName, request.ServiceName, request.Action)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleNodeDockerComposeDeployment(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !authorizeBrowserNodeOperation(r) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if _, err := s.nodes.Get(r.Context(), nodeID); err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent operations are not available")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxDockerComposeDeploymentBodyBytes)
+	var request protocol.DockerComposeDeploymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid Compose deployment request")
+		return
+	}
+	request.Action = strings.TrimSpace(request.Action)
+	switch request.Action {
+	case "preview":
+		if strings.TrimSpace(request.ComposeYAML) == "" {
+			writeError(w, http.StatusBadRequest, "compose_yaml is required for preview")
+			return
+		}
+	case "apply":
+		if strings.TrimSpace(request.ComposeYAML) == "" || strings.TrimSpace(request.ConfirmationToken) == "" {
+			writeError(w, http.StatusBadRequest, "compose_yaml and confirmation_token are required for apply")
+			return
+		}
+	case "rollback", "archive":
+		if strings.TrimSpace(request.ProjectID) == "" {
+			writeError(w, http.StatusBadRequest, "project_id is required")
+			return
+		}
+		if request.ComposeYAML != "" || request.EnvFile != "" || request.ConfirmationToken != "" || request.DisplayName != "" || request.PullImages {
+			writeError(w, http.StatusBadRequest, "deployment content is not allowed for this action")
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported Compose deployment action")
+		return
+	}
+	response, err := s.agentOps.DockerComposeDeployment(r.Context(), nodeID, request)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

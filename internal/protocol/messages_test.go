@@ -34,13 +34,65 @@ func TestHelloMessageJSON(t *testing.T) {
 }
 
 func TestHelloMessageJSONIncludesProtocolIdentityMetadata(t *testing.T) {
-	data, err := json.Marshal(HelloMessage{Type: MessageTypeHello, NodeID: "agent-1", ProtocolVersion: CurrentProtocolVersion, IdentitySource: "persistent_uuid"})
+	data, err := json.Marshal(HelloMessage{Type: MessageTypeHello, NodeID: "agent-1", ProtocolVersion: CurrentProtocolVersion, IdentitySource: "persistent_uuid", DockerComposeDeployment: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, `"protocol_version":1`) || !strings.Contains(text, `"identity_source":"persistent_uuid"`) {
+	if !strings.Contains(text, `"protocol_version":1`) || !strings.Contains(text, `"identity_source":"persistent_uuid"`) || !strings.Contains(text, `"docker_compose_deployment":true`) {
 		t.Fatalf("hello metadata missing: %s", text)
+	}
+}
+
+func TestDockerComposeDeploymentMessagesJSON(t *testing.T) {
+	request := DockerComposeDeploymentRequest{
+		Type:              MessageTypeDockerComposeDeploymentRequest,
+		RequestID:         "req-1",
+		NodeID:            "node-1",
+		Action:            "apply",
+		ProjectID:         "e6d45ee2-4dc8-4b0a-b036-089dedce2f5f",
+		DisplayName:       "demo",
+		ComposeYAML:       "services: {}\n",
+		EnvFile:           "PASSWORD=secret\n",
+		PullImages:        true,
+		ConfirmationToken: "preview-token",
+	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotRequest DockerComposeDeploymentRequest
+	if err := json.Unmarshal(data, &gotRequest); err != nil {
+		t.Fatal(err)
+	}
+	if gotRequest.Action != "apply" || gotRequest.ProjectID != request.ProjectID || gotRequest.ComposeYAML != request.ComposeYAML || gotRequest.EnvFile != request.EnvFile || !gotRequest.PullImages || gotRequest.ConfirmationToken != "preview-token" {
+		t.Fatalf("request = %#v", gotRequest)
+	}
+
+	response := DockerComposeDeploymentResponse{
+		Type:              MessageTypeDockerComposeDeploymentResponse,
+		RequestID:         "req-1",
+		Success:           true,
+		Supported:         true,
+		Action:            "preview",
+		Project:           DockerComposeProject{Name: request.ProjectID, Management: "managed", ManagedProjectID: request.ProjectID, DisplayName: "demo"},
+		Risks:             []DockerComposeRisk{{Code: "privileged", Severity: "warning", Message: "服务启用了特权模式"}},
+		ConfirmationToken: "preview-token",
+	}
+	data, err = json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "services: {}") || strings.Contains(text, "PASSWORD=secret") {
+		t.Fatalf("deployment response leaked request content: %s", text)
+	}
+	var gotResponse DockerComposeDeploymentResponse
+	if err := json.Unmarshal(data, &gotResponse); err != nil {
+		t.Fatal(err)
+	}
+	if !gotResponse.Success || !gotResponse.Supported || gotResponse.Project.Management != "managed" || len(gotResponse.Risks) != 1 || gotResponse.ConfirmationToken != "preview-token" {
+		t.Fatalf("response = %#v", gotResponse)
 	}
 }
 

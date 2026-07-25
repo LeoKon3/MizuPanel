@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -187,6 +187,14 @@ export function runNodeDockerComposeAction(nodeID: string, projectName: string, 
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project_name: projectName, action, ...(serviceName ? { service_name: serviceName } : {}) })
+  })
+}
+
+export function runNodeDockerComposeDeployment(nodeID: string, requestBody: DockerComposeDeploymentRequest): Promise<DockerComposeDeploymentResponse> {
+  return request<DockerComposeDeploymentResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker/compose/deployment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody)
   })
 }
 

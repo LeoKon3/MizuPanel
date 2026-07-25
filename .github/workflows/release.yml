@@ -38,6 +38,13 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Verify synchronized release version
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          go test ./internal/version
+          test "$RELEASE_TAG" = "v$(tr -d '\r\n ' < VERSION)"
+
       - name: Install Linux cross compiler
         run: |
           sudo apt-get update

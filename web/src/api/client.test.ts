@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeDockerResources, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, runNodeDockerResourceAction, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
+import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeDockerResources, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, runNodeDockerComposeDeployment, runNodeDockerResourceAction, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -186,6 +186,27 @@ describe('api client', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resource_type: 'image', resource_id: 'nginx:latest', action: 'pull' })
+    })
+  })
+
+  test('sends managed Compose deployment drafts to the bounded deployment endpoint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ success: true, supported: true, action: 'preview', risks: [] })))
+    const request = {
+      action: 'preview' as const,
+      project_id: 'managed-1',
+      display_name: '网站前台',
+      compose_yaml: 'services:\n  web:\n    image: nginx:alpine\n',
+      env_file: 'API_TOKEN=temporary-secret\n',
+      pull_images: false,
+      confirmation_token: 'preview-token',
+    }
+
+    await runNodeDockerComposeDeployment('node 1', request)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/nodes/node%201/docker/compose/deployment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
     })
   })
 

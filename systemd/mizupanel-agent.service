@@ -14,7 +14,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/usr/local/mizupanel/agent.yaml
+ReadWritePaths=/usr/local/mizupanel/agent.yaml /var/lib/mizupanel/compose
 
 [Install]
 WantedBy=multi-user.target

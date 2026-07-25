@@ -2,7 +2,7 @@ import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState }
 import { X } from 'lucide-react'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 
-import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAgentUpgradeStatus, getAuthSession, getConnectionDiagnostics, getNodeDocker, getNodeDockerCompose, getNodeDockerResources, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodeSystemdServices, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, runNodeDockerComposeAction, runNodeDockerResourceAction, runNodeSystemdServiceAction, setUnauthorizedHandler, startSSHUninstall, updateSettings, upgradeAgent, uploadNodeFile, writeNodeFile } from './api/client'
+import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAgentUpgradeStatus, getAuthSession, getConnectionDiagnostics, getNodeDocker, getNodeDockerCompose, getNodeDockerResources, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodeSystemdServices, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, runNodeDockerComposeAction, runNodeDockerComposeDeployment, runNodeDockerResourceAction, runNodeSystemdServiceAction, setUnauthorizedHandler, startSSHUninstall, updateSettings, upgradeAgent, uploadNodeFile, writeNodeFile } from './api/client'
 import { BrandLogo } from './components/BrandLogo'
 import { HostBatchTable } from './components/HostBatchTable'
 import { MetricCard } from './components/MetricCard'
@@ -18,7 +18,7 @@ import { TerminalPage } from './pages/TerminalPage'
 import { K8sClustersPage } from './pages/K8sClustersPage'
 import { K8sClusterDetailPage } from './pages/K8sClusterDetailPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
-import type { DockerComposeAction, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
+import type { DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
 function decodeRouteNodeID(value?: string) {
   if (!value) return undefined
@@ -163,7 +163,10 @@ export default function App() {
   const installCommandCodeRef = useRef<HTMLElement>(null)
   const installCommandDialogRef = useRef<HTMLElement>(null)
   const installCommandRequestID = useRef(0)
+  const dockerComposeRequestID = useRef(0)
   const dockerResourcesRequestID = useRef(0)
+  const selectedNodeIDRef = useRef<string | undefined>(undefined)
+  selectedNodeIDRef.current = selectedNodeID
 
   useEffect(() => {
     const dark = theme === 'dark'
@@ -295,10 +298,19 @@ export default function App() {
   }
 
   const refreshDockerCompose = async (nodeID: string) => {
+    const requestID = ++dockerComposeRequestID.current
     try {
-      setDockerCompose(await getNodeDockerCompose(nodeID))
+      const response = await getNodeDockerCompose(nodeID)
+      if (requestID !== dockerComposeRequestID.current || selectedNodeIDRef.current !== nodeID) return
+      setDockerCompose(response)
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Compose 项目刷新失败')
+      if (requestID !== dockerComposeRequestID.current || selectedNodeIDRef.current !== nodeID) return
+      setDockerCompose({
+        success: false,
+        supported: false,
+        projects: [],
+        error: err instanceof Error ? err.message : 'Compose 项目刷新失败'
+      })
     }
   }
 
@@ -306,6 +318,10 @@ export default function App() {
     const response = await runNodeDockerComposeAction(nodeID, projectName, action, serviceName)
     if (!response.success) throw new Error(response.error || 'Compose 操作失败')
     return response
+  }
+
+  const runDockerComposeDeployment = (nodeID: string, request: DockerComposeDeploymentRequest): Promise<DockerComposeDeploymentResponse> => {
+    return runNodeDockerComposeDeployment(nodeID, request)
   }
 
   const refreshDockerResources = async (nodeID: string) => {
@@ -351,6 +367,7 @@ export default function App() {
 
   useEffect(() => {
 	// Invalidate a late response for the previous host before clearing its state.
+	dockerComposeRequestID.current += 1
 	dockerResourcesRequestID.current += 1
     if (!selectedNodeID) {
       setProcessSnapshot(undefined)
@@ -955,7 +972,7 @@ export default function App() {
               <span>当前显示 {filteredNodes.length} 台</span>
             </div>
           </section>
-          <NodeDetail node={visibleSelectedNode} metrics={selectedMetrics} processSnapshot={selectedProcessSnapshot} dockerSnapshot={selectedDockerSnapshot} dockerCompose={selectedDockerCompose} dockerResources={selectedDockerResources} systemdServices={selectedSystemdServices} monitoringLoading={monitoringLoading} range={range} onRangeChange={setRange} onLoadFiles={getNodeFiles} onReadFile={readNodeFile} onWriteFile={writeNodeFile} onUploadFile={uploadNodeFile} onDeletePath={deleteNodePath} onRebootNode={rebootNode} onSSHUninstall={startSSHUninstall} onGetAgentStatus={getAgentStatus} onGetConnectionDiagnostics={getConnectionDiagnostics} onUpgradeAgent={upgradeAgent} onGetAgentUpgradeStatus={getAgentUpgradeStatus} onGetLegacyAgentUpgradeCommand={getLegacyAgentUpgradeCommand} onRestartAgent={restartAgent} onGetAgentLogs={getAgentLogs} onRefreshDocker={refreshDockerSnapshot} onRefreshDockerCompose={refreshDockerCompose} onDockerComposeAction={runDockerComposeAction} onRefreshDockerResources={refreshDockerResources} onDockerResourceAction={runDockerResourceAction} onRefreshSystemdServices={refreshSystemdServices} onSystemdServiceAction={runSystemdServiceAction} onNodeOrganizationChanged={loadNodes} />
+          <NodeDetail node={visibleSelectedNode} metrics={selectedMetrics} processSnapshot={selectedProcessSnapshot} dockerSnapshot={selectedDockerSnapshot} dockerCompose={selectedDockerCompose} dockerResources={selectedDockerResources} systemdServices={selectedSystemdServices} monitoringLoading={monitoringLoading} range={range} onRangeChange={setRange} onLoadFiles={getNodeFiles} onReadFile={readNodeFile} onWriteFile={writeNodeFile} onUploadFile={uploadNodeFile} onDeletePath={deleteNodePath} onRebootNode={rebootNode} onSSHUninstall={startSSHUninstall} onGetAgentStatus={getAgentStatus} onGetConnectionDiagnostics={getConnectionDiagnostics} onUpgradeAgent={upgradeAgent} onGetAgentUpgradeStatus={getAgentUpgradeStatus} onGetLegacyAgentUpgradeCommand={getLegacyAgentUpgradeCommand} onRestartAgent={restartAgent} onGetAgentLogs={getAgentLogs} onRefreshDocker={refreshDockerSnapshot} onRefreshDockerCompose={refreshDockerCompose} onDockerComposeAction={runDockerComposeAction} onDockerComposeDeployment={runDockerComposeDeployment} onRefreshDockerResources={refreshDockerResources} onDockerResourceAction={runDockerResourceAction} onRefreshSystemdServices={refreshSystemdServices} onSystemdServiceAction={runSystemdServiceAction} onNodeOrganizationChanged={loadNodes} />
         </div>
       )}
     </div>

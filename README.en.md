@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.4-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.5-14B8A6">
 </p>
 
 <p align="center">
@@ -57,7 +57,7 @@
     <td width="33%"><strong>Agent Lifecycle</strong><br /><sub>Install, connection diagnostics, logs, restart, persistent identity, and secure latest-version upgrades.</sub></td>
   </tr>
   <tr>
-    <td width="33%"><strong>Docker Workspace</strong><br /><sub>Containers, Compose, images, volumes, networks, disk usage, logs, terminals, and guarded actions.</sub></td>
+    <td width="33%"><strong>Docker Workspace</strong><br /><sub>Containers, guarded Compose app deploy/update/rollback/archive, images, volumes, networks, logs, and terminals.</sub></td>
     <td width="33%"><strong>Host Operations</strong><br /><sub>Processes, systemd services, file management, web terminals, and controlled reboots.</sub></td>
     <td width="33%"><strong>Alerts And Notifications</strong><br /><sub>Metric rules, trigger and recovery delivery, Webhook, DingTalk, Feishu, retries, and delivery history.</sub></td>
   </tr>

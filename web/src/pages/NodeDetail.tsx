@@ -3,7 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Copy, Download, FileCheck2, MoreHorizontal, Play, Plus, RotateCw, ScrollText, ShieldAlert, Square, Tags, Terminal, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, ConnectionDiagnostics, DockerComposeAction, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileEntry, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, Metric, Node, ProcessInfo, ProcessSnapshotResponse, RangeOption, RebootResponse, SSHAuthType, SSHJobResponse, SSHProgressEvent, SSHUninstallRequest, SystemdService, SystemdServiceAction, SystemdServiceListResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, ConnectionDiagnostics, DockerComposeAction, DockerComposeDeploymentAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerComposeProject, DockerComposeRisk, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileEntry, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, Metric, Node, ProcessInfo, ProcessSnapshotResponse, RangeOption, RebootResponse, SSHAuthType, SSHJobResponse, SSHProgressEvent, SSHUninstallRequest, SystemdService, SystemdServiceAction, SystemdServiceListResponse } from '../types'
 import { formatBytes, formatPercent, formatSpeed } from '../lib/format'
 import { MetricsChart } from '../components/MetricsChart'
 import LogViewer from '../components/LogViewer'
@@ -41,6 +41,7 @@ type NodeDetailProps = {
   onRefreshDocker?: (nodeID: string) => Promise<void>
   onRefreshDockerCompose?: (nodeID: string) => Promise<void>
   onDockerComposeAction?: (nodeID: string, projectName: string, action: DockerComposeAction, serviceName?: string) => Promise<{ success: boolean, output?: string, error?: string }>
+  onDockerComposeDeployment?: (nodeID: string, request: DockerComposeDeploymentRequest) => Promise<DockerComposeDeploymentResponse>
   onRefreshDockerResources?: (nodeID: string) => Promise<void>
   onDockerResourceAction?: (nodeID: string, resourceType: DockerResourceType, resourceID: string, action: DockerResourceAction) => Promise<{ success: boolean, error?: string }>
   onRefreshSystemdServices?: (nodeID: string) => Promise<void>
@@ -53,6 +54,27 @@ type ProcessSort = 'cpu' | 'memory' | 'pid' | 'name'
 type DockerFilter = 'all' | 'running' | 'stopped' | 'abnormal'
 type SSHProgressEventLog = SSHProgressEvent & { logs: string[] }
 type ChartRange = Extract<RangeOption, '1h' | '6h'>
+type ManagedComposeDeploymentDraft = {
+  projectID?: string
+  displayName: string
+  composeYAML: string
+  envFile: string
+  pullImages: boolean
+}
+type ManagedComposeEditor = {
+  projectID?: string
+  projectName?: string
+}
+type ManagedComposePreview = {
+  draft: ManagedComposeDeploymentDraft
+  confirmationToken: string
+  risks: DockerComposeRisk[]
+  projectName?: string
+}
+type PendingManagedComposeAction = {
+  action: Extract<DockerComposeDeploymentAction, 'rollback' | 'archive'>
+  project: DockerComposeProject
+}
 type PathTreeState = Record<string, {
   expanded: boolean
   loading: boolean
@@ -61,6 +83,26 @@ type PathTreeState = Record<string, {
 }>
 
 const FILE_TREE_ROOTS = ['/', '/root', '/data', '/usr', '/var', '/tmp', '/home']
+
+function emptyManagedComposeDeploymentDraft(): ManagedComposeDeploymentDraft {
+  return { displayName: '', composeYAML: '', envFile: '', pullImages: true }
+}
+
+function isManagedComposeProject(project: DockerComposeProject) {
+  return project.management === 'managed'
+}
+
+function deploymentRequestForDraft(action: Extract<DockerComposeDeploymentAction, 'preview' | 'apply'>, draft: ManagedComposeDeploymentDraft, confirmationToken?: string): DockerComposeDeploymentRequest {
+  return {
+    action,
+    ...(draft.projectID ? { project_id: draft.projectID } : {}),
+    display_name: draft.displayName.trim(),
+    compose_yaml: draft.composeYAML,
+    ...(draft.envFile ? { env_file: draft.envFile } : {}),
+    pull_images: draft.pullImages,
+    ...(confirmationToken ? { confirmation_token: confirmationToken } : {})
+  }
+}
 
 async function copyTextToClipboard(value: string): Promise<void> {
 	if (navigator.clipboard) {
@@ -97,7 +139,7 @@ function mergeSSHProgressEvent(current: SSHProgressEventLog[], progress: SSHProg
   return next
 }
 
-export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, dockerCompose, dockerResources, systemdServices, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onGetConnectionDiagnostics, onUpgradeAgent, onGetAgentUpgradeStatus, onGetLegacyAgentUpgradeCommand, onRestartAgent, onGetAgentLogs, onRefreshDocker, onRefreshDockerCompose, onDockerComposeAction, onRefreshDockerResources, onDockerResourceAction, onRefreshSystemdServices, onSystemdServiceAction, onNodeOrganizationChanged }: NodeDetailProps) {
+export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, dockerCompose, dockerResources, systemdServices, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onGetConnectionDiagnostics, onUpgradeAgent, onGetAgentUpgradeStatus, onGetLegacyAgentUpgradeCommand, onRestartAgent, onGetAgentLogs, onRefreshDocker, onRefreshDockerCompose, onDockerComposeAction, onDockerComposeDeployment, onRefreshDockerResources, onDockerResourceAction, onRefreshSystemdServices, onSystemdServiceAction, onNodeOrganizationChanged }: NodeDetailProps) {
   const [activeSection, setActiveSection] = useState<DetailSection>('overview')
   const [processSort, setProcessSort] = useState<ProcessSort>('cpu')
   const [processSearch, setProcessSearch] = useState('')
@@ -114,16 +156,30 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
   const [resourcesLoading, setResourcesLoading] = useState(false)
   const [pendingComposeDown, setPendingComposeDown] = useState<string>()
   const [composeLogsModal, setComposeLogsModal] = useState<{ projectName: string; output: string }>()
+  const [managedComposeEditor, setManagedComposeEditor] = useState<ManagedComposeEditor>()
+  const [managedComposeDraft, setManagedComposeDraft] = useState<ManagedComposeDeploymentDraft>(emptyManagedComposeDeploymentDraft)
+  const [managedComposePreview, setManagedComposePreview] = useState<ManagedComposePreview>()
+  const [pendingManagedComposeAction, setPendingManagedComposeAction] = useState<PendingManagedComposeAction>()
+  const [deploymentLoading, setDeploymentLoading] = useState<DockerComposeDeploymentAction>()
+  const composeDeploymentRequestSeq = useRef(0)
+  const composeDeploymentNodeIDRef = useRef(node?.id)
+  composeDeploymentNodeIDRef.current = node?.id
   const [systemdLoading, setSystemdLoading] = useState(false)
   const [systemdActionLoading, setSystemdActionLoading] = useState<string>()
   const [systemdLogsModal, setSystemdLogsModal] = useState<{ serviceName: string; output: string }>()
 
   useEffect(() => {
+    composeDeploymentRequestSeq.current += 1
     setComposeActionLoading(undefined)
     setComposeLoading(false)
     setResourcesLoading(false)
     setPendingComposeDown(undefined)
     setComposeLogsModal(undefined)
+    setManagedComposeEditor(undefined)
+    setManagedComposeDraft(emptyManagedComposeDeploymentDraft())
+    setManagedComposePreview(undefined)
+    setPendingManagedComposeAction(undefined)
+    setDeploymentLoading(undefined)
     setSystemdLoading(false)
     setSystemdActionLoading(undefined)
     setSystemdLogsModal(undefined)
@@ -812,6 +868,156 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
     }
   }
 
+  const openManagedComposeEditor = (project?: DockerComposeProject) => {
+    const projectID = project?.managed_project_id
+    if (project && !projectID) {
+      setToast({ message: '托管应用更新失败: 项目标识不可用', type: 'error' })
+      return
+    }
+    setManagedComposePreview(undefined)
+    setManagedComposeEditor({ projectID, projectName: project?.display_name || project?.name })
+    setManagedComposeDraft({
+      projectID,
+      displayName: project?.display_name || project?.name || '',
+      composeYAML: '',
+      envFile: '',
+      pullImages: true
+    })
+  }
+
+  const closeManagedComposeEditor = () => {
+    if (deploymentLoading) return
+    setManagedComposePreview(undefined)
+    setManagedComposeEditor(undefined)
+    setManagedComposeDraft(emptyManagedComposeDeploymentDraft())
+  }
+
+  const previewManagedComposeDeployment = async () => {
+    if (!onDockerComposeDeployment) {
+      setToast({ message: '托管应用预览失败: 当前页面未配置部署接口', type: 'error' })
+      return
+    }
+    if (!managedComposeDraft.displayName.trim()) {
+      setToast({ message: '托管应用预览失败: 请填写应用名称', type: 'error' })
+      return
+    }
+    if (!managedComposeDraft.composeYAML.trim()) {
+      setToast({ message: '托管应用预览失败: 请填写 Compose YAML', type: 'error' })
+      return
+    }
+    const draft = { ...managedComposeDraft }
+    const nodeID = node.id
+    const requestID = ++composeDeploymentRequestSeq.current
+    setDeploymentLoading('preview')
+    try {
+      const result = await onDockerComposeDeployment(nodeID, deploymentRequestForDraft('preview', draft))
+      if (requestID !== composeDeploymentRequestSeq.current || composeDeploymentNodeIDRef.current !== nodeID) return
+      if (result.supported === false) {
+        setToast({ message: `托管应用预览失败: ${result.error || '当前 Agent 不支持 Compose 应用部署，请升级 Agent'}`, type: 'error' })
+        return
+      }
+      if (!result.success) {
+        setToast({ message: `托管应用预览失败: ${result.error || '未知错误'}`, type: 'error' })
+        return
+      }
+      if (!result.confirmation_token) {
+        setToast({ message: '托管应用预览失败: Agent 未返回确认令牌', type: 'error' })
+        return
+      }
+      const projectID = result.project?.managed_project_id || draft.projectID
+      if (!projectID) {
+        setToast({ message: '托管应用预览失败: Agent 未返回项目标识', type: 'error' })
+        return
+      }
+      setManagedComposePreview({
+        draft: { ...draft, projectID },
+        confirmationToken: result.confirmation_token,
+        risks: result.risks || [],
+        projectName: result.project?.display_name || result.project?.name || managedComposeEditor?.projectName || draft.displayName
+      })
+    } catch (error) {
+      if (requestID !== composeDeploymentRequestSeq.current || composeDeploymentNodeIDRef.current !== nodeID) return
+      setToast({ message: `托管应用预览失败: ${error instanceof Error ? error.message : '网络错误'}`, type: 'error' })
+    } finally {
+      if (requestID === composeDeploymentRequestSeq.current && composeDeploymentNodeIDRef.current === nodeID) {
+        setDeploymentLoading(undefined)
+      }
+    }
+  }
+
+  const applyManagedComposeDeployment = async () => {
+    if (!managedComposePreview || !onDockerComposeDeployment) return
+    const preview = managedComposePreview
+    const nodeID = node.id
+    const requestID = ++composeDeploymentRequestSeq.current
+    // The apply payload uses the exact previewed draft. Clear the secret from
+    // React state before the network request returns.
+    setManagedComposePreview(undefined)
+    setManagedComposeDraft((draft) => ({ ...draft, envFile: '' }))
+    setDeploymentLoading('apply')
+    try {
+      const result = await onDockerComposeDeployment(nodeID, deploymentRequestForDraft('apply', preview.draft, preview.confirmationToken))
+      if (requestID !== composeDeploymentRequestSeq.current || composeDeploymentNodeIDRef.current !== nodeID) return
+      if (result.supported === false) {
+        setToast({ message: `托管应用部署失败: ${result.error || '当前 Agent 不支持 Compose 应用部署，请升级 Agent'}`, type: 'error' })
+        return
+      }
+      if (!result.success) {
+        setToast({ message: `托管应用部署失败: ${result.error || '未知错误'}`, type: 'error' })
+        return
+      }
+      setToast({ message: '托管应用部署成功', type: 'success' })
+      setManagedComposeEditor(undefined)
+      setManagedComposeDraft(emptyManagedComposeDeploymentDraft())
+      await onRefreshDockerCompose?.(nodeID)
+    } catch (error) {
+      if (requestID !== composeDeploymentRequestSeq.current || composeDeploymentNodeIDRef.current !== nodeID) return
+      setToast({ message: `托管应用部署失败: ${error instanceof Error ? error.message : '网络错误'}`, type: 'error' })
+    } finally {
+      if (requestID === composeDeploymentRequestSeq.current && composeDeploymentNodeIDRef.current === nodeID) {
+        setDeploymentLoading(undefined)
+        setManagedComposePreview(undefined)
+      }
+    }
+  }
+
+  const confirmManagedComposeAction = async () => {
+    if (!pendingManagedComposeAction || !onDockerComposeDeployment) return
+    const { action, project } = pendingManagedComposeAction
+    const projectID = project.managed_project_id
+    const actionText = action === 'rollback' ? '回滚' : '归档'
+    if (!projectID) {
+      setToast({ message: `托管应用${actionText}失败: 项目标识不可用`, type: 'error' })
+      setPendingManagedComposeAction(undefined)
+      return
+    }
+    const nodeID = node.id
+    const requestID = ++composeDeploymentRequestSeq.current
+    setDeploymentLoading(action)
+    try {
+      const result = await onDockerComposeDeployment(nodeID, { action, project_id: projectID })
+      if (requestID !== composeDeploymentRequestSeq.current || composeDeploymentNodeIDRef.current !== nodeID) return
+      if (result.supported === false) {
+        setToast({ message: `托管应用${actionText}失败: ${result.error || '当前 Agent 不支持 Compose 应用部署，请升级 Agent'}`, type: 'error' })
+        return
+      }
+      if (!result.success) {
+        setToast({ message: `托管应用${actionText}失败: ${result.error || '未知错误'}`, type: 'error' })
+        return
+      }
+      setToast({ message: `托管应用${actionText}成功`, type: 'success' })
+      await onRefreshDockerCompose?.(nodeID)
+    } catch (error) {
+      if (requestID !== composeDeploymentRequestSeq.current || composeDeploymentNodeIDRef.current !== nodeID) return
+      setToast({ message: `托管应用${actionText}失败: ${error instanceof Error ? error.message : '网络错误'}`, type: 'error' })
+    } finally {
+      if (requestID === composeDeploymentRequestSeq.current && composeDeploymentNodeIDRef.current === nodeID) {
+        setDeploymentLoading(undefined)
+        setPendingManagedComposeAction(undefined)
+      }
+    }
+  }
+
   const runSystemdAction = async (serviceName: string, action: SystemdServiceAction) => {
     if (!node || !onSystemdServiceAction) return
     setSystemdActionLoading(`${serviceName}:${action}`)
@@ -1099,6 +1305,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
               loading={composeLoading}
               online={online}
               actionLoading={composeActionLoading}
+              deploymentLoading={deploymentLoading}
               onAction={(projectName, action, serviceName) => {
                 if (action === 'down') {
                   setPendingComposeDown(projectName)
@@ -1106,6 +1313,9 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
                 }
                 void runComposeAction(projectName, action, serviceName)
               }}
+              onCreateManaged={() => openManagedComposeEditor()}
+              onUpdateManaged={openManagedComposeEditor}
+              onManagedAction={(project, action) => setPendingManagedComposeAction({ project, action })}
               onOpenLogs={(containerID, containerName) => setContainerLogsModal({ open: true, containerId: containerID, containerName })}
               onOpenTerminal={(containerID) => openContainerExecPage(node.id, containerID)}
             />
@@ -1598,6 +1808,36 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
             await onNodeOrganizationChanged?.()
             setToast({ message: '主机组织信息调整成功', type: 'success' })
           }}
+        />
+      ) : null}
+
+      {managedComposeEditor ? (
+        <ManagedComposeEditorModal
+          editor={managedComposeEditor}
+          draft={managedComposeDraft}
+          loading={deploymentLoading === 'preview' || deploymentLoading === 'apply'}
+          onClose={closeManagedComposeEditor}
+          onDraftChange={(patch) => setManagedComposeDraft((draft) => ({ ...draft, ...patch }))}
+          onPreview={() => void previewManagedComposeDeployment()}
+        />
+      ) : null}
+
+      {managedComposePreview ? (
+        <ManagedComposePreviewModal
+          preview={managedComposePreview}
+          loading={deploymentLoading === 'apply'}
+          onCancel={() => setManagedComposePreview(undefined)}
+          onConfirm={() => void applyManagedComposeDeployment()}
+        />
+      ) : null}
+
+      {pendingManagedComposeAction ? (
+        <ManagedComposeActionConfirmModal
+          action={pendingManagedComposeAction.action}
+          projectName={pendingManagedComposeAction.project.display_name || pendingManagedComposeAction.project.name}
+          loading={deploymentLoading === pendingManagedComposeAction.action}
+          onCancel={() => setPendingManagedComposeAction(undefined)}
+          onConfirm={() => void confirmManagedComposeAction()}
         />
       ) : null}
 
@@ -2363,7 +2603,7 @@ function systemdActionText(action: SystemdServiceAction) {
   return action === 'start' ? '启动' : action === 'stop' ? '停止' : action === 'restart' ? '重启' : '查看日志'
 }
 
-function DockerComposePanel({ response, loading, online, actionLoading, onAction, onOpenLogs, onOpenTerminal }: { response?: DockerComposeListResponse; loading: boolean; online: boolean; actionLoading?: string; onAction: (projectName: string, action: DockerComposeAction, serviceName?: string) => void; onOpenLogs: (containerID: string, containerName: string) => void; onOpenTerminal: (containerID: string) => void }) {
+function DockerComposePanel({ response, loading, online, actionLoading, deploymentLoading, onAction, onCreateManaged, onUpdateManaged, onManagedAction, onOpenLogs, onOpenTerminal }: { response?: DockerComposeListResponse; loading: boolean; online: boolean; actionLoading?: string; deploymentLoading?: DockerComposeDeploymentAction; onAction: (projectName: string, action: DockerComposeAction, serviceName?: string) => void; onCreateManaged: () => void; onUpdateManaged: (project: DockerComposeProject) => void; onManagedAction: (project: DockerComposeProject, action: Extract<DockerComposeDeploymentAction, 'rollback' | 'archive'>) => void; onOpenLogs: (containerID: string, containerName: string) => void; onOpenTerminal: (containerID: string) => void }) {
   if (!response) {
     return <div className="m-4 rounded-2xl border border-dashed border-border bg-surface px-4 py-8 text-center text-sm font-bold text-muted-foreground">{loading ? '正在读取 Compose 项目...' : '切换到 Compose 视图后刷新项目列表。'}</div>
   }
@@ -2373,75 +2613,190 @@ function DockerComposePanel({ response, loading, online, actionLoading, onAction
   if (response.error && !response.success) {
     return <div className="m-4 rounded-2xl border border-danger/30 bg-danger/10 px-4 py-4 text-sm font-bold text-danger">Compose 项目加载失败: {response.error}</div>
   }
-  if (response.projects.length === 0) {
-    return <div className="m-4 rounded-2xl border border-dashed border-border bg-surface px-4 py-8 text-center"><p className="text-sm font-black text-foreground">未发现 Compose 项目</p><p className="mt-1 text-xs font-semibold text-muted-foreground">Agent 只展示 Docker Compose 当前可识别的项目，不扫描主机文件系统。</p></div>
-  }
   const serviceActionsSupported = response.service_actions_supported === true
+  const deploymentSupported = response.deployment_supported === true
   return (
-    <div className="m-4 overflow-hidden rounded-2xl border border-border">
-      {response.projects.map((project) => {
-        const running = project.services.filter((service) => service.state?.toLowerCase() === 'running').length
-        const busy = actionLoading?.startsWith(`${project.name}:`) ?? false
-        return (
-          <article key={project.name} className="overflow-hidden border-b border-border bg-surface/35 last:border-b-0">
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border bg-surface px-4 py-3">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h4 className="font-mono text-sm font-black text-foreground">{project.name}</h4>
-                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${running > 0 ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>{running}/{project.services.length} 运行</span>
+    <>
+      {deploymentSupported ? (
+        <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3">
+          <div>
+            <p className="text-sm font-black text-foreground">托管 Compose 应用</p>
+            <p className="mt-1 text-xs font-semibold text-muted-foreground">以预览和风险确认的方式创建或更新应用配置。</p>
+          </div>
+          <button type="button" onClick={onCreateManaged} disabled={!online || Boolean(actionLoading) || Boolean(deploymentLoading)} className="inline-flex min-h-10 items-center gap-2 rounded-2xl border border-primary/30 bg-primary px-4 text-xs font-black text-primary-foreground shadow-sm transition hover:brightness-110 focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-55"><Plus size={15} aria-hidden="true" />新建托管应用</button>
+        </div>
+      ) : null}
+      {response.projects.length === 0 ? (
+        <div className="m-4 rounded-2xl border border-dashed border-border bg-surface px-4 py-8 text-center"><p className="text-sm font-black text-foreground">未发现 Compose 项目</p><p className="mt-1 text-xs font-semibold text-muted-foreground">Agent 只展示 Docker Compose 当前可识别的项目，不扫描主机文件系统。</p></div>
+      ) : (
+        <div className="m-4 overflow-hidden rounded-2xl border border-border">
+          {response.projects.map((project) => {
+            const managed = isManagedComposeProject(project)
+            const managedControls = managed && deploymentSupported
+            const projectLabel = managed ? project.display_name || project.name : project.name
+            const running = project.services.filter((service) => service.state?.toLowerCase() === 'running').length
+            const legacyBusy = actionLoading?.startsWith(`${project.name}:`) ?? false
+            const busy = legacyBusy || Boolean(deploymentLoading)
+            return (
+              <article key={project.managed_project_id || project.name} className="overflow-hidden border-b border-border bg-surface/35 last:border-b-0">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border bg-surface px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="font-mono text-sm font-black text-foreground">{projectLabel}</h4>
+                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${managed ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>{managed ? '托管' : '外部'}</span>
+                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${running > 0 ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>{running}/{project.services.length} 运行</span>
+                      {managed && project.revision ? <span className="rounded-full bg-slate-950/5 px-2.5 py-1 text-[11px] font-black text-muted-foreground">版本 {project.revision}</span> : null}
+                    </div>
+                    {managed ? <p className="mt-1 text-xs font-semibold text-muted-foreground">由 MizuPanel Agent 托管</p> : <p className="mt-1 truncate text-xs font-semibold text-muted-foreground" title={project.config_files?.join(', ')}>{project.config_files?.join(' · ') || '配置文件路径不可用'}</p>}
+                    {project.error ? <p className="mt-2 text-xs font-bold text-warning">{project.error}</p> : null}
+                  </div>
+                  <div className="flex flex-wrap gap-2" role="toolbar" aria-label={`${projectLabel} Compose 操作`}>
+                    {managedControls ? <>
+                      <ComposeActionButton icon={<FileCheck2 size={14} aria-hidden="true" />} label="更新应用" primary disabled={!online || busy || !project.managed_project_id} onClick={() => onUpdateManaged(project)} />
+                      {project.rollback_available ? <ComposeActionButton icon={<RotateCw size={14} aria-hidden="true" />} label="回滚上一版本" disabled={!online || busy || !project.managed_project_id} onClick={() => onManagedAction(project, 'rollback')} /> : null}
+                    </> : null}
+                    <ComposeActionButton icon={<Download size={14} aria-hidden="true" />} label="拉取镜像" disabled={!online || busy} onClick={() => onAction(project.name, 'pull')} />
+                    <ComposeActionButton icon={<Play size={14} aria-hidden="true" />} label="启动 / 重建" primary disabled={!online || busy} onClick={() => onAction(project.name, 'up')} />
+                    <ComposeActionButton icon={<RotateCw size={14} aria-hidden="true" />} label="重启" disabled={!online || busy || running === 0} onClick={() => onAction(project.name, 'restart')} />
+                    <ComposeActionButton icon={<Square size={14} aria-hidden="true" />} label="停止" disabled={!online || busy || running === 0} onClick={() => onAction(project.name, 'stop')} />
+                    <ComposeActionButton icon={<ScrollText size={14} aria-hidden="true" />} label="日志" disabled={!online || busy} onClick={() => onAction(project.name, 'logs')} />
+                    <ComposeActionButton icon={<FileCheck2 size={14} aria-hidden="true" />} label="校验配置" disabled={!online || busy} onClick={() => onAction(project.name, 'validate')} />
+                    {managedControls
+                      ? <ComposeActionButton icon={<Trash2 size={14} aria-hidden="true" />} label="归档" danger disabled={!online || busy || !project.managed_project_id} onClick={() => onManagedAction(project, 'archive')} />
+                      : <ComposeActionButton icon={<Trash2 size={14} aria-hidden="true" />} label="移除" danger disabled={!online || busy} onClick={() => onAction(project.name, 'down')} />}
+                  </div>
                 </div>
-                <p className="mt-1 truncate text-xs font-semibold text-muted-foreground" title={project.config_files?.join(', ')}>{project.config_files?.join(' · ') || '配置文件路径不可用'}</p>
-                {project.error ? <p className="mt-2 text-xs font-bold text-warning">{project.error}</p> : null}
-              </div>
-              <div className="flex flex-wrap gap-2" role="toolbar" aria-label={`${project.name} Compose 操作`}>
-                <ComposeActionButton icon={<Download size={14} aria-hidden="true" />} label="拉取镜像" disabled={!online || busy} onClick={() => onAction(project.name, 'pull')} />
-                <ComposeActionButton icon={<Play size={14} aria-hidden="true" />} label="启动 / 重建" primary disabled={!online || busy} onClick={() => onAction(project.name, 'up')} />
-                <ComposeActionButton icon={<RotateCw size={14} aria-hidden="true" />} label="重启" disabled={!online || busy || running === 0} onClick={() => onAction(project.name, 'restart')} />
-                <ComposeActionButton icon={<Square size={14} aria-hidden="true" />} label="停止" disabled={!online || busy || running === 0} onClick={() => onAction(project.name, 'stop')} />
-                <ComposeActionButton icon={<ScrollText size={14} aria-hidden="true" />} label="日志" disabled={!online || busy} onClick={() => onAction(project.name, 'logs')} />
-                <ComposeActionButton icon={<FileCheck2 size={14} aria-hidden="true" />} label="校验配置" disabled={!online || busy} onClick={() => onAction(project.name, 'validate')} />
-                <ComposeActionButton icon={<Trash2 size={14} aria-hidden="true" />} label="移除" danger disabled={!online || busy} onClick={() => onAction(project.name, 'down')} />
-              </div>
+                {busy ? <div className="border-b border-primary/20 bg-primary/5 px-4 py-2 text-xs font-black text-primary">{deploymentLoading ? `正在${managedDeploymentActionText(deploymentLoading)}托管应用，请稍候...` : `正在执行 ${composeActionText(actionLoading!.split(':').pop() as DockerComposeAction)}，请稍候...`}</div> : null}
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-left text-sm">
+                    <thead className="bg-card text-[11px] font-black uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-4 py-3">服务</th><th className="px-4 py-3">容器</th><th className="px-4 py-3">镜像</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">端口</th><th className="w-20 px-4 py-3">操作</th></tr></thead>
+                    <tbody className="divide-y divide-border">
+                      {project.services.length > 0 ? project.services.map((service) => {
+                        const containerID = service.container_id || ''
+                        const runningService = service.state?.toLowerCase() === 'running'
+                        return (
+                          <tr key={`${service.name}-${service.container_id || service.container_name}`} className="hover:bg-surface">
+                            <td className="px-4 py-3 font-black text-foreground">{service.name}</td>
+                            <td className="max-w-[180px] truncate px-4 py-3 font-mono text-xs font-bold text-muted-foreground" title={service.container_name}>{service.container_name || '—'}</td>
+                            <td className="max-w-[220px] truncate px-4 py-3 text-xs font-semibold text-foreground" title={service.image}>{service.image || '—'}</td>
+                            <td className="px-4 py-3"><StatusPill value={service.health || service.state || service.status || 'unknown'} /></td>
+                            <td className="max-w-[150px] truncate px-4 py-3 font-mono text-xs font-semibold text-muted-foreground" title={service.ports?.join(', ')}>{service.ports?.join(', ') || '—'}</td>
+                            <td className="w-20 px-4 py-3">
+                              <ComposeServiceActionMenu
+                                projectName={project.name}
+                                serviceName={service.name}
+                                containerID={containerID}
+                                containerName={service.container_name || service.name}
+                                online={online}
+                                running={runningService}
+                                busy={busy}
+                                lifecycleSupported={serviceActionsSupported}
+                                onAction={(action) => onAction(project.name, action, service.name)}
+                                onOpenLogs={() => onOpenLogs(containerID, service.container_name || service.name)}
+                                onOpenTerminal={() => onOpenTerminal(containerID)}
+                              />
+                            </td>
+                          </tr>
+                        )
+                      }) : <tr><td colSpan={6} className="px-4 py-6 text-center text-sm font-bold text-muted-foreground">项目当前没有容器，完成部署或启动后将在这里显示服务。</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      )}
+    </>
+  )
+}
+
+function ManagedComposeEditorModal({ editor, draft, loading, onClose, onDraftChange, onPreview }: { editor: ManagedComposeEditor; draft: ManagedComposeDeploymentDraft; loading: boolean; onClose: () => void; onDraftChange: (patch: Partial<ManagedComposeDeploymentDraft>) => void; onPreview: () => void }) {
+  const updating = Boolean(editor.projectID)
+  const title = updating ? '更新托管 Compose 应用' : '新建托管 Compose 应用'
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 p-4 sm:p-7" onClick={onClose}>
+      <section role="dialog" aria-modal="true" aria-label={title} className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-5 border-b border-border bg-surface px-5 py-4 sm:px-6">
+          <div className="min-w-0">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary">Managed Compose</p>
+            <h3 className="mt-1 text-xl font-black text-foreground">{title}</h3>
+            <p className="mt-1 text-xs font-semibold leading-5 text-muted-foreground">先预览校验和风险，再确认部署。Agent 不会把配置或环境变量回传到页面。</p>
+          </div>
+          <button type="button" aria-label="关闭托管 Compose 编辑器" title="关闭" onClick={onClose} disabled={loading} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-card text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-55"><X size={17} aria-hidden="true" /></button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]">
+            <label className="flex min-h-[420px] flex-col gap-2">
+              <span className="text-xs font-black text-foreground">Compose YAML</span>
+              <textarea aria-label="Compose YAML" value={draft.composeYAML} onChange={(event) => onDraftChange({ composeYAML: event.target.value })} spellCheck={false} placeholder={'services:\n  web:\n    image: nginx:alpine\n    ports:\n      - "8080:80"'} className="min-h-[360px] flex-1 resize-y rounded-2xl border border-border bg-slate-950 px-4 py-3 font-mono text-xs font-semibold leading-5 text-slate-100 outline-none placeholder:text-slate-500 focus:border-primary focus:ring-4 focus:ring-primary/15" />
+              <span className="text-[11px] font-semibold leading-5 text-muted-foreground">不支持 build、include、extends、YAML env_file、profiles 或 .env 中的 COMPOSE_* 控制变量。预览会提示需要确认的运行风险。</span>
+            </label>
+            <div className="space-y-5">
+              <label className="block space-y-2">
+                <span className="text-xs font-black text-foreground">应用名称</span>
+                <input aria-label="应用名称" value={draft.displayName} onChange={(event) => onDraftChange({ displayName: event.target.value })} maxLength={120} placeholder="例如：网站前台" className="min-h-11 w-full rounded-2xl border border-border bg-card px-4 text-sm font-semibold text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-4 focus:ring-primary/15" />
+                <span className="block text-[11px] font-semibold leading-5 text-muted-foreground">用于显示和识别，不会作为文件位置。</span>
+              </label>
+              <label className="block space-y-2">
+                <span className="text-xs font-black text-foreground">可选 .env</span>
+                <textarea aria-label="可选 .env" value={draft.envFile} onChange={(event) => onDraftChange({ envFile: event.target.value })} spellCheck={false} placeholder={'APP_ENV=production\nAPI_KEY=...'} className="min-h-48 w-full resize-y rounded-2xl border border-border bg-slate-950 px-4 py-3 font-mono text-xs font-semibold leading-5 text-slate-100 outline-none placeholder:text-slate-500 focus:border-primary focus:ring-4 focus:ring-primary/15" />
+                <span className="block text-[11px] font-semibold leading-5 text-muted-foreground">仅随本次预览和部署请求传输；提交部署后会从编辑状态清除。</span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-border bg-surface px-4 py-3">
+                <input aria-label="部署前拉取镜像" type="checkbox" checked={draft.pullImages} onChange={(event) => onDraftChange({ pullImages: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-border text-primary focus:ring-primary" />
+                <span><span className="block text-xs font-black text-foreground">部署前拉取镜像</span><span className="mt-1 block text-[11px] font-semibold leading-5 text-muted-foreground">关闭后使用目标节点当前已缓存的镜像。</span></span>
+              </label>
             </div>
-            {busy ? <div className="border-b border-primary/20 bg-primary/5 px-4 py-2 text-xs font-black text-primary">正在执行 {composeActionText(actionLoading!.split(':').pop() as DockerComposeAction)}，请稍候...</div> : null}
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-sm">
-                <thead className="bg-card text-[11px] font-black uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-4 py-3">服务</th><th className="px-4 py-3">容器</th><th className="px-4 py-3">镜像</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">端口</th><th className="w-20 px-4 py-3">操作</th></tr></thead>
-                <tbody className="divide-y divide-border">
-                  {project.services.length > 0 ? project.services.map((service) => {
-                    const containerID = service.container_id || ''
-                    const runningService = service.state?.toLowerCase() === 'running'
-                    return (
-                      <tr key={`${service.name}-${service.container_id || service.container_name}`} className="hover:bg-surface">
-                        <td className="px-4 py-3 font-black text-foreground">{service.name}</td>
-                        <td className="max-w-[180px] truncate px-4 py-3 font-mono text-xs font-bold text-muted-foreground" title={service.container_name}>{service.container_name || '—'}</td>
-                        <td className="max-w-[220px] truncate px-4 py-3 text-xs font-semibold text-foreground" title={service.image}>{service.image || '—'}</td>
-                        <td className="px-4 py-3"><StatusPill value={service.health || service.state || service.status || 'unknown'} /></td>
-                        <td className="max-w-[150px] truncate px-4 py-3 font-mono text-xs font-semibold text-muted-foreground" title={service.ports?.join(', ')}>{service.ports?.join(', ') || '—'}</td>
-                        <td className="w-20 px-4 py-3">
-                          <ComposeServiceActionMenu
-                            projectName={project.name}
-                            serviceName={service.name}
-                            containerID={containerID}
-                            containerName={service.container_name || service.name}
-                            online={online}
-                            running={runningService}
-                            busy={busy}
-                            lifecycleSupported={serviceActionsSupported}
-                            onAction={(action) => onAction(project.name, action, service.name)}
-                            onOpenLogs={() => onOpenLogs(containerID, service.container_name || service.name)}
-                            onOpenTerminal={() => onOpenTerminal(containerID)}
-                          />
-                        </td>
-                      </tr>
-                    )
-                  }) : <tr><td colSpan={6} className="px-4 py-6 text-center text-sm font-bold text-muted-foreground">项目当前没有容器，使用“启动 / 重建”创建服务。</td></tr>}
-                </tbody>
-              </table>
-            </div>
-          </article>
-        )
-      })}
+          </div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-surface px-5 py-4 sm:px-6">
+          <button type="button" onClick={onClose} disabled={loading} className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-55">取消编辑</button>
+          <button type="button" onClick={onPreview} disabled={loading} className="inline-flex min-h-10 items-center gap-2 rounded-2xl bg-primary px-4 text-xs font-black text-primary-foreground shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"><ShieldAlert size={15} aria-hidden="true" />{loading ? '正在预览...' : '预览部署'}</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function ManagedComposePreviewModal({ preview, loading, onCancel, onConfirm }: { preview: ManagedComposePreview; loading: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/55 p-4" onClick={() => { if (!loading) onCancel() }}>
+      <section role="dialog" aria-modal="true" aria-label="确认托管 Compose 部署" className="w-full max-w-2xl overflow-hidden rounded-[28px] border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="border-b border-warning/25 bg-warning/10 px-5 py-4">
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-warning">Deployment Preview</p>
+          <h3 className="mt-1 text-lg font-black text-foreground">确认托管 Compose 部署</h3>
+          <p className="mt-1 text-xs font-semibold leading-5 text-muted-foreground">已验证应用 <span className="font-mono text-foreground">{preview.projectName || preview.draft.displayName}</span>。确认后 Agent 将使用预览对应的内容部署。</p>
+        </div>
+        <div className="max-h-[50vh] overflow-y-auto px-5 py-5">
+          <p className="text-xs font-black text-foreground">风险摘要</p>
+          {preview.risks.length > 0 ? <ul className="mt-3 space-y-2">{preview.risks.map((risk, index) => <li key={`${risk.code}-${index}`} className="rounded-2xl border border-warning/20 bg-warning/5 px-4 py-3"><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-warning">{risk.severity || 'warning'}</span><span className="font-mono text-xs font-black text-foreground">{risk.code}</span></div><p className="mt-1.5 text-xs font-semibold leading-5 text-muted-foreground">{risk.message}</p></li>)}</ul> : <div className="mt-3 rounded-2xl border border-success/20 bg-success/5 px-4 py-3 text-xs font-semibold leading-5 text-muted-foreground">未检测到需要额外确认的风险。仍会按 Agent 的受控参数部署。</div>}
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-surface px-5 py-4">
+          <button type="button" onClick={onCancel} disabled={loading} className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-55">取消确认</button>
+          <button type="button" onClick={onConfirm} disabled={loading} className="inline-flex min-h-10 items-center gap-2 rounded-2xl bg-primary px-4 text-xs font-black text-primary-foreground shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"><Play size={15} aria-hidden="true" />{loading ? '正在部署...' : '确认并部署'}</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function ManagedComposeActionConfirmModal({ action, projectName, loading, onCancel, onConfirm }: { action: Extract<DockerComposeDeploymentAction, 'rollback' | 'archive'>; projectName: string; loading: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const rollback = action === 'rollback'
+  const title = rollback ? '确认托管应用回滚' : '确认托管应用归档'
+  return (
+    <div className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/45 p-4" onClick={() => { if (!loading) onCancel() }}>
+      <section role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md overflow-hidden rounded-[28px] border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className={`border-b px-5 py-4 ${rollback ? 'border-warning/25 bg-warning/10' : 'border-danger/25 bg-danger/10'}`}>
+          <h3 className="text-lg font-black text-foreground">{title}</h3>
+          <p className="mt-1 text-xs font-semibold leading-5 text-muted-foreground">{rollback ? '将恢复上一份保留版本并重新应用服务。' : '将停止应用并保留托管文件以便后续恢复，不会立即物理删除。'}</p>
+        </div>
+        <div className="px-5 py-5"><p className="text-sm font-bold text-foreground">确认操作应用：<span className="font-mono">{projectName}</span></p></div>
+        <div className="flex justify-end gap-2 border-t border-border bg-surface px-5 py-4">
+          <button type="button" onClick={onCancel} disabled={loading} className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground disabled:cursor-not-allowed disabled:opacity-55">取消</button>
+          <button type="button" onClick={onConfirm} disabled={loading} className={`min-h-10 rounded-2xl px-4 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-55 ${rollback ? 'bg-warning' : 'bg-danger'}`}>{loading ? '正在处理...' : rollback ? '确认回滚' : '确认归档'}</button>
+        </div>
+      </section>
     </div>
   )
 }
@@ -2539,6 +2894,10 @@ function ComposeActionButton({ icon, label, primary, danger, disabled, onClick }
 
 function composeActionText(action: DockerComposeAction) {
   return action === 'pull' ? '拉取镜像' : action === 'up' ? '启动/重建' : action === 'restart' ? '重启' : action === 'stop' ? '停止' : action === 'down' ? '移除' : action === 'logs' ? '查看日志' : '校验配置'
+}
+
+function managedDeploymentActionText(action: DockerComposeDeploymentAction) {
+  return action === 'preview' ? '预览' : action === 'apply' ? '部署' : action === 'rollback' ? '回滚' : '归档'
 }
 
 function compareProcesses(left: ProcessInfo, right: ProcessInfo, sort: ProcessSort) {

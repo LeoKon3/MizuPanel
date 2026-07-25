@@ -546,6 +546,20 @@ func TestComposeServiceActionRejectsAgentWithoutServiceCapability(t *testing.T) 
 	}
 }
 
+func TestComposeDeploymentRejectsAgentWithoutCapability(t *testing.T) {
+	handler := &Handler{connections: map[string]*agentConnection{
+		"node-1": {nodeID: "node-1", supportsDockerCompose: true, supportsDockerComposeDeployment: false},
+	}}
+
+	response, err := handler.DockerComposeDeployment(t.Context(), "node-1", protocol.DockerComposeDeploymentRequest{Action: "preview", ComposeYAML: "services: {}"})
+	if err != nil {
+		t.Fatalf("DockerComposeDeployment returned error: %v", err)
+	}
+	if response.Success || response.Supported || response.Error != "当前 Agent 不支持 Compose 应用部署，请升级 Agent" || response.Risks == nil {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestDockerResourcesRejectAgentWithoutCapability(t *testing.T) {
 	handler := &Handler{connections: map[string]*agentConnection{
 		"node-1": {nodeID: "node-1", supportsDockerResources: false},

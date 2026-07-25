@@ -88,6 +88,7 @@ type ContainerOperationsHandler interface {
 	HandleContainerDelete(context.Context, protocol.ContainerDeleteRequest) protocol.ContainerDeleteResponse
 	HandleDockerComposeList(context.Context, protocol.DockerComposeListRequest) protocol.DockerComposeListResponse
 	HandleDockerComposeAction(context.Context, protocol.DockerComposeActionRequest) protocol.DockerComposeActionResponse
+	HandleDockerComposeDeployment(context.Context, protocol.DockerComposeDeploymentRequest) protocol.DockerComposeDeploymentResponse
 	HandleDockerResourceList(context.Context, protocol.DockerResourceListRequest) protocol.DockerResourceListResponse
 	HandleDockerResourceAction(context.Context, protocol.DockerResourceActionRequest) protocol.DockerResourceActionResponse
 }
@@ -550,6 +551,19 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 			}
 			go func() {
 				response := c.containerOpsHandler.HandleDockerComposeAction(ctx, request)
+				response.RequestID = request.RequestID
+				_ = writer.writeJSON(response)
+			}()
+		case protocol.MessageTypeDockerComposeDeploymentRequest:
+			if c.containerOpsHandler == nil {
+				continue
+			}
+			var request protocol.DockerComposeDeploymentRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			go func() {
+				response := c.containerOpsHandler.HandleDockerComposeDeployment(ctx, request)
 				response.RequestID = request.RequestID
 				_ = writer.writeJSON(response)
 			}()

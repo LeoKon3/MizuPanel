@@ -91,6 +91,16 @@ func TestInstallAgentScriptGeneratesConfigAndInstallsService(t *testing.T) {
 	if !strings.Contains(string(service), "ExecStart=/usr/local/mizupanel/bin/mizupanel-agent -config /usr/local/mizupanel/etc/agent.yaml") {
 		t.Fatalf("service has unexpected ExecStart:\n%s", service)
 	}
+	if !strings.Contains(string(service), "ReadWritePaths=/usr/local/mizupanel/etc/agent.yaml /var/lib/mizupanel/compose") {
+		t.Fatalf("service does not permit Agent-managed Compose storage:\n%s", service)
+	}
+	composeDir, err := os.Stat(filepath.Join(dest, "var", "lib", "mizupanel", "compose"))
+	if err != nil {
+		t.Fatalf("stat Compose directory: %v", err)
+	}
+	if composeDir.Mode().Perm() != 0750 {
+		t.Fatalf("Compose directory mode = %o, want 750", composeDir.Mode().Perm())
+	}
 }
 
 func TestInstallAgentScriptWritesOpsModeServiceAndWarning(t *testing.T) {

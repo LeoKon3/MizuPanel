@@ -192,6 +192,7 @@ type agentConnection struct {
 	supportsAgentUpgrade                bool
 	supportsDockerCompose               bool
 	supportsDockerComposeServiceActions bool
+	supportsDockerComposeDeployment     bool
 	supportsDockerResources             bool
 	supportsSystemdServices             bool
 	sessionMu                           sync.Mutex
@@ -416,7 +417,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := h.startSession(nodeID)
-	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerResources: hello.DockerResources, supportsSystemdServices: hello.SystemdServices, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage)}
+	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerComposeDeployment: hello.DockerComposeDeployment, supportsDockerResources: hello.DockerResources, supportsSystemdServices: hello.SystemdServices, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage)}
 	h.recordConnectionEvent(agent, store.ConnectionEventConnected, "")
 	h.registerConnection(agent)
 	h.observeAgentUpgradeReconnect(nodeID, hello.AgentVersion)
@@ -613,6 +614,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			protocol.MessageTypeK8sGetPodLogsResult,
 			protocol.MessageTypeDockerComposeListResponse,
 			protocol.MessageTypeDockerComposeActionResponse,
+			protocol.MessageTypeDockerComposeDeploymentResponse,
 			protocol.MessageTypeDockerResourceListResponse,
 			protocol.MessageTypeDockerResourceActionResponse,
 			protocol.MessageTypeSystemdServiceListResponse,
@@ -1255,6 +1257,42 @@ func (h *Handler) DockerComposeAction(ctx context.Context, nodeID string, projec
 	var response protocol.DockerComposeActionResponse
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return protocol.DockerComposeActionResponse{}, err
+	}
+	return response, nil
+}
+
+func (h *Handler) DockerComposeDeployment(ctx context.Context, nodeID string, request protocol.DockerComposeDeploymentRequest) (protocol.DockerComposeDeploymentResponse, error) {
+	response := protocol.DockerComposeDeploymentResponse{
+		Type:      protocol.MessageTypeDockerComposeDeploymentResponse,
+		Action:    request.Action,
+		Risks:     []protocol.DockerComposeRisk{},
+		Supported: false,
+	}
+	agent := h.connection(nodeID)
+	if agent == nil {
+		response.Error = "节点离线"
+		return response, nil
+	}
+	if !agent.supportsDockerComposeDeployment {
+		response.Error = "当前 Agent 不支持 Compose 应用部署，请升级 Agent"
+		return response, nil
+	}
+	requestID, err := randomTerminalSessionID()
+	if err != nil {
+		return protocol.DockerComposeDeploymentResponse{}, err
+	}
+	request.Type = protocol.MessageTypeDockerComposeDeploymentRequest
+	request.RequestID = requestID
+	request.NodeID = nodeID
+	raw, err := h.SendToNodeWithTimeout(nodeID, request, 6*time.Minute)
+	if err != nil {
+		return protocol.DockerComposeDeploymentResponse{}, err
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return protocol.DockerComposeDeploymentResponse{}, err
+	}
+	if response.Risks == nil {
+		response.Risks = []protocol.DockerComposeRisk{}
 	}
 	return response, nil
 }

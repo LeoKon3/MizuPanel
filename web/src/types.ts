@@ -239,6 +239,12 @@ export type DockerComposeProject = {
   config_files?: string[]
   services: DockerComposeService[]
   error?: string
+  // Legacy Agent responses omit management. Treat it as an external project.
+  management?: 'managed' | 'external'
+  managed_project_id?: string
+  display_name?: string
+  revision?: number
+  rollback_available?: boolean
 }
 
 export type DockerComposeListResponse = {
@@ -246,6 +252,7 @@ export type DockerComposeListResponse = {
   success: boolean
   supported: boolean
   service_actions_supported?: boolean
+  deployment_supported?: boolean
   projects: DockerComposeProject[]
   error?: string
 }
@@ -258,6 +265,39 @@ export type DockerComposeActionResponse = {
   project_name?: string
   service_name?: string
   action?: DockerComposeAction
+  output?: string
+  error?: string
+}
+
+export type DockerComposeDeploymentAction = 'preview' | 'apply' | 'rollback' | 'archive'
+
+// compose_yaml and env_file are transient request data. They are intentionally
+// never included in DockerComposeProject or deployment responses.
+export type DockerComposeDeploymentRequest = {
+  action: DockerComposeDeploymentAction
+  project_id?: string
+  display_name?: string
+  compose_yaml?: string
+  env_file?: string
+  pull_images?: boolean
+  confirmation_token?: string
+}
+
+export type DockerComposeRisk = {
+  code: string
+  severity: string
+  message: string
+}
+
+export type DockerComposeDeploymentResponse = {
+  type?: string
+  request_id?: string
+  success: boolean
+  supported: boolean
+  action?: DockerComposeDeploymentAction
+  project?: DockerComposeProject
+  risks?: DockerComposeRisk[]
+  confirmation_token?: string
   output?: string
   error?: string
 }

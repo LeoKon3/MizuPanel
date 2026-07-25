@@ -45,17 +45,27 @@ type composeCommandRunner func(context.Context, ...string) (stdout string, stder
 // Project paths are taken from the Agent's own discovery result; callers never
 // provide a shell command or an arbitrary compose file path.
 type ComposeHandler struct {
-	supported bool
-	runner    composeCommandRunner
-	cachePath string
-	mu        sync.Mutex
-	active    map[string]bool
-	cacheMu   sync.Mutex
+	supported     bool
+	runner        composeCommandRunner
+	cachePath     string
+	managedRoot   string
+	mu            sync.Mutex
+	active        map[string]bool
+	cacheMu       sync.Mutex
+	tokenMu       sync.Mutex
+	confirmations map[string]composeDeploymentConfirmation
 }
 
 func NewComposeHandler() *ComposeHandler {
 	_, err := exec.LookPath("docker")
-	handler := &ComposeHandler{supported: err == nil, runner: runComposeCommand, cachePath: defaultComposeCachePath, active: make(map[string]bool)}
+	handler := &ComposeHandler{
+		supported:     err == nil,
+		runner:        runComposeCommand,
+		cachePath:     defaultComposeCachePath,
+		managedRoot:   defaultManagedComposeRoot,
+		active:        make(map[string]bool),
+		confirmations: make(map[string]composeDeploymentConfirmation),
+	}
 	if !handler.supported {
 		return handler
 	}
@@ -70,8 +80,20 @@ func (h *ComposeHandler) SupportsServiceActions() bool {
 	return h != nil && h.supported
 }
 
+// SupportsDeployment reports whether this Agent can execute the fixed Docker
+// Compose commands used by managed deployments. Filesystem authorization is
+// checked again for each operation, because service sandboxing can change
+// after the Agent has announced its capabilities.
+func (h *ComposeHandler) SupportsDeployment() bool {
+	if h == nil || !h.supported || h.runner == nil {
+		return false
+	}
+	_, err := h.ensureManagedComposeRoot(true)
+	return err == nil
+}
+
 func (h *ComposeHandler) HandleDockerComposeList(ctx context.Context, req protocol.DockerComposeListRequest) protocol.DockerComposeListResponse {
-	response := protocol.DockerComposeListResponse{Type: protocol.MessageTypeDockerComposeListResponse, RequestID: req.RequestID, Supported: h.supported, ServiceActionsSupported: h.SupportsServiceActions(), Projects: []protocol.DockerComposeProject{}}
+	response := protocol.DockerComposeListResponse{Type: protocol.MessageTypeDockerComposeListResponse, RequestID: req.RequestID, Supported: h.supported, ServiceActionsSupported: h.SupportsServiceActions(), DeploymentSupported: h.SupportsDeployment(), Projects: []protocol.DockerComposeProject{}}
 	if !h.supported {
 		response.Error = "Docker Compose CLI 不可用"
 		return response
@@ -80,11 +102,12 @@ func (h *ComposeHandler) HandleDockerComposeList(ctx context.Context, req protoc
 	defer cancel()
 	projects, err := h.discover(ctx)
 	if err != nil {
-		response.Error = err.Error()
+		// Global Compose diagnostics can mention any managed project path.
+		response.Error = "发现 Compose 项目失败"
 		return response
 	}
 	response.Success = true
-	response.Projects = projects
+	response.Projects = publicComposeProjects(projects)
 	return response
 }
 
@@ -114,25 +137,22 @@ func (h *ComposeHandler) HandleDockerComposeAction(ctx context.Context, req prot
 		return response
 	}
 
-	h.mu.Lock()
-	if h.active[response.ProjectName] {
-		h.mu.Unlock()
+	if !h.beginComposeOperation(response.ProjectName) {
 		response.Error = "该 Compose 项目已有操作正在执行"
 		return response
 	}
-	h.active[response.ProjectName] = true
-	h.mu.Unlock()
-	defer func() {
-		h.mu.Lock()
-		delete(h.active, response.ProjectName)
-		h.mu.Unlock()
-	}()
+	defer h.finishComposeOperation(response.ProjectName)
 
 	ctx, cancel := context.WithTimeout(ctx, composeActionTimeout)
 	defer cancel()
+	requestedManagedProject := looksLikeManagedComposeProjectName(response.ProjectName)
 	projects, err := h.discover(ctx)
 	if err != nil {
-		response.Error = err.Error()
+		if requestedManagedProject {
+			response.Error = "发现托管 Compose 项目失败"
+		} else {
+			response.Error = err.Error()
+		}
 		return response
 	}
 	var project *protocol.DockerComposeProject
@@ -150,12 +170,31 @@ func (h *ComposeHandler) HandleDockerComposeAction(ctx context.Context, req prot
 		response.Error = "Compose 服务不存在或当前没有可操作的容器"
 		return response
 	}
-	args := composeProjectArgs(*project)
+	args, argsErr := h.composeProjectArgs(*project)
+	if argsErr != nil {
+		response.Error = "托管 Compose 项目状态无效"
+		return response
+	}
 	args = append(args, actionArgs...)
 	if response.ServiceName != "" {
 		args = append(args, response.ServiceName)
 	}
 	stdout, stderr, runErr := h.runner(ctx, args...)
+	if project.Management == "managed" {
+		if runErr != nil {
+			// Managed diagnostics can echo private paths and resolved values.
+			response.Error = "执行托管 Compose 操作失败"
+			return response
+		}
+		if response.Action == "logs" {
+			// Logs are an explicit user-requested application data surface.
+			response.Output = boundedComposeOutput(stdout, stderr)
+		} else {
+			response.Output = h.redactedManagedComposeOutput(stdout, stderr, managedComposeDraft{})
+		}
+		response.Success = true
+		return response
+	}
 	if response.Action == "validate" {
 		stdout = sanitizeComposeValidationOutput(stdout)
 		stderr = sanitizeComposeValidationOutput(stderr)
@@ -216,23 +255,39 @@ func (h *ComposeHandler) discover(ctx context.Context) ([]protocol.DockerCompose
 		project := protocol.DockerComposeProject{Name: record.Name, Status: record.Status, ConfigFiles: parseComposeFiles(record.ConfigFiles), Services: []protocol.DockerComposeService{}}
 		liveProjects = append(liveProjects, project)
 	}
-	projects := h.mergeCachedProjects(liveProjects)
+	projects := h.mergeManagedComposeProjects(liveProjects)
+	projects = h.mergeCachedProjects(projects)
+	projects = h.mergeManagedComposeProjects(projects)
 	for index := range projects {
 		project := &projects[index]
 		if len(project.ConfigFiles) == 0 {
 			project.Error = "Docker 未返回 Compose 配置文件路径"
 			continue
 		}
-		args := composeProjectArgs(*project)
+		args, argsErr := h.composeProjectArgs(*project)
+		if argsErr != nil {
+			project.Error = "托管 Compose 项目状态无效"
+			continue
+		}
 		args = append(args, "ps", "--all", "--format", "json")
 		psOutput, psStderr, psErr := h.runner(ctx, args...)
 		if psErr != nil {
-			project.Error = composeCommandError("读取 Compose 服务失败", psStderr, psErr).Error()
+			if project.Management == "managed" {
+				// Compose diagnostics can contain the private managed file path or
+				// resolved environment values. Keep managed list responses opaque.
+				project.Error = "读取托管 Compose 服务失败"
+			} else {
+				project.Error = composeCommandError("读取 Compose 服务失败", psStderr, psErr).Error()
+			}
 			continue
 		}
 		services, parseErr := decodeComposeRecords[composeServiceRecord](psOutput)
 		if parseErr != nil {
-			project.Error = fmt.Sprintf("解析 Compose 服务失败: %v", parseErr)
+			if project.Management == "managed" {
+				project.Error = "解析托管 Compose 服务失败"
+			} else {
+				project.Error = fmt.Sprintf("解析 Compose 服务失败: %v", parseErr)
+			}
 		} else {
 			project.Services = composeServices(services)
 		}
@@ -324,7 +379,7 @@ func (h *ComposeHandler) writeComposeProjectCache(projects []protocol.DockerComp
 	cache := composeProjectCache{Projects: make([]composeProjectCacheRecord, 0, len(projects))}
 	seen := make(map[string]struct{}, len(projects))
 	for _, project := range projects {
-		if _, exists := seen[project.Name]; exists || !validComposeProjectName(project.Name) || len(project.ConfigFiles) == 0 {
+		if _, exists := seen[project.Name]; exists || project.Management == "managed" || !validComposeProjectName(project.Name) || len(project.ConfigFiles) == 0 {
 			continue
 		}
 		files := cleanComposeFiles(project.ConfigFiles)
@@ -393,6 +448,51 @@ func composeProjectArgs(project protocol.DockerComposeProject) []string {
 		args = append(args, "--file", file)
 	}
 	return args
+}
+
+// composeProjectArgs resolves Agent-managed files from immutable metadata
+// rather than from a response model. This keeps managed paths private while
+// allowing the legacy action API to keep a stopped managed project usable.
+func (h *ComposeHandler) composeProjectArgs(project protocol.DockerComposeProject) ([]string, error) {
+	if project.Management != "managed" {
+		return composeProjectArgs(project), nil
+	}
+	metadata, paths, err := h.loadManagedComposeProject(project.ManagedProjectID)
+	if err != nil || metadata.ComposeProjectName != project.Name {
+		return nil, fmt.Errorf("managed compose project unavailable")
+	}
+	return []string{"compose", "--project-name", metadata.ComposeProjectName, "--file", paths.composeFile, "--env-file", paths.envFile}, nil
+}
+
+func (h *ComposeHandler) beginComposeOperation(key string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.active == nil {
+		h.active = make(map[string]bool)
+	}
+	if h.active[key] {
+		return false
+	}
+	h.active[key] = true
+	return true
+}
+
+func (h *ComposeHandler) finishComposeOperation(key string) {
+	h.mu.Lock()
+	delete(h.active, key)
+	h.mu.Unlock()
+}
+
+func publicComposeProjects(projects []protocol.DockerComposeProject) []protocol.DockerComposeProject {
+	public := make([]protocol.DockerComposeProject, len(projects))
+	copy(public, projects)
+	for index := range public {
+		if public[index].Management == "managed" {
+			// Managed file locations are an Agent-private implementation detail.
+			public[index].ConfigFiles = nil
+		}
+	}
+	return public
 }
 
 func parseComposeFiles(raw json.RawMessage) []string {

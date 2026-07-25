@@ -475,33 +475,35 @@ func (h fakeTerminalHub) AttachContainerLogs(context.Context, string, string, *w
 }
 
 type fakeNodeOperations struct {
-	fileListPath       string
-	fileReadPath       string
-	fileWritePath      string
-	fileContent        string
-	fileUploadPath     string
-	fileUploadBase64   string
-	fileDeletePath     string
-	rebootNodeID       string
-	agentStatusNodeID  string
-	agentRestartNodeID string
-	agentLogsNodeID    string
-	agentLogsLines     int
-	agentUpgradeNodeID string
-	agentUpgradeTarget string
-	disconnectedNodeID string
-	diagnostics        store.ConnectionDiagnostics
-	composeNodeID      string
-	composeProjectName string
-	composeServiceName string
-	composeAction      string
-	resourceNodeID     string
-	resourceType       string
-	resourceID         string
-	resourceAction     string
-	systemdNodeID      string
-	systemdServiceName string
-	systemdAction      string
+	fileListPath            string
+	fileReadPath            string
+	fileWritePath           string
+	fileContent             string
+	fileUploadPath          string
+	fileUploadBase64        string
+	fileDeletePath          string
+	rebootNodeID            string
+	agentStatusNodeID       string
+	agentRestartNodeID      string
+	agentLogsNodeID         string
+	agentLogsLines          int
+	agentUpgradeNodeID      string
+	agentUpgradeTarget      string
+	disconnectedNodeID      string
+	diagnostics             store.ConnectionDiagnostics
+	composeNodeID           string
+	composeProjectName      string
+	composeServiceName      string
+	composeAction           string
+	composeDeploymentNodeID string
+	composeDeployment       protocol.DockerComposeDeploymentRequest
+	resourceNodeID          string
+	resourceType            string
+	resourceID              string
+	resourceAction          string
+	systemdNodeID           string
+	systemdServiceName      string
+	systemdAction           string
 }
 
 func (f *fakeNodeOperations) ConnectionDiagnostics(context.Context, string) (store.ConnectionDiagnostics, error) {
@@ -616,6 +618,25 @@ func (f *fakeNodeOperations) DockerComposeAction(ctx context.Context, nodeID str
 	return protocol.DockerComposeActionResponse{Type: protocol.MessageTypeDockerComposeActionResponse, Success: true, ProjectName: projectName, ServiceName: serviceName, Action: action}, nil
 }
 
+func (f *fakeNodeOperations) DockerComposeDeployment(ctx context.Context, nodeID string, request protocol.DockerComposeDeploymentRequest) (protocol.DockerComposeDeploymentResponse, error) {
+	f.composeDeploymentNodeID = nodeID
+	f.composeDeployment = request
+	return protocol.DockerComposeDeploymentResponse{
+		Type:      protocol.MessageTypeDockerComposeDeploymentResponse,
+		Success:   true,
+		Supported: true,
+		Action:    request.Action,
+		Project: protocol.DockerComposeProject{
+			Name:             request.ProjectID,
+			Management:       "managed",
+			ManagedProjectID: request.ProjectID,
+			DisplayName:      request.DisplayName,
+			Services:         []protocol.DockerComposeService{},
+		},
+		Risks: []protocol.DockerComposeRisk{},
+	}, nil
+}
+
 func (f *fakeNodeOperations) DockerResourceList(ctx context.Context, nodeID string) (protocol.DockerResourceListResponse, error) {
 	f.resourceNodeID = nodeID
 	return protocol.DockerResourceListResponse{Type: protocol.MessageTypeDockerResourceListResponse, Success: true, Supported: true, Images: []protocol.DockerImage{{ID: "abc123", Tags: []string{"nginx:latest"}}}, Volumes: []protocol.DockerVolume{}, Networks: []protocol.DockerNetwork{}}, nil
@@ -659,6 +680,60 @@ func TestNodeDockerComposeRoutes(t *testing.T) {
 	mux.ServeHTTP(actionResponse, actionRequest)
 	if actionResponse.Code != http.StatusOK || ops.composeProjectName != "demo" || ops.composeServiceName != "web" || ops.composeAction != "restart" {
 		t.Fatalf("action status = %d, project = %q, service = %q, action = %q, body = %s", actionResponse.Code, ops.composeProjectName, ops.composeServiceName, ops.composeAction, actionResponse.Body.String())
+	}
+}
+
+func TestNodeDockerComposeDeploymentRoute(t *testing.T) {
+	_, nodes, metrics, _, _ := testRouter(t)
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Oracle", Status: "online", LastSeenAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	ops := &fakeNodeOperations{}
+	mux := NewRouter(nodes, metrics, ops)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/docker/compose/deployment", strings.NewReader(`{"action":"preview","display_name":"demo","compose_yaml":"services: {}\n","env_file":"PASSWORD=secret\n","pull_images":true}`))
+	request.Host = "panel.example"
+	request.Header.Set("Origin", "http://panel.example")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || ops.composeDeploymentNodeID != "node-1" || ops.composeDeployment.Action != "preview" || ops.composeDeployment.DisplayName != "demo" || ops.composeDeployment.ComposeYAML != "services: {}\n" || ops.composeDeployment.EnvFile != "PASSWORD=secret\n" || !ops.composeDeployment.PullImages {
+		t.Fatalf("status = %d, request = %#v, body = %s", response.Code, ops.composeDeployment, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "PASSWORD=secret") || strings.Contains(response.Body.String(), "services: {}") {
+		t.Fatalf("response leaked deployment content: %s", response.Body.String())
+	}
+
+	// The deployment route must accept the Agent's full YAML limit even after
+	// JSON framing; the generic node-operation limit is intentionally smaller.
+	largeRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/docker/compose/deployment", strings.NewReader(`{"action":"preview","display_name":"large","compose_yaml":"`+strings.Repeat("a", maxNodeOperationBodyBytes+1)+`"}`))
+	largeRequest.Host = "panel.example"
+	largeRequest.Header.Set("Origin", "http://panel.example")
+	largeRequest.Header.Set("Content-Type", "application/json")
+	largeResponse := httptest.NewRecorder()
+	mux.ServeHTTP(largeResponse, largeRequest)
+	if largeResponse.Code != http.StatusOK {
+		t.Fatalf("large deployment status = %d, body = %s", largeResponse.Code, largeResponse.Body.String())
+	}
+
+	crossOrigin := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/docker/compose/deployment", strings.NewReader(`{"action":"preview","compose_yaml":"services: {}"}`))
+	crossOrigin.Host = "panel.example"
+	crossOrigin.Header.Set("Origin", "http://evil.example")
+	crossOrigin.Header.Set("Content-Type", "application/json")
+	crossOriginResponse := httptest.NewRecorder()
+	mux.ServeHTTP(crossOriginResponse, crossOrigin)
+	if crossOriginResponse.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin status = %d, body = %s", crossOriginResponse.Code, crossOriginResponse.Body.String())
+	}
+
+	invalid := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/docker/compose/deployment", strings.NewReader(`{"action":"archive","project_id":"e6d45ee2-4dc8-4b0a-b036-089dedce2f5f","compose_yaml":"services: {}"}`))
+	invalid.Host = "panel.example"
+	invalid.Header.Set("Origin", "http://panel.example")
+	invalid.Header.Set("Content-Type", "application/json")
+	invalidResponse := httptest.NewRecorder()
+	mux.ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
 	}
 }
 

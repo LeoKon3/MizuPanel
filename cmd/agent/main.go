@@ -124,6 +124,7 @@ func runAgent(ctx context.Context, configPath string) error {
 		Terminal:                    cfg.EnableTerminal && agentterminal.Supported(),
 		DockerCompose:               composeHandler != nil,
 		DockerComposeServiceActions: composeHandler != nil && composeHandler.SupportsServiceActions(),
+		DockerComposeDeployment:     composeHandler != nil && composeHandler.SupportsDeployment(),
 		DockerResources:             dockerCollector != nil,
 		SystemdServices:             systemdHandler.Supported(),
 		AgentMode:                   cfg.AgentMode,

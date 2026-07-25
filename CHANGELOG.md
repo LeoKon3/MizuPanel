@@ -2,6 +2,25 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.5 - 2026-07-25
+
+### Added
+
+- Added Agent-managed Compose application creation and updates with YAML validation, risk preview, short-lived content-bound confirmation tokens, optional image pulls, and fixed `up -d` execution.
+- Added managed Compose rollback and recoverable archive workflows, bounded YAML-only revisions, managed/external source badges, and capability-gated Dashboard controls.
+- Added the `docker_compose_deployment` Agent capability and structured deployment messages/API while keeping older Agents on the existing Compose management flow.
+
+### Changed
+
+- Changed Linux Agent installation and systemd sandboxing to provision the private managed Compose root at `/var/lib/mizupanel/compose` for both normal and ops modes.
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.5.
+- Standardized patch-version bumps for every user-facing bug-fix or feature batch, with a synchronization test and release-tag guard covering all current version surfaces.
+
+### Security
+
+- Managed Compose projects use Agent-generated UUID directories, fixed Docker CLI arguments, atomic private files, `0600` `.env` permissions, path/symlink checks, and YAML guardrails that reject builds, profiles, Compose CLI control variables, and external configuration includes.
+- Managed Compose YAML, `.env` values, local paths, revisions, and raw Docker diagnostics are never persisted by the Server or returned in deployment responses.
+
 ## v0.1.4 - 2026-07-25
 
 ### Added
