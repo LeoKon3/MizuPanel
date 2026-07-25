@@ -3,7 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Copy, Download, FileCheck2, MoreHorizontal, Play, Plus, RotateCw, ScrollText, ShieldAlert, Square, Tags, Terminal, Trash2, Wifi, WifiOff, X } from 'lucide-react'
 
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, ConnectionDiagnostics, DockerComposeAction, DockerComposeListResponse, DockerContainer, DockerSnapshotResponse, FileDeleteResponse, FileEntry, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, Metric, Node, ProcessInfo, ProcessSnapshotResponse, RangeOption, RebootResponse, SSHAuthType, SSHJobResponse, SSHProgressEvent, SSHUninstallRequest } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, ConnectionDiagnostics, DockerComposeAction, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileEntry, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, Metric, Node, ProcessInfo, ProcessSnapshotResponse, RangeOption, RebootResponse, SSHAuthType, SSHJobResponse, SSHProgressEvent, SSHUninstallRequest, SystemdService, SystemdServiceAction, SystemdServiceListResponse } from '../types'
 import { formatBytes, formatPercent, formatSpeed } from '../lib/format'
 import { MetricsChart } from '../components/MetricsChart'
 import LogViewer from '../components/LogViewer'
@@ -11,6 +11,7 @@ import ContainerLogsModal from '../components/ContainerLogsModal'
 import CreateContainerModal from '../components/CreateContainerModal'
 import { SingleNodeOrganizationModal } from '../components/SingleNodeOrganizationModal'
 import { Toast } from '../components/Toast'
+import { DockerResourcesPanel } from '../components/DockerResourcesPanel'
 
 type NodeDetailProps = {
   node?: Node
@@ -18,6 +19,8 @@ type NodeDetailProps = {
   processSnapshot?: ProcessSnapshotResponse
   dockerSnapshot?: DockerSnapshotResponse
   dockerCompose?: DockerComposeListResponse
+  dockerResources?: DockerResourceListResponse
+  systemdServices?: SystemdServiceListResponse
   monitoringLoading?: boolean
   range: RangeOption
   onRangeChange: (range: RangeOption) => void
@@ -38,10 +41,14 @@ type NodeDetailProps = {
   onRefreshDocker?: (nodeID: string) => Promise<void>
   onRefreshDockerCompose?: (nodeID: string) => Promise<void>
   onDockerComposeAction?: (nodeID: string, projectName: string, action: DockerComposeAction, serviceName?: string) => Promise<{ success: boolean, output?: string, error?: string }>
+  onRefreshDockerResources?: (nodeID: string) => Promise<void>
+  onDockerResourceAction?: (nodeID: string, resourceType: DockerResourceType, resourceID: string, action: DockerResourceAction) => Promise<{ success: boolean, error?: string }>
+  onRefreshSystemdServices?: (nodeID: string) => Promise<void>
+  onSystemdServiceAction?: (nodeID: string, serviceName: string, action: SystemdServiceAction) => Promise<{ success: boolean, output?: string, error?: string }>
   onNodeOrganizationChanged?: () => Promise<void> | void
 }
 
-type DetailSection = 'overview' | 'processes' | 'containers' | 'files' | 'logs' | 'agent'
+type DetailSection = 'overview' | 'processes' | 'containers' | 'services' | 'files' | 'logs' | 'agent'
 type ProcessSort = 'cpu' | 'memory' | 'pid' | 'name'
 type DockerFilter = 'all' | 'running' | 'stopped' | 'abnormal'
 type SSHProgressEventLog = SSHProgressEvent & { logs: string[] }
@@ -90,24 +97,36 @@ function mergeSSHProgressEvent(current: SSHProgressEventLog[], progress: SSHProg
   return next
 }
 
-export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, dockerCompose, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onGetConnectionDiagnostics, onUpgradeAgent, onGetAgentUpgradeStatus, onGetLegacyAgentUpgradeCommand, onRestartAgent, onGetAgentLogs, onRefreshDocker, onRefreshDockerCompose, onDockerComposeAction, onNodeOrganizationChanged }: NodeDetailProps) {
+export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, dockerCompose, dockerResources, systemdServices, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onGetConnectionDiagnostics, onUpgradeAgent, onGetAgentUpgradeStatus, onGetLegacyAgentUpgradeCommand, onRestartAgent, onGetAgentLogs, onRefreshDocker, onRefreshDockerCompose, onDockerComposeAction, onRefreshDockerResources, onDockerResourceAction, onRefreshSystemdServices, onSystemdServiceAction, onNodeOrganizationChanged }: NodeDetailProps) {
   const [activeSection, setActiveSection] = useState<DetailSection>('overview')
   const [processSort, setProcessSort] = useState<ProcessSort>('cpu')
   const [processSearch, setProcessSearch] = useState('')
   const [dockerFilter, setDockerFilter] = useState<DockerFilter>('all')
   const [dockerSearch, setDockerSearch] = useState('')
-  const [dockerView, setDockerView] = useState<'containers' | 'compose'>('containers')
+  const [dockerViewState, setDockerViewState] = useState<{ nodeID?: string, view: 'containers' | 'compose' | 'resources' }>({ nodeID: node?.id, view: 'containers' })
+  // Derive the view from the current node during render. This prevents an old
+  // resource selection from issuing a request in the effect pass immediately
+  // after a host switch.
+  const dockerView = dockerViewState.nodeID === node?.id ? dockerViewState.view : 'containers'
+  const setDockerView = (view: 'containers' | 'compose' | 'resources') => setDockerViewState({ nodeID: node?.id, view })
   const [composeActionLoading, setComposeActionLoading] = useState<string>()
   const [composeLoading, setComposeLoading] = useState(false)
+  const [resourcesLoading, setResourcesLoading] = useState(false)
   const [pendingComposeDown, setPendingComposeDown] = useState<string>()
   const [composeLogsModal, setComposeLogsModal] = useState<{ projectName: string; output: string }>()
+  const [systemdLoading, setSystemdLoading] = useState(false)
+  const [systemdActionLoading, setSystemdActionLoading] = useState<string>()
+  const [systemdLogsModal, setSystemdLogsModal] = useState<{ serviceName: string; output: string }>()
 
   useEffect(() => {
-    setDockerView('containers')
     setComposeActionLoading(undefined)
     setComposeLoading(false)
+    setResourcesLoading(false)
     setPendingComposeDown(undefined)
     setComposeLogsModal(undefined)
+    setSystemdLoading(false)
+    setSystemdActionLoading(undefined)
+    setSystemdLogsModal(undefined)
   }, [node?.id])
 
   useEffect(() => {
@@ -115,6 +134,18 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
     setComposeLoading(true)
     void onRefreshDockerCompose(node.id).finally(() => setComposeLoading(false))
   }, [activeSection, dockerView, node?.id])
+
+  useEffect(() => {
+    if (!node || activeSection !== 'containers' || dockerView !== 'resources' || !onRefreshDockerResources) return
+    setResourcesLoading(true)
+    void onRefreshDockerResources(node.id).finally(() => setResourcesLoading(false))
+  }, [activeSection, dockerView, node?.id])
+
+  useEffect(() => {
+    if (!node || activeSection !== 'services' || !onRefreshSystemdServices) return
+    setSystemdLoading(true)
+    void onRefreshSystemdServices(node.id).finally(() => setSystemdLoading(false))
+  }, [activeSection, node?.id])
   const [containerLogsModal, setContainerLogsModal] = useState<{ open: boolean; containerId: string; containerName: string }>({
     open: false,
     containerId: '',
@@ -781,6 +812,26 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
     }
   }
 
+  const runSystemdAction = async (serviceName: string, action: SystemdServiceAction) => {
+    if (!node || !onSystemdServiceAction) return
+    setSystemdActionLoading(`${serviceName}:${action}`)
+    try {
+      const result = await onSystemdServiceAction(node.id, serviceName, action)
+      if (!result.success) {
+        setToast({ message: `系统服务${serviceName}${systemdActionText(action)}失败: ${result.error || result.output || '未知错误'}`, type: 'error' })
+      } else if (action === 'logs') {
+        setSystemdLogsModal({ serviceName, output: result.output || '暂无日志输出' })
+      } else {
+        setToast({ message: `系统服务${serviceName}${systemdActionText(action)}成功`, type: 'success' })
+        await onRefreshSystemdServices?.(node.id)
+      }
+    } catch (error) {
+      setToast({ message: `系统服务${serviceName}${systemdActionText(action)}失败: ${error instanceof Error ? error.message : '网络错误'}`, type: 'error' })
+    } finally {
+      setSystemdActionLoading(undefined)
+    }
+  }
+
   return (
     <section className="min-w-0 space-y-2">
       <div className="rounded-[14px] border border-border bg-card p-3 shadow-sm">
@@ -838,6 +889,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
           ['overview', '主机信息'],
           ['processes', '进程信息'],
           ['containers', '容器信息'],
+          ['services', '系统服务'],
           ['files', '文件管理'],
           ['logs', '日志查看'],
           ['agent', 'Agent 管理']
@@ -924,22 +976,23 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
       ) : null}
 
       {activeSection === 'containers' ? (
-        <section aria-label="Docker 容器" className="overflow-hidden rounded-[28px] border border-border bg-card shadow-sm">
+        <section aria-label={dockerView === 'containers' ? 'Docker 容器' : dockerView === 'compose' ? 'Docker Compose' : 'Docker 资源'} className="overflow-hidden rounded-[28px] border border-border bg-card shadow-sm">
           <div className="border-b border-border bg-surface p-4">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-              <p className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-500">{dockerView === 'containers' ? 'Docker Snapshot' : 'Compose Projects'}</p>
-              <h3 className="mt-1 text-lg font-black text-foreground">{dockerView === 'containers' ? 'Docker 容器' : 'Compose 项目'}</h3>
+              <p className="text-[11px] font-black uppercase tracking-[0.22em] text-cyan-500">{dockerView === 'containers' ? 'Docker Snapshot' : dockerView === 'compose' ? 'Compose Projects' : 'Docker Resources'}</p>
+              <h3 className="mt-1 text-lg font-black text-foreground">{dockerView === 'containers' ? 'Docker 容器' : dockerView === 'compose' ? 'Compose 项目' : 'Docker 资源'}</h3>
               <p className="mt-1 text-xs font-bold text-muted-foreground">
                 {dockerView === 'containers'
                   ? (dockerSnapshot?.available ? `Docker ${dockerSnapshot.version || '版本未知'} · ${formatUnixTime(dockerSnapshot.collected_at)}` : 'Docker 状态随 Agent 快照展示')
-                  : '实时读取 Agent 所在主机的 Docker Compose 项目'}
+                  : dockerView === 'compose' ? '实时读取 Agent 所在主机的 Docker Compose 项目' : '集中查看镜像、数据卷、网络与 Docker 磁盘占用'}
               </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <div className="flex shrink-0 rounded-2xl border border-border bg-card p-1 shadow-inner" role="tablist" aria-label="Docker 视图">
                   <button type="button" role="tab" aria-selected={dockerView === 'containers'} onClick={() => setDockerView('containers')} className={`min-h-9 whitespace-nowrap rounded-xl px-3 text-xs font-black transition ${dockerView === 'containers' ? 'bg-slate-950 text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>容器</button>
                   <button type="button" role="tab" aria-selected={dockerView === 'compose'} onClick={() => setDockerView('compose')} className={`min-h-9 whitespace-nowrap rounded-xl px-3 text-xs font-black transition ${dockerView === 'compose' ? 'bg-slate-950 text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>Compose</button>
+                  <button type="button" role="tab" aria-selected={dockerView === 'resources'} onClick={() => setDockerView('resources')} className={`min-h-9 whitespace-nowrap rounded-xl px-3 text-xs font-black transition ${dockerView === 'resources' ? 'bg-slate-950 text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>资源</button>
                 </div>
                 {dockerView === 'compose' ? (
                 <button type="button" aria-label="刷新 Compose 项目" title="刷新 Compose 项目" onClick={() => {
@@ -1040,7 +1093,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
               }}
             />
           ) : null}
-          </> : (
+          </> : dockerView === 'compose' ? (
             <DockerComposePanel
               response={dockerCompose}
               loading={composeLoading}
@@ -1056,8 +1109,44 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
               onOpenLogs={(containerID, containerName) => setContainerLogsModal({ open: true, containerId: containerID, containerName })}
               onOpenTerminal={(containerID) => openContainerExecPage(node.id, containerID)}
             />
+          ) : (
+            <DockerResourcesPanel
+              key={node.id}
+              response={dockerResources}
+              loading={resourcesLoading}
+              online={online}
+              onRefresh={async () => {
+                if (!onRefreshDockerResources) return
+                setResourcesLoading(true)
+                try {
+                  await onRefreshDockerResources(node.id)
+                } finally {
+                  setResourcesLoading(false)
+                }
+              }}
+              onAction={async (resourceType, resourceID, action) => {
+                if (!onDockerResourceAction) throw new Error('Docker 资源操作不可用')
+                return onDockerResourceAction(node.id, resourceType, resourceID, action)
+              }}
+              onShowToast={(message, type) => setToast({ message, type })}
+            />
           )}
         </section>
+      ) : null}
+
+      {activeSection === 'services' ? (
+        <SystemdServicesPanel
+          response={systemdServices}
+          loading={systemdLoading}
+          online={online}
+          actionLoading={systemdActionLoading}
+          onRefresh={() => {
+            if (!node || !onRefreshSystemdServices) return
+            setSystemdLoading(true)
+            void onRefreshSystemdServices(node.id).finally(() => setSystemdLoading(false))
+          }}
+          onAction={(serviceName, action) => void runSystemdAction(serviceName, action)}
+        />
       ) : null}
 
       {activeSection === 'files' ? (
@@ -1469,6 +1558,26 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
             <pre className="min-h-0 flex-1 overflow-auto bg-slate-950 px-5 py-4 font-mono text-xs font-semibold leading-5 text-slate-100">{composeLogsModal.output}</pre>
             <div className="flex justify-end border-t border-border bg-surface px-5 py-3">
               <button type="button" onClick={() => setComposeLogsModal(undefined)} className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground transition hover:text-foreground">关闭</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {systemdLogsModal ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 p-4" onClick={() => setSystemdLogsModal(undefined)}>
+          <section role="dialog" aria-modal="true" aria-label={`系统服务日志 ${systemdLogsModal.serviceName}`} className="flex h-[78vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border bg-surface px-5 py-4">
+              <div className="min-w-0">
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-success">Systemd Logs</p>
+                <h3 className="mt-1 truncate font-mono text-lg font-black text-foreground">{systemdLogsModal.serviceName}</h3>
+              </div>
+              <button type="button" aria-label="关闭系统服务日志" title="关闭" onClick={() => setSystemdLogsModal(undefined)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border bg-card text-muted-foreground transition hover:bg-muted hover:text-foreground">
+                <X size={17} aria-hidden="true" />
+              </button>
+            </div>
+            <pre className="min-h-0 flex-1 overflow-auto bg-slate-950 px-5 py-4 font-mono text-xs font-semibold leading-5 text-slate-100">{systemdLogsModal.output}</pre>
+            <div className="flex justify-end border-t border-border bg-surface px-5 py-3">
+              <button type="button" onClick={() => setSystemdLogsModal(undefined)} className="min-h-10 rounded-2xl border border-border bg-card px-4 text-xs font-black text-muted-foreground transition hover:text-foreground">关闭</button>
             </div>
           </section>
         </div>
@@ -2081,7 +2190,7 @@ function ContainerActionsDropdown({ container, nodeID, onRefresh, onShowToast, o
           <div className="my-1 h-px bg-border/70" />
           {!running ? <ContainerActionMenuItem icon={<Play size={15} />} label="启动" onClick={() => handleAction('start')} /> : null}
           {running ? <ContainerActionMenuItem icon={<Square size={15} />} label="停止" onClick={() => handleAction('stop')} /> : null}
-          {running ? <ContainerActionMenuItem icon={<RotateCw size={15} />} label="重启" onClick={() => handleAction('restart')} /> : null}
+          {running ? <ContainerActionMenuItem prominent icon={<RotateCw size={15} />} label="重启" onClick={() => handleAction('restart')} /> : null}
           <div className="my-1 h-px bg-border/70" />
           <ContainerActionMenuItem danger icon={<Trash2 size={15} />} label="删除" onClick={() => handleAction('delete')} />
         </div>,
@@ -2091,20 +2200,167 @@ function ContainerActionsDropdown({ container, nodeID, onRefresh, onShowToast, o
   )
 }
 
-function ContainerActionMenuItem({ icon, label, danger, disabled, onClick }: { icon: ReactNode; label: string; danger?: boolean; disabled?: boolean; onClick: () => void }) {
+function ContainerActionMenuItem({ icon, label, danger, disabled, prominent, onClick }: { icon: ReactNode; label: string; danger?: boolean; disabled?: boolean; prominent?: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-45 ${danger ? 'text-danger hover:bg-danger/10' : 'text-foreground hover:bg-primary/10 hover:text-primary'}`}
+      className={`group flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-45 ${prominent ? 'rounded-[10px] border border-slate-200 bg-white text-slate-800 shadow-sm shadow-blue-500/10 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-100 dark:border-blue-400/25 dark:bg-card dark:text-foreground dark:hover:border-blue-400/50 dark:hover:bg-blue-500/15 dark:hover:text-blue-300 dark:focus:ring-blue-400/20' : danger ? 'rounded-xl text-danger hover:bg-danger/10' : 'rounded-xl text-foreground hover:bg-primary/10 hover:text-primary'}`}
     >
-      <span aria-hidden="true" className="inline-flex h-5 w-5 items-center justify-center rounded-lg bg-surface text-current">
+      <span aria-hidden="true" className={`inline-flex h-5 w-5 items-center justify-center rounded-lg ${prominent ? 'bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-100 group-hover:text-blue-700 dark:bg-blue-500/15 dark:text-blue-300 dark:group-hover:bg-blue-500/25 dark:group-hover:text-blue-200' : 'bg-surface text-current'}`}>
         {icon}
       </span>
       {label}
     </button>
   )
+}
+
+function SystemdServicesPanel({ response, loading, online, actionLoading, onRefresh, onAction }: { response?: SystemdServiceListResponse; loading: boolean; online: boolean; actionLoading?: string; onRefresh: () => void; onAction: (serviceName: string, action: SystemdServiceAction) => void }) {
+  const [filter, setFilter] = useState<'all' | 'active' | 'inactive' | 'failed'>('all')
+  const [search, setSearch] = useState('')
+  const services = response?.services ?? []
+  const keyword = search.trim().toLowerCase()
+  const filteredServices = services.filter((service) => {
+    const state = service.active_state?.toLowerCase() || ''
+    if (filter === 'active' && state !== 'active') return false
+    if (filter === 'inactive' && state !== 'inactive') return false
+    if (filter === 'failed' && state !== 'failed') return false
+    if (!keyword) return true
+    return [service.name, service.description, service.load_state, service.active_state, service.sub_state, service.unit_file_state]
+      .some((value) => value?.toLowerCase().includes(keyword))
+  })
+
+  return (
+    <section role="region" aria-label="系统服务" className="overflow-hidden rounded-[28px] border border-border bg-card shadow-sm">
+      <div className="border-b border-border bg-surface p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-success">Systemd Services</p>
+            <h3 className="mt-1 text-lg font-black text-foreground">系统服务</h3>
+            <p className="mt-1 text-xs font-bold text-muted-foreground">查看当前已加载的 systemd 服务；开机自启设置不在此处修改。</p>
+          </div>
+          <button type="button" aria-label="刷新系统服务" title="刷新系统服务" onClick={onRefresh} disabled={!online || loading || Boolean(actionLoading)} className="inline-flex h-10 w-10 shrink-0 items-center justify-center self-start rounded-2xl border border-border bg-card text-muted-foreground transition hover:border-primary/30 hover:bg-primary/10 hover:text-primary focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60">
+            <RotateCw size={16} aria-hidden="true" />
+          </button>
+        </div>
+        {response?.supported ? (
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/70 pt-3">
+            <div className="flex shrink-0 rounded-2xl border border-border bg-card p-1 shadow-inner" role="group" aria-label="系统服务状态筛选">
+              {([
+                ['all', '全部'],
+                ['active', '运行中'],
+                ['inactive', '已停止'],
+                ['failed', '失败']
+              ] as const).map(([value, label]) => (
+                <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={`min-h-9 cursor-pointer whitespace-nowrap rounded-xl px-3 text-xs font-black transition focus:outline-none focus:ring-4 focus:ring-primary/20 ${filter === value ? 'bg-slate-950 text-white' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>{label}</button>
+              ))}
+            </div>
+            <input aria-label="搜索系统服务" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索服务名、描述或状态" className="min-h-10 min-w-[260px] flex-1 rounded-2xl border border-border bg-card px-4 text-sm font-semibold text-foreground outline-none placeholder:text-muted-foreground focus:border-emerald-400 focus:ring-4 focus:ring-primary/20" />
+          </div>
+        ) : null}
+      </div>
+
+      {!response ? <div className="m-4 rounded-2xl border border-dashed border-border bg-surface px-4 py-8 text-center text-sm font-bold text-muted-foreground">{loading ? '正在读取 systemd 服务...' : '切换到系统服务视图后读取服务列表。'}</div> : null}
+      {response && !response.supported ? <div className="m-4 rounded-2xl border border-warning/30 bg-warning/10 px-4 py-4 text-sm font-bold text-warning">{response.error || '当前 Agent 或主机未启用 systemd 服务管理。'}</div> : null}
+      {response?.supported && response.error && !response.success ? <div className="m-4 rounded-2xl border border-danger/30 bg-danger/10 px-4 py-4 text-sm font-bold text-danger">系统服务加载失败: {response.error}</div> : null}
+      {response?.supported && response.success && filteredServices.length === 0 ? <div className="m-4 rounded-2xl border border-dashed border-border bg-surface px-4 py-8 text-center"><p className="text-sm font-black text-foreground">未找到系统服务</p><p className="mt-1 text-xs font-semibold text-muted-foreground">请调整状态筛选或搜索条件。</p></div> : null}
+      {response?.supported && response.success && filteredServices.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-left text-sm">
+            <thead className="bg-card text-[11px] font-black uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-4 py-3">服务</th><th className="px-4 py-3">描述</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">启动方式</th><th className="w-20 px-4 py-3">操作</th></tr></thead>
+            <tbody className="divide-y divide-border">
+              {filteredServices.map((service) => {
+                const busy = actionLoading?.startsWith(`${service.name}:`) ?? false
+                return <SystemdServiceRow key={service.name} service={service} online={online} busy={busy} onAction={onAction} />
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function SystemdServiceRow({ service, online, busy, onAction }: { service: SystemdService; online: boolean; busy: boolean; onAction: (serviceName: string, action: SystemdServiceAction) => void }) {
+  const active = service.active_state?.toLowerCase() === 'active'
+  const state = service.active_state || service.sub_state || 'unknown'
+  return (
+    <tr className="hover:bg-surface">
+      <td className="px-4 py-3"><p className="font-mono text-xs font-black text-foreground">{service.name}</p><p className="mt-1 text-[11px] font-semibold text-muted-foreground">{service.load_state || '加载状态未知'} · {service.sub_state || '子状态未知'}</p></td>
+      <td className="max-w-[260px] truncate px-4 py-3 text-xs font-semibold text-muted-foreground" title={service.description}>{service.description || '—'}</td>
+      <td className="px-4 py-3"><SystemdStatusPill value={state} /></td>
+      <td className="px-4 py-3"><span className={`inline-flex rounded-xl px-2.5 py-1 text-xs font-black ${service.unit_file_state === 'enabled' ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>{service.unit_file_state || '未知'}</span></td>
+      <td className="w-20 px-4 py-3"><SystemdServiceActionMenu serviceName={service.name} active={active} online={online} busy={busy} onAction={onAction} /></td>
+    </tr>
+  )
+}
+
+function SystemdStatusPill({ value }: { value: string }) {
+  const normalized = value.toLowerCase()
+  const tone = normalized === 'active' ? 'bg-success/10 text-success ring-success/20' : normalized === 'failed' ? 'bg-danger/10 text-danger ring-danger/20' : 'bg-muted text-muted-foreground ring-slate-200'
+  return <span className={`inline-flex rounded-xl px-2.5 py-1 text-xs font-black ring-1 ${tone}`}>{value}</span>
+}
+
+function SystemdServiceActionMenu({ serviceName, active, online, busy, onAction }: { serviceName: string; active: boolean; online: boolean; busy: boolean; onAction: (serviceName: string, action: SystemdServiceAction) => void }) {
+  const [open, setOpen] = useState(false)
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number }>()
+  const menuId = useId()
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      let element = event.target instanceof Element ? event.target : null
+      while (element) {
+        if (element.getAttribute('data-systemd-service-actions-menu') === menuId) return
+        element = element.parentElement
+      }
+      setOpen(false)
+    }
+    const timeoutID = window.setTimeout(() => document.addEventListener('click', closeOnOutsideClick), 0)
+    return () => {
+      window.clearTimeout(timeoutID)
+      document.removeEventListener('click', closeOnOutsideClick)
+    }
+  }, [menuId, open])
+
+  const toggleMenu = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const menuWidth = 176
+    const menuHeight = 224
+    setMenuPosition({
+      top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuHeight - 8)),
+      left: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
+    })
+    setOpen((value) => !value)
+  }
+
+  const chooseAction = (action: SystemdServiceAction) => {
+    setOpen(false)
+    onAction(serviceName, action)
+  }
+
+  return (
+    <div className="relative flex items-center justify-center">
+      <button type="button" aria-label={`${serviceName} 服务操作`} title={`${serviceName} 服务操作`} data-systemd-service-actions-menu={menuId} onClick={toggleMenu} disabled={busy} className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition hover:border-primary/30 hover:bg-primary/10 hover:text-primary focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50"><MoreHorizontal size={16} aria-hidden="true" /></button>
+      {open && !busy && menuPosition ? createPortal(
+        <div role="menu" aria-label={`${serviceName} 服务操作菜单`} data-systemd-service-actions-menu={menuId} className="fixed z-[70] w-44 rounded-2xl border border-border/80 bg-card/95 p-1.5 text-left shadow-[0_18px_45px_rgb(15_23_42/0.16)] backdrop-blur" style={{ top: menuPosition.top, left: menuPosition.left }} onClick={(event) => event.stopPropagation()}>
+          <p className="px-3 pb-1 pt-1.5 font-mono text-[10px] font-black text-muted-foreground" title={serviceName}>{serviceName}</p>
+          <ContainerActionMenuItem icon={<ScrollText size={15} />} label="查看日志" disabled={!online} onClick={() => chooseAction('logs')} />
+          <div className="my-1 h-px bg-border/70" />
+          <ContainerActionMenuItem icon={<Play size={15} />} label="启动" disabled={!online || active} onClick={() => chooseAction('start')} />
+          <ContainerActionMenuItem icon={<RotateCw size={15} />} label="重启" disabled={!online || !active} onClick={() => chooseAction('restart')} />
+          <ContainerActionMenuItem icon={<Square size={15} />} label="停止" disabled={!online || !active} onClick={() => chooseAction('stop')} />
+        </div>,
+        document.body
+      ) : null}
+    </div>
+  )
+}
+
+function systemdActionText(action: SystemdServiceAction) {
+  return action === 'start' ? '启动' : action === 'stop' ? '停止' : action === 'restart' ? '重启' : '查看日志'
 }
 
 function DockerComposePanel({ response, loading, online, actionLoading, onAction, onOpenLogs, onOpenTerminal }: { response?: DockerComposeListResponse; loading: boolean; online: boolean; actionLoading?: string; onAction: (projectName: string, action: DockerComposeAction, serviceName?: string) => void; onOpenLogs: (containerID: string, containerName: string) => void; onOpenTerminal: (containerID: string) => void }) {

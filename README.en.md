@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  A lightweight self-hosted operations panel for hosts, Docker, alerts, and Kubernetes resources.
+  A lightweight self-hosted operations panel for hosts, Docker, systemd, alerts, and Kubernetes resources.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.4-14B8A6">
 </p>
 
 <p align="center">
@@ -53,8 +53,13 @@
 <table>
   <tr>
     <td width="33%"><strong>Host Monitoring</strong><br /><sub>Node status, CPU, memory, disk, network, load, and historical trends.</sub></td>
-    <td width="33%"><strong>Host Operations</strong><br /><sub>Processes, Docker containers, container logs, file manager, web terminal, Agent management.</sub></td>
-    <td width="33%"><strong>Alerts</strong><br /><sub>Metric rules, duration checks, active alerts, alert history, and manual resolution.</sub></td>
+    <td width="33%"><strong>Host Fleet Management</strong><br /><sub>Groups, tags, search and filters, single-host editing, and multi-host batch operations.</sub></td>
+    <td width="33%"><strong>Agent Lifecycle</strong><br /><sub>Install, connection diagnostics, logs, restart, persistent identity, and secure latest-version upgrades.</sub></td>
+  </tr>
+  <tr>
+    <td width="33%"><strong>Docker Workspace</strong><br /><sub>Containers, Compose, images, volumes, networks, disk usage, logs, terminals, and guarded actions.</sub></td>
+    <td width="33%"><strong>Host Operations</strong><br /><sub>Processes, systemd services, file management, web terminals, and controlled reboots.</sub></td>
+    <td width="33%"><strong>Alerts And Notifications</strong><br /><sub>Metric rules, trigger and recovery delivery, Webhook, DingTalk, Feishu, retries, and delivery history.</sub></td>
   </tr>
   <tr>
     <td width="33%"><strong>Kubernetes Management</strong><br /><sub>Cluster access, resource summary, Namespace, Node, Pod, Workload, Service, and Ingress views.</sub></td>
@@ -107,7 +112,7 @@ Start the Server:
 ./mizupanel-server -config server.yaml
 ```
 
-Open `http://your-server-ip:8080`, then click **添加服务器** in the Dashboard to copy the Linux or Windows Agent install command.
+Open `http://your-server-ip:8080`, then click **Add Server** in the Dashboard to copy the Linux or Windows Agent install command.
 
 The release package already includes web assets, installer scripts, and Agent downloads. Docker, MySQL, admin auth, systemd hosting, and token details are covered in the [configuration docs](docs/configuration.en.md). More interface previews are available in [screenshots](docs/screenshots.en.md).
 

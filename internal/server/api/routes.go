@@ -51,6 +51,10 @@ type NodeOperations interface {
 	ContainerDelete(ctx context.Context, nodeID string, containerID string, force bool) (protocol.ContainerDeleteResponse, error)
 	DockerComposeList(ctx context.Context, nodeID string) (protocol.DockerComposeListResponse, error)
 	DockerComposeAction(ctx context.Context, nodeID string, projectName string, serviceName string, action string) (protocol.DockerComposeActionResponse, error)
+	DockerResourceList(ctx context.Context, nodeID string) (protocol.DockerResourceListResponse, error)
+	DockerResourceAction(ctx context.Context, nodeID string, resourceType string, resourceID string, action string) (protocol.DockerResourceActionResponse, error)
+	SystemdServiceList(ctx context.Context, nodeID string) (protocol.SystemdServiceListResponse, error)
+	SystemdServiceAction(ctx context.Context, nodeID string, serviceName string, action string) (protocol.SystemdServiceActionResponse, error)
 }
 
 type NodeDisconnecter interface {
@@ -462,6 +466,22 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 4 && parts[1] == "docker" && parts[2] == "compose" && parts[3] == "action" {
 		s.handleNodeDockerComposeAction(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "docker" && parts[2] == "resources" {
+		s.handleNodeDockerResources(w, r, parts[0])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "docker" && parts[2] == "resources" && parts[3] == "action" {
+		s.handleNodeDockerResourceAction(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "services" && parts[2] == "systemd" {
+		s.handleNodeSystemdServices(w, r, parts[0])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "services" && parts[2] == "systemd" && parts[3] == "action" {
+		s.handleNodeSystemdServiceAction(w, r, parts[0])
 		return
 	}
 	if len(parts) == 2 && parts[1] == "files" {
@@ -1340,6 +1360,117 @@ func (s *Server) handleNodeDockerComposeAction(w http.ResponseWriter, r *http.Re
 		return
 	}
 	response, err := s.agentOps.DockerComposeAction(r.Context(), nodeID, request.ProjectName, request.ServiceName, request.Action)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleNodeDockerResources(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
+		return
+	}
+	response, err := s.agentOps.DockerResourceList(r.Context(), nodeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleNodeDockerResourceAction(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
+		return
+	}
+	var request struct {
+		ResourceType string `json:"resource_type"`
+		ResourceID   string `json:"resource_id"`
+		Action       string `json:"action"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid Docker resource action request")
+		return
+	}
+	request.ResourceType = strings.TrimSpace(request.ResourceType)
+	request.ResourceID = strings.TrimSpace(request.ResourceID)
+	request.Action = strings.TrimSpace(request.Action)
+	if request.ResourceType == "" || request.ResourceID == "" || request.Action == "" {
+		writeError(w, http.StatusBadRequest, "Docker resource_type, resource_id and action are required")
+		return
+	}
+	if !validDockerResourceAction(request.ResourceType, request.Action) {
+		writeError(w, http.StatusBadRequest, "unsupported Docker resource action")
+		return
+	}
+	response, err := s.agentOps.DockerResourceAction(r.Context(), nodeID, request.ResourceType, request.ResourceID, request.Action)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func validDockerResourceAction(resourceType, action string) bool {
+	switch resourceType {
+	case "image":
+		return action == "pull" || action == "remove"
+	case "volume", "network":
+		return action == "remove"
+	default:
+		return false
+	}
+}
+
+func (s *Server) handleNodeSystemdServices(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
+		return
+	}
+	response, err := s.agentOps.SystemdServiceList(r.Context(), nodeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleNodeSystemdServiceAction(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.agentOps == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
+		return
+	}
+	var request struct {
+		ServiceName string `json:"service_name"`
+		Action      string `json:"action"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid systemd service action request")
+		return
+	}
+	if strings.TrimSpace(request.ServiceName) == "" || strings.TrimSpace(request.Action) == "" {
+		writeError(w, http.StatusBadRequest, "systemd service_name and action are required")
+		return
+	}
+	response, err := s.agentOps.SystemdServiceAction(r.Context(), nodeID, request.ServiceName, request.Action)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

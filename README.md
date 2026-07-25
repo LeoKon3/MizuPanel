@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、告警和 Kubernetes 资源。
+  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、Systemd、告警和 Kubernetes 资源。
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.4-14B8A6">
 </p>
 
 <p align="center">
@@ -52,9 +52,14 @@
 
 <table>
   <tr>
-    <td width="33%"><strong>主机监控</strong><br /><sub>节点状态、CPU、内存、磁盘、网络、负载、历史趋势。</sub></td>
-    <td width="33%"><strong>主机运维</strong><br /><sub>进程、Docker 容器、容器日志、文件管理、Web 终端、Agent 管理。</sub></td>
-    <td width="33%"><strong>告警中心</strong><br /><sub>指标规则、持续时间判断、活跃告警、历史告警、手动收敛。</sub></td>
+    <td width="33%"><strong>主机监控</strong><br /><sub>节点状态、CPU、内存、磁盘、网络、负载和历史趋势。</sub></td>
+    <td width="33%"><strong>主机与集群管理</strong><br /><sub>分组、标签、搜索筛选、单机编辑和多主机批量管理。</sub></td>
+    <td width="33%"><strong>Agent 生命周期</strong><br /><sub>安装、连接诊断、日志、重启、身份持久化和安全升级到最新版。</sub></td>
+  </tr>
+  <tr>
+    <td width="33%"><strong>Docker 工作区</strong><br /><sub>容器、Compose、镜像、数据卷、网络、磁盘占用、日志、终端和安全操作。</sub></td>
+    <td width="33%"><strong>主机运维</strong><br /><sub>进程、Systemd 服务、文件管理、Web 终端和受控重启。</sub></td>
+    <td width="33%"><strong>告警与通知</strong><br /><sub>指标规则、触发与恢复通知、Webhook、钉钉、飞书、重试和历史状态。</sub></td>
   </tr>
   <tr>
     <td width="33%"><strong>Kubernetes 管理</strong><br /><sub>集群接入、资源概览、Namespace、Node、Pod、Workload、Service、Ingress。</sub></td>

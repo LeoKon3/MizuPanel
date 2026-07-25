@@ -28,6 +28,7 @@ type Client struct {
 	containerLogsHandler        ContainerLogsHandler
 	dockerExecHandler           DockerExecHandler
 	containerOpsHandler         ContainerOperationsHandler
+	systemdServiceHandler       SystemdServiceHandler
 	kubectlHandler              KubectlHandler
 }
 
@@ -87,6 +88,13 @@ type ContainerOperationsHandler interface {
 	HandleContainerDelete(context.Context, protocol.ContainerDeleteRequest) protocol.ContainerDeleteResponse
 	HandleDockerComposeList(context.Context, protocol.DockerComposeListRequest) protocol.DockerComposeListResponse
 	HandleDockerComposeAction(context.Context, protocol.DockerComposeActionRequest) protocol.DockerComposeActionResponse
+	HandleDockerResourceList(context.Context, protocol.DockerResourceListRequest) protocol.DockerResourceListResponse
+	HandleDockerResourceAction(context.Context, protocol.DockerResourceActionRequest) protocol.DockerResourceActionResponse
+}
+
+type SystemdServiceHandler interface {
+	HandleList(context.Context, protocol.SystemdServiceListRequest) protocol.SystemdServiceListResponse
+	HandleAction(context.Context, protocol.SystemdServiceActionRequest) protocol.SystemdServiceActionResponse
 }
 
 type KubectlHandler interface {
@@ -146,6 +154,10 @@ func (c *Client) SetDockerExecHandler(handler DockerExecHandler) {
 
 func (c *Client) SetContainerOperationsHandler(handler ContainerOperationsHandler) {
 	c.containerOpsHandler = handler
+}
+
+func (c *Client) SetSystemdServiceHandler(handler SystemdServiceHandler) {
+	c.systemdServiceHandler = handler
 }
 
 func (c *Client) SetKubectlHandler(handler KubectlHandler) {
@@ -538,6 +550,58 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 			}
 			go func() {
 				response := c.containerOpsHandler.HandleDockerComposeAction(ctx, request)
+				response.RequestID = request.RequestID
+				_ = writer.writeJSON(response)
+			}()
+		case protocol.MessageTypeDockerResourceListRequest:
+			if c.containerOpsHandler == nil {
+				continue
+			}
+			var request protocol.DockerResourceListRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			go func() {
+				response := c.containerOpsHandler.HandleDockerResourceList(ctx, request)
+				response.RequestID = request.RequestID
+				_ = writer.writeJSON(response)
+			}()
+		case protocol.MessageTypeDockerResourceActionRequest:
+			if c.containerOpsHandler == nil {
+				continue
+			}
+			var request protocol.DockerResourceActionRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			go func() {
+				response := c.containerOpsHandler.HandleDockerResourceAction(ctx, request)
+				response.RequestID = request.RequestID
+				_ = writer.writeJSON(response)
+			}()
+		case protocol.MessageTypeSystemdServiceListRequest:
+			if c.systemdServiceHandler == nil {
+				continue
+			}
+			var request protocol.SystemdServiceListRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			go func() {
+				response := c.systemdServiceHandler.HandleList(ctx, request)
+				response.RequestID = request.RequestID
+				_ = writer.writeJSON(response)
+			}()
+		case protocol.MessageTypeSystemdServiceActionRequest:
+			if c.systemdServiceHandler == nil {
+				continue
+			}
+			var request protocol.SystemdServiceActionRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			go func() {
+				response := c.systemdServiceHandler.HandleAction(ctx, request)
 				response.RequestID = request.RequestID
 				_ = writer.writeJSON(response)
 			}()

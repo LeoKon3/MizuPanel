@@ -31,6 +31,7 @@ type Collector struct {
 	collectionTimeout time.Duration
 	containerLimit    int
 	client            clientAPI
+	resourceClient    resourceClientAPI
 }
 
 type clientAPI interface {
@@ -175,9 +176,9 @@ func (c *Collector) ContainerLogs(ctx context.Context, id string, tail int, foll
 }
 
 type socketClient struct {
-	httpClient           *http.Client
-	httpClientNoTimeout  *http.Client
-	baseURL              string
+	httpClient          *http.Client
+	httpClientNoTimeout *http.Client
+	baseURL             string
 }
 
 func newSocketClient(socketPath string, timeout time.Duration) *socketClient {

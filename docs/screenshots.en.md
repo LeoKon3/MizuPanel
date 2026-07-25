@@ -20,11 +20,11 @@ The overview shows node status, Kubernetes cluster status, active alerts, resour
   <tr>
     <td width="50%">
       <a href="../assets/screenshots/host-detail.png"><img src="../assets/screenshots/host-detail.png" alt="Host detail" width="100%" /></a>
-      <br /><sub>Host detail, metric charts, Docker, processes, and Agent information.</sub>
+      <br /><sub>Host detail, metric charts, Docker workspace, systemd, processes, files, and Agent management.</sub>
     </td>
     <td width="50%">
       <a href="../assets/screenshots/add-host.png"><img src="../assets/screenshots/add-host.png" alt="Add host" width="100%" /></a>
-      <br /><sub>Add host and copy Linux or Windows Agent install commands.</sub>
+      <br /><sub>Add hosts with Linux or Windows install commands; Agents keep persistent identities and support diagnostics and secure upgrades.</sub>
     </td>
   </tr>
 </table>

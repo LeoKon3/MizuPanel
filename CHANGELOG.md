@@ -2,7 +2,7 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
-## Unreleased
+## v0.1.4 - 2026-07-25
 
 ### Added
 
@@ -59,6 +59,10 @@ All notable changes to MizuPanel will be documented in this file.
 - Added Agent-side persistence for discovered Compose projects under `/usr/local/mizupanel/var/compose-projects.json`, allowing projects to be listed and started again after `docker compose down`.
 - Added guarded Compose project logs (`--no-color --tail 200`) and configuration validation (`config --quiet`), plus service-level log and terminal entry points in the host detail view.
 - Added Compose service lifecycle actions for image pull, start/recreate, restart, and stop. These are scoped to an Agent-discovered service and presented in the service-row more menu.
+- Added Systemd service management in the host detail page: list loaded `.service` units, filter/search their current state, inspect recent logs, and run start, stop, or restart actions.
+- Added the `systemd_services` Agent capability with structured Systemd list/action protocol messages and node APIs, so unsupported or older Agents remain safely compatible.
+- Added Docker resource management for images, volumes, and networks, including Docker disk-usage summaries, search and usage filters, image pulls, and guarded deletion of unused resources.
+- Added the `docker_resources` Agent capability with structured list/action messages and node APIs; image, volume, and network deletion is revalidated by the Agent without force or prune semantics.
 
 ### Changed
 
@@ -85,7 +89,9 @@ All notable changes to MizuPanel will be documented in this file.
 - Changed Compose project discovery to merge valid local cache entries with live Docker output, while ignoring missing configuration files and non-blocking cache I/O failures.
 - Changed Compose validation errors to hide sensitive values before returning them to the Server and Dashboard.
 - Changed Compose service actions to require an explicit Agent capability handshake; older Agents keep their existing project operations and never receive a service-scoped request.
-- Aligned the Server-bundled Agent version with the root `VERSION` file so existing 0.1.1 Agents can detect and install the current 0.1.2 build.
+- Bumped the Server, Dashboard package metadata, and Server-bundled Agent release version to 0.1.4; older Agents continue to detect and install only the current bundled build.
+- Changed host-detail service operations to keep `mizupanel-agent.service` in the dedicated Agent management page rather than exposing it in the general Systemd service table.
+- Changed the host-detail Docker workspace to merge containers, Compose projects, and Docker resources into three desktop views with a shared high-density visual structure.
 
 ### Fixed
 
@@ -101,6 +107,7 @@ All notable changes to MizuPanel will be documented in this file.
 - Fixed transient alert delivery loss by retrying network errors, HTTP 408/425/429, and 5xx responses while avoiding deterministic 4xx retries.
 - Fixed alert history so trigger and recovery delivery status remains distinguishable from unknown legacy rows.
 - Fixed the Compose service table so logs, terminal, and lifecycle operations are consolidated into one more menu instead of crowding the action column.
+- Fixed the Systemd service table action column to remain visible in the desktop detail panel, with its more menu positioned inside the viewport.
 
 ### Security
 
@@ -112,6 +119,7 @@ All notable changes to MizuPanel will be documented in this file.
 - Agent upgrades accept only fixed Server-origin artifacts, cap downloads at 256 MiB, verify SHA-256 and executable ELF architecture, and arm rollback before replacing the running binary.
 - Connection and alert errors exposed to logs, APIs, and history omit tokens, Webhook URLs, secrets, and custom request headers.
 - Compose service actions use a fixed operation allowlist and require the requested service to be present in the Agent's current project discovery result.
+- Systemd operations accept only validated `.service` names and the fixed `start`, `stop`, `restart`, and bounded-log actions; the Agent validates that a service is currently loaded, serializes concurrent actions for that service, and redacts common sensitive values from logs.
 
 ## v0.0.4 - 2026-06-10
 

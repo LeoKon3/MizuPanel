@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeListResponse, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, K8sClustersResponse, SystemAboutResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -187,6 +187,30 @@ export function runNodeDockerComposeAction(nodeID: string, projectName: string, 
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project_name: projectName, action, ...(serviceName ? { service_name: serviceName } : {}) })
+  })
+}
+
+export function getNodeDockerResources(nodeID: string): Promise<DockerResourceListResponse> {
+  return request<DockerResourceListResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker/resources`)
+}
+
+export function runNodeDockerResourceAction(nodeID: string, resourceType: DockerResourceType, resourceID: string, action: DockerResourceAction): Promise<DockerResourceActionResponse> {
+  return request<DockerResourceActionResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker/resources/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resource_type: resourceType, resource_id: resourceID, action })
+  })
+}
+
+export function getNodeSystemdServices(nodeID: string): Promise<SystemdServiceListResponse> {
+  return request<SystemdServiceListResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/services/systemd`)
+}
+
+export function runNodeSystemdServiceAction(nodeID: string, serviceName: string, action: SystemdServiceAction): Promise<SystemdServiceActionResponse> {
+  return request<SystemdServiceActionResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/services/systemd/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ service_name: serviceName, action })
   })
 }
 

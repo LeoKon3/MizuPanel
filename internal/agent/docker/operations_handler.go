@@ -2,14 +2,19 @@ package docker
 
 import (
 	"context"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
 )
 
 // OperationsHandler handles container operation requests
 type OperationsHandler struct {
-	collector *Collector
-	compose   *ComposeHandler
+	collector       *Collector
+	compose         *ComposeHandler
+	resourceMu      sync.Mutex
+	activeResources map[string]bool
 }
 
 // NewOperationsHandler creates a new container operations handler
@@ -18,7 +23,88 @@ func NewOperationsHandler(collector *Collector) *OperationsHandler {
 }
 
 func NewOperationsHandlerWithCompose(collector *Collector, compose *ComposeHandler) *OperationsHandler {
-	return &OperationsHandler{collector: collector, compose: compose}
+	return &OperationsHandler{collector: collector, compose: compose, activeResources: make(map[string]bool)}
+}
+
+func (h *OperationsHandler) HandleDockerResourceList(ctx context.Context, req protocol.DockerResourceListRequest) protocol.DockerResourceListResponse {
+	response := emptyDockerResourceListResponse()
+	response.RequestID = req.RequestID
+	if h.collector == nil {
+		response.Supported = false
+		response.Error = "Docker 资源管理未启用"
+		return response
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	response, err := h.collector.DockerResources(requestCtx)
+	response.RequestID = req.RequestID
+	if err != nil {
+		response.Error = err.Error()
+		return response
+	}
+	return response
+}
+
+func (h *OperationsHandler) HandleDockerResourceAction(ctx context.Context, req protocol.DockerResourceActionRequest) protocol.DockerResourceActionResponse {
+	req.ResourceType = strings.TrimSpace(req.ResourceType)
+	req.ResourceID = strings.TrimSpace(req.ResourceID)
+	req.Action = strings.TrimSpace(req.Action)
+	response := protocol.DockerResourceActionResponse{
+		Type:         protocol.MessageTypeDockerResourceActionResponse,
+		RequestID:    req.RequestID,
+		Supported:    h.collector != nil,
+		ResourceType: req.ResourceType,
+		ResourceID:   req.ResourceID,
+		Action:       req.Action,
+	}
+	if h.collector == nil {
+		response.Error = "Docker 资源管理未启用"
+		return response
+	}
+	if err := validateDockerResourceAction(req.ResourceType, req.ResourceID, req.Action); err != nil {
+		response.Error = err.Error()
+		return response
+	}
+	operationKey := req.ResourceType + ":" + req.ResourceID
+	if !h.beginDockerResourceAction(operationKey) {
+		response.Error = "该 Docker 资源正在执行其他操作"
+		return response
+	}
+	defer h.finishDockerResourceAction(operationKey)
+	timeout := 90 * time.Second
+	if req.ResourceType == "image" && req.Action == "pull" {
+		timeout = 6 * time.Minute
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := h.collector.DockerResourceAction(requestCtx, req.ResourceType, req.ResourceID, req.Action); err != nil {
+		if dockerResourceAPIUnsupported(err) {
+			response.Supported = false
+		}
+		response.Error = err.Error()
+		return response
+	}
+	response.Success = true
+	return response
+}
+
+func (h *OperationsHandler) beginDockerResourceAction(key string) bool {
+	h.resourceMu.Lock()
+	defer h.resourceMu.Unlock()
+	if h.activeResources == nil {
+		h.activeResources = make(map[string]bool)
+	}
+	if h.activeResources[key] {
+		return false
+	}
+	h.activeResources[key] = true
+	return true
+}
+
+func (h *OperationsHandler) finishDockerResourceAction(key string) {
+	h.resourceMu.Lock()
+	delete(h.activeResources, key)
+	h.resourceMu.Unlock()
 }
 
 func (h *OperationsHandler) HandleDockerComposeList(ctx context.Context, req protocol.DockerComposeListRequest) protocol.DockerComposeListResponse {

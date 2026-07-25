@@ -262,6 +262,99 @@ export type DockerComposeActionResponse = {
   error?: string
 }
 
+export type DockerResourceType = 'image' | 'volume' | 'network'
+export type DockerResourceAction = 'pull' | 'remove'
+
+export type DockerDiskUsage = {
+  image_layers?: number
+  container_writable?: number
+  volumes?: number
+  build_cache?: number
+}
+
+export type DockerImage = {
+  id: string
+  full_id?: string
+  tags: string[]
+  size?: number
+  shared_size?: number
+  created_at?: number
+  containers?: number
+}
+
+export type DockerVolume = {
+  name: string
+  driver?: string
+  scope?: string
+  mountpoint?: string
+  compose_project?: string
+  size?: number
+  ref_count?: number
+}
+
+export type DockerNetwork = {
+  id: string
+  full_id?: string
+  name: string
+  driver?: string
+  scope?: string
+  subnets: string[]
+  containers: string[]
+  internal?: boolean
+  ingress?: boolean
+  protected: boolean
+}
+
+export type DockerResourceListResponse = {
+  type?: string
+  node_id?: string
+  success: boolean
+  supported: boolean
+  usage: DockerDiskUsage
+  images: DockerImage[]
+  volumes: DockerVolume[]
+  networks: DockerNetwork[]
+  error?: string
+}
+
+export type DockerResourceActionResponse = {
+  type?: string
+  success: boolean
+  supported: boolean
+  resource_type?: DockerResourceType
+  resource_id?: string
+  action?: DockerResourceAction
+  error?: string
+}
+
+export type SystemdService = {
+  name: string
+  description?: string
+  load_state?: string
+  active_state?: string
+  sub_state?: string
+  unit_file_state?: string
+}
+
+export type SystemdServiceListResponse = {
+  type?: string
+  success: boolean
+  supported: boolean
+  services: SystemdService[]
+  error?: string
+}
+
+export type SystemdServiceAction = 'start' | 'stop' | 'restart' | 'logs'
+
+export type SystemdServiceActionResponse = {
+  type?: string
+  success: boolean
+  service_name?: string
+  action?: SystemdServiceAction
+  output?: string
+  error?: string
+}
+
 export type ContainerLogsRequest = {
   type: 'container_logs_request'
   session_id: string

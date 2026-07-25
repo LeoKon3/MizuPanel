@@ -61,18 +61,26 @@ const (
 	MessageTypeDockerExecRequest  = "docker_exec_request"
 	MessageTypeDockerExecResponse = "docker_exec_response"
 
-	MessageTypeContainerStartRequest       = "container_start_request"
-	MessageTypeContainerStartResponse      = "container_start_response"
-	MessageTypeContainerStopRequest        = "container_stop_request"
-	MessageTypeContainerStopResponse       = "container_stop_response"
-	MessageTypeContainerRestartRequest     = "container_restart_request"
-	MessageTypeContainerRestartResponse    = "container_restart_response"
-	MessageTypeContainerDeleteRequest      = "container_delete_request"
-	MessageTypeContainerDeleteResponse     = "container_delete_response"
-	MessageTypeDockerComposeListRequest    = "docker_compose_list_request"
-	MessageTypeDockerComposeListResponse   = "docker_compose_list_response"
-	MessageTypeDockerComposeActionRequest  = "docker_compose_action_request"
-	MessageTypeDockerComposeActionResponse = "docker_compose_action_response"
+	MessageTypeContainerStartRequest        = "container_start_request"
+	MessageTypeContainerStartResponse       = "container_start_response"
+	MessageTypeContainerStopRequest         = "container_stop_request"
+	MessageTypeContainerStopResponse        = "container_stop_response"
+	MessageTypeContainerRestartRequest      = "container_restart_request"
+	MessageTypeContainerRestartResponse     = "container_restart_response"
+	MessageTypeContainerDeleteRequest       = "container_delete_request"
+	MessageTypeContainerDeleteResponse      = "container_delete_response"
+	MessageTypeDockerComposeListRequest     = "docker_compose_list_request"
+	MessageTypeDockerComposeListResponse    = "docker_compose_list_response"
+	MessageTypeDockerComposeActionRequest   = "docker_compose_action_request"
+	MessageTypeDockerComposeActionResponse  = "docker_compose_action_response"
+	MessageTypeDockerResourceListRequest    = "docker_resource_list_request"
+	MessageTypeDockerResourceListResponse   = "docker_resource_list_response"
+	MessageTypeDockerResourceActionRequest  = "docker_resource_action_request"
+	MessageTypeDockerResourceActionResponse = "docker_resource_action_response"
+	MessageTypeSystemdServiceListRequest    = "systemd_service_list_request"
+	MessageTypeSystemdServiceListResponse   = "systemd_service_list_response"
+	MessageTypeSystemdServiceActionRequest  = "systemd_service_action_request"
+	MessageTypeSystemdServiceActionResponse = "systemd_service_action_response"
 
 	// K8s 集群管理相关消息类型
 	MessageTypeK8sClusterConnect        = "k8s_cluster_connect"
@@ -120,6 +128,8 @@ type HelloMessage struct {
 	Terminal                    bool   `json:"terminal"`
 	DockerCompose               bool   `json:"docker_compose,omitempty"`
 	DockerComposeServiceActions bool   `json:"docker_compose_service_actions,omitempty"`
+	DockerResources             bool   `json:"docker_resources,omitempty"`
+	SystemdServices             bool   `json:"systemd_services,omitempty"`
 	AgentMode                   string `json:"agent_mode,omitempty"`
 	AgentUser                   string `json:"agent_user,omitempty"`
 	AgentManagement             bool   `json:"agent_management,omitempty"`
@@ -665,6 +675,127 @@ type DockerComposeActionResponse struct {
 	RequestID   string `json:"request_id,omitempty"`
 	Success     bool   `json:"success"`
 	ProjectName string `json:"project_name,omitempty"`
+	ServiceName string `json:"service_name,omitempty"`
+	Action      string `json:"action,omitempty"`
+	Output      string `json:"output,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+type DockerResourceListRequest struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+}
+
+type DockerResourceListResponse struct {
+	Type      string          `json:"type"`
+	RequestID string          `json:"request_id,omitempty"`
+	NodeID    string          `json:"node_id,omitempty"`
+	Success   bool            `json:"success"`
+	Supported bool            `json:"supported"`
+	Usage     DockerDiskUsage `json:"usage"`
+	Images    []DockerImage   `json:"images"`
+	Volumes   []DockerVolume  `json:"volumes"`
+	Networks  []DockerNetwork `json:"networks"`
+	Error     string          `json:"error,omitempty"`
+}
+
+type DockerDiskUsage struct {
+	ImageLayers       *int64 `json:"image_layers,omitempty"`
+	ContainerWritable *int64 `json:"container_writable,omitempty"`
+	Volumes           *int64 `json:"volumes,omitempty"`
+	BuildCache        *int64 `json:"build_cache,omitempty"`
+}
+
+type DockerImage struct {
+	ID         string   `json:"id"`
+	FullID     string   `json:"full_id,omitempty"`
+	Tags       []string `json:"tags"`
+	Size       *int64   `json:"size,omitempty"`
+	SharedSize *int64   `json:"shared_size,omitempty"`
+	CreatedAt  int64    `json:"created_at,omitempty"`
+	Containers *int64   `json:"containers,omitempty"`
+}
+
+type DockerVolume struct {
+	Name           string `json:"name"`
+	Driver         string `json:"driver,omitempty"`
+	Scope          string `json:"scope,omitempty"`
+	Mountpoint     string `json:"mountpoint,omitempty"`
+	ComposeProject string `json:"compose_project,omitempty"`
+	Size           *int64 `json:"size,omitempty"`
+	RefCount       *int64 `json:"ref_count,omitempty"`
+}
+
+type DockerNetwork struct {
+	ID         string   `json:"id"`
+	FullID     string   `json:"full_id,omitempty"`
+	Name       string   `json:"name"`
+	Driver     string   `json:"driver,omitempty"`
+	Scope      string   `json:"scope,omitempty"`
+	Subnets    []string `json:"subnets"`
+	Containers []string `json:"containers"`
+	Internal   bool     `json:"internal,omitempty"`
+	Ingress    bool     `json:"ingress,omitempty"`
+	Protected  bool     `json:"protected"`
+}
+
+type DockerResourceActionRequest struct {
+	Type         string `json:"type"`
+	RequestID    string `json:"request_id,omitempty"`
+	NodeID       string `json:"node_id,omitempty"`
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+	Action       string `json:"action"`
+}
+
+type DockerResourceActionResponse struct {
+	Type         string `json:"type"`
+	RequestID    string `json:"request_id,omitempty"`
+	Success      bool   `json:"success"`
+	Supported    bool   `json:"supported"`
+	ResourceType string `json:"resource_type,omitempty"`
+	ResourceID   string `json:"resource_id,omitempty"`
+	Action       string `json:"action,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+type SystemdServiceListRequest struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+}
+
+type SystemdServiceListResponse struct {
+	Type      string           `json:"type"`
+	RequestID string           `json:"request_id,omitempty"`
+	Success   bool             `json:"success"`
+	Supported bool             `json:"supported"`
+	Services  []SystemdService `json:"services"`
+	Error     string           `json:"error,omitempty"`
+}
+
+type SystemdService struct {
+	Name          string `json:"name"`
+	Description   string `json:"description,omitempty"`
+	LoadState     string `json:"load_state,omitempty"`
+	ActiveState   string `json:"active_state,omitempty"`
+	SubState      string `json:"sub_state,omitempty"`
+	UnitFileState string `json:"unit_file_state,omitempty"`
+}
+
+type SystemdServiceActionRequest struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"request_id,omitempty"`
+	NodeID      string `json:"node_id,omitempty"`
+	ServiceName string `json:"service_name"`
+	Action      string `json:"action"`
+}
+
+type SystemdServiceActionResponse struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"request_id,omitempty"`
+	Success     bool   `json:"success"`
 	ServiceName string `json:"service_name,omitempty"`
 	Action      string `json:"action,omitempty"`
 	Output      string `json:"output,omitempty"`

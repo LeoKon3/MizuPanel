@@ -14,6 +14,7 @@ import (
 	agentmanagement "github.com/mizupanel/mizupanel/internal/agent/management"
 	"github.com/mizupanel/mizupanel/internal/agent/metrics"
 	agentprocess "github.com/mizupanel/mizupanel/internal/agent/process"
+	agentsystemd "github.com/mizupanel/mizupanel/internal/agent/systemd"
 	agentterminal "github.com/mizupanel/mizupanel/internal/agent/terminal"
 	agentupgrade "github.com/mizupanel/mizupanel/internal/agent/upgrade"
 	agentws "github.com/mizupanel/mizupanel/internal/agent/ws"
@@ -93,6 +94,8 @@ func runAgent(ctx context.Context, configPath string) error {
 		return agentdocker.NewExecManager(cfg.EnableDocker && cfg.EnableTerminal, sender)
 	})
 	client.SetLogTailHandler(agentlogtail.NewHandler())
+	systemdHandler := agentsystemd.NewHandler()
+	client.SetSystemdServiceHandler(systemdHandler)
 	kubectlHandler := agentkubectl.NewHandler()
 	kubectlHandler.SetDebug(cfg.Debug)
 	client.SetKubectlHandler(kubectlHandler)
@@ -121,6 +124,8 @@ func runAgent(ctx context.Context, configPath string) error {
 		Terminal:                    cfg.EnableTerminal && agentterminal.Supported(),
 		DockerCompose:               composeHandler != nil,
 		DockerComposeServiceActions: composeHandler != nil && composeHandler.SupportsServiceActions(),
+		DockerResources:             dockerCollector != nil,
+		SystemdServices:             systemdHandler.Supported(),
 		AgentMode:                   cfg.AgentMode,
 		AgentUser:                   currentUsername(),
 		AgentManagement:             true,

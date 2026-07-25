@@ -495,6 +495,13 @@ type fakeNodeOperations struct {
 	composeProjectName string
 	composeServiceName string
 	composeAction      string
+	resourceNodeID     string
+	resourceType       string
+	resourceID         string
+	resourceAction     string
+	systemdNodeID      string
+	systemdServiceName string
+	systemdAction      string
 }
 
 func (f *fakeNodeOperations) ConnectionDiagnostics(context.Context, string) (store.ConnectionDiagnostics, error) {
@@ -609,6 +616,31 @@ func (f *fakeNodeOperations) DockerComposeAction(ctx context.Context, nodeID str
 	return protocol.DockerComposeActionResponse{Type: protocol.MessageTypeDockerComposeActionResponse, Success: true, ProjectName: projectName, ServiceName: serviceName, Action: action}, nil
 }
 
+func (f *fakeNodeOperations) DockerResourceList(ctx context.Context, nodeID string) (protocol.DockerResourceListResponse, error) {
+	f.resourceNodeID = nodeID
+	return protocol.DockerResourceListResponse{Type: protocol.MessageTypeDockerResourceListResponse, Success: true, Supported: true, Images: []protocol.DockerImage{{ID: "abc123", Tags: []string{"nginx:latest"}}}, Volumes: []protocol.DockerVolume{}, Networks: []protocol.DockerNetwork{}}, nil
+}
+
+func (f *fakeNodeOperations) DockerResourceAction(ctx context.Context, nodeID string, resourceType string, resourceID string, action string) (protocol.DockerResourceActionResponse, error) {
+	f.resourceNodeID = nodeID
+	f.resourceType = resourceType
+	f.resourceID = resourceID
+	f.resourceAction = action
+	return protocol.DockerResourceActionResponse{Type: protocol.MessageTypeDockerResourceActionResponse, Success: true, Supported: true, ResourceType: resourceType, ResourceID: resourceID, Action: action}, nil
+}
+
+func (f *fakeNodeOperations) SystemdServiceList(ctx context.Context, nodeID string) (protocol.SystemdServiceListResponse, error) {
+	f.systemdNodeID = nodeID
+	return protocol.SystemdServiceListResponse{Type: protocol.MessageTypeSystemdServiceListResponse, Success: true, Supported: true, Services: []protocol.SystemdService{{Name: "nginx.service", ActiveState: "active"}}}, nil
+}
+
+func (f *fakeNodeOperations) SystemdServiceAction(ctx context.Context, nodeID string, serviceName string, action string) (protocol.SystemdServiceActionResponse, error) {
+	f.systemdNodeID = nodeID
+	f.systemdServiceName = serviceName
+	f.systemdAction = action
+	return protocol.SystemdServiceActionResponse{Type: protocol.MessageTypeSystemdServiceActionResponse, Success: true, ServiceName: serviceName, Action: action}, nil
+}
+
 func TestNodeDockerComposeRoutes(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
 	ops := &fakeNodeOperations{}
@@ -627,6 +659,59 @@ func TestNodeDockerComposeRoutes(t *testing.T) {
 	mux.ServeHTTP(actionResponse, actionRequest)
 	if actionResponse.Code != http.StatusOK || ops.composeProjectName != "demo" || ops.composeServiceName != "web" || ops.composeAction != "restart" {
 		t.Fatalf("action status = %d, project = %q, service = %q, action = %q, body = %s", actionResponse.Code, ops.composeProjectName, ops.composeServiceName, ops.composeAction, actionResponse.Body.String())
+	}
+}
+
+func TestNodeDockerResourceRoutes(t *testing.T) {
+	_, nodes, metrics, _, _ := testRouter(t)
+	ops := &fakeNodeOperations{}
+	mux := NewRouter(nodes, metrics, ops)
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/docker/resources", nil)
+	listResponse := httptest.NewRecorder()
+	mux.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || ops.resourceNodeID != "node-1" {
+		t.Fatalf("list status = %d, node = %q, body = %s", listResponse.Code, ops.resourceNodeID, listResponse.Body.String())
+	}
+	var list protocol.DockerResourceListResponse
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &list); err != nil || !list.Success || len(list.Images) != 1 {
+		t.Fatalf("list response = %#v, err = %v", list, err)
+	}
+
+	actionRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/docker/resources/action", strings.NewReader(`{"resource_type":"image","resource_id":"nginx:latest","action":"pull"}`))
+	actionRequest.Header.Set("Content-Type", "application/json")
+	actionResponse := httptest.NewRecorder()
+	mux.ServeHTTP(actionResponse, actionRequest)
+	if actionResponse.Code != http.StatusOK || ops.resourceType != "image" || ops.resourceID != "nginx:latest" || ops.resourceAction != "pull" {
+		t.Fatalf("action status = %d, values = %q/%q/%q, body = %s", actionResponse.Code, ops.resourceType, ops.resourceID, ops.resourceAction, actionResponse.Body.String())
+	}
+
+	invalidRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/docker/resources/action", strings.NewReader(`{"resource_type":"network","resource_id":"bridge","action":"prune"}`))
+	invalidResponse := httptest.NewRecorder()
+	mux.ServeHTTP(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("invalid action status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
+func TestNodeSystemdServiceRoutes(t *testing.T) {
+	_, nodes, metrics, _, _ := testRouter(t)
+	ops := &fakeNodeOperations{}
+	mux := NewRouter(nodes, metrics, ops)
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/services/systemd", nil)
+	listResponse := httptest.NewRecorder()
+	mux.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || ops.systemdNodeID != "node-1" {
+		t.Fatalf("list status = %d, node = %q, body = %s", listResponse.Code, ops.systemdNodeID, listResponse.Body.String())
+	}
+
+	actionRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/services/systemd/action", strings.NewReader(`{"service_name":"nginx.service","action":"restart"}`))
+	actionRequest.Header.Set("Content-Type", "application/json")
+	actionResponse := httptest.NewRecorder()
+	mux.ServeHTTP(actionResponse, actionRequest)
+	if actionResponse.Code != http.StatusOK || ops.systemdServiceName != "nginx.service" || ops.systemdAction != "restart" {
+		t.Fatalf("action status = %d, service = %q, action = %q, body = %s", actionResponse.Code, ops.systemdServiceName, ops.systemdAction, actionResponse.Body.String())
 	}
 }
 

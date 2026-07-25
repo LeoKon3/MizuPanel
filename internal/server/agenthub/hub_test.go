@@ -546,6 +546,41 @@ func TestComposeServiceActionRejectsAgentWithoutServiceCapability(t *testing.T) 
 	}
 }
 
+func TestDockerResourcesRejectAgentWithoutCapability(t *testing.T) {
+	handler := &Handler{connections: map[string]*agentConnection{
+		"node-1": {nodeID: "node-1", supportsDockerResources: false},
+	}}
+
+	list, err := handler.DockerResourceList(t.Context(), "node-1")
+	if err != nil {
+		t.Fatalf("DockerResourceList returned error: %v", err)
+	}
+	if list.Success || list.Supported || list.Error == "" || list.Images == nil || list.Volumes == nil || list.Networks == nil {
+		t.Fatalf("list response = %#v", list)
+	}
+	action, err := handler.DockerResourceAction(t.Context(), "node-1", "image", "nginx:latest", "pull")
+	if err != nil {
+		t.Fatalf("DockerResourceAction returned error: %v", err)
+	}
+	if action.Success || action.Supported || action.Error == "" {
+		t.Fatalf("action response = %#v", action)
+	}
+}
+
+func TestSystemdServiceActionRejectsAgentWithoutCapability(t *testing.T) {
+	handler := &Handler{connections: map[string]*agentConnection{
+		"node-1": {nodeID: "node-1", supportsSystemdServices: false},
+	}}
+
+	response, err := handler.SystemdServiceAction(t.Context(), "node-1", "nginx.service", "restart")
+	if err != nil {
+		t.Fatalf("SystemdServiceAction returned error: %v", err)
+	}
+	if response.Success || response.Error != "当前 Agent 不支持 systemd 服务管理" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestAgentConnectionEnforcesCombinedTerminalSessionLimit(t *testing.T) {
 	agent := &agentConnection{
 		terminals:      make(map[string]*browserTerminal),

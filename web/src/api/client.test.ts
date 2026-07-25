@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
+import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeDockerResources, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, runNodeDockerResourceAction, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -171,6 +171,22 @@ describe('api client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/nodes/node%201/docker')
     expect(result.available).toBe(false)
+  })
+
+  test('lists Docker resources and sends fixed resource actions', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, supported: true, usage: {}, images: [], volumes: [], networks: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, supported: true })))
+
+    await getNodeDockerResources('node 1')
+    await runNodeDockerResourceAction('node 1', 'image', 'nginx:latest', 'pull')
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/nodes/node%201/docker/resources')
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/nodes/node%201/docker/resources/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource_type: 'image', resource_id: 'nginx:latest', action: 'pull' })
+    })
   })
 
   test('fetches node files and mutates file content', async () => {

@@ -20,11 +20,11 @@
   <tr>
     <td width="50%">
       <a href="../assets/screenshots/host-detail.png"><img src="../assets/screenshots/host-detail.png" alt="主机详情" width="100%" /></a>
-      <br /><sub>主机详情、指标曲线、Docker、进程和 Agent 信息。</sub>
+      <br /><sub>主机详情、指标曲线、Docker 工作区、Systemd、进程、文件与 Agent 管理。</sub>
     </td>
     <td width="50%">
       <a href="../assets/screenshots/add-host.png"><img src="../assets/screenshots/add-host.png" alt="添加服务器" width="100%" /></a>
-      <br /><sub>添加服务器，复制 Linux 或 Windows Agent 安装命令。</sub>
+      <br /><sub>添加服务器，复制 Linux 或 Windows Agent 安装命令；Agent 会持久化身份并支持连接诊断与安全升级。</sub>
     </td>
   </tr>
 </table>
