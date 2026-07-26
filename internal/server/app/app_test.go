@@ -132,6 +132,28 @@ func TestNewHandlerLeavesAgentWebSocketOutsideAdminAuth(t *testing.T) {
 	}
 }
 
+func TestNewHandlerWiresUptimeRoutes(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	handler := NewHandler(Dependencies{
+		Nodes:   store.NewNodeStore(database),
+		Metrics: store.NewMetricStore(database),
+		Uptime:  store.NewUptimeStore(database),
+	})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/uptime/monitors", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"monitors":[]`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestNewHandlerCreatesInstallCommandWithoutLogin(t *testing.T) {
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

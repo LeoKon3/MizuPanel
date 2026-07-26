@@ -66,6 +66,11 @@ type ConnectionDiagnosticsProvider interface {
 	ConnectionDiagnostics(ctx context.Context, nodeID string) (store.ConnectionDiagnostics, error)
 }
 
+type UptimeChecker interface {
+	CheckNow(ctx context.Context, monitorID int64) (store.UptimeMonitor, error)
+	BeginMonitorMutation(monitorID int64) (func(), error)
+}
+
 type Server struct {
 	nodes                   *store.NodeStore
 	organizations           *store.NodeOrganizationStore
@@ -78,6 +83,8 @@ type Server struct {
 	disconnecter            NodeDisconnecter
 	diagnostics             ConnectionDiagnosticsProvider
 	settings                *store.SettingsStore
+	uptime                  *store.UptimeStore
+	uptimeChecker           UptimeChecker
 	defaultMetricsRetention time.Duration
 	terminalTokens          map[string]terminalToken
 	terminalMu              sync.Mutex
@@ -98,6 +105,11 @@ type TerminalConfig struct {
 type SettingsConfig struct {
 	Store                   *store.SettingsStore
 	DefaultMetricsRetention time.Duration
+}
+
+type UptimeConfig struct {
+	Store   *store.UptimeStore
+	Checker UptimeChecker
 }
 
 type AuthConfig struct {
@@ -173,6 +185,9 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 			if typed.DefaultMetricsRetention > 0 {
 				server.defaultMetricsRetention = typed.DefaultMetricsRetention
 			}
+		case UptimeConfig:
+			server.uptime = typed.Store
+			server.uptimeChecker = typed.Checker
 		case AuthConfig:
 			server.auth = NewAuthenticator(typed)
 		case *Authenticator:
@@ -198,6 +213,10 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 		mux.HandleFunc("/api/alerts/rules/", server.requireAuth(server.handleAlertRuleRoutes(alertStore)))
 		mux.HandleFunc("/api/alerts/history", server.requireAuth(server.handleAlertHistory(alertStore)))
 		mux.HandleFunc("/api/alerts/history/", server.requireAuth(server.handleAlertHistoryRoutes(alertStore)))
+	}
+	if server.uptime != nil {
+		mux.HandleFunc("/api/uptime/monitors", server.requireAuth(server.handleUptimeMonitors))
+		mux.HandleFunc("/api/uptime/monitors/", server.requireAuth(server.handleUptimeMonitorRoutes))
 	}
 	if k8sService != nil {
 		mux.HandleFunc("/api/k8s/clusters", server.requireAuth(server.handleK8sClusters(k8sService)))

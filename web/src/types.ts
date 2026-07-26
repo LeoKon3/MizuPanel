@@ -616,6 +616,80 @@ export type AlertHistoryResponse = {
   history: AlertHistory[]
 }
 
+export type UptimeMonitorType = 'http' | 'tcp'
+export type UptimeMonitorStatus = 'pending' | 'up' | 'warning' | 'down'
+export type UptimeIncidentKind = 'availability' | 'certificate'
+
+export type UptimeMonitor = {
+  id: number
+  name: string
+  type: UptimeMonitorType
+  target: string
+  enabled: boolean
+  interval_seconds: number
+  timeout_seconds: number
+  failure_threshold: number
+  expected_status_min: number
+  expected_status_max: number
+  tls_expiry_threshold_days: number
+  notification_channels: NotificationChannel[]
+  status: UptimeMonitorStatus
+  consecutive_failures: number
+  last_latency_ms: number
+  last_status_code: number
+  last_error?: string
+  last_checked_at?: string
+  tls_expires_at?: string
+  tls_remaining_days: number | null
+  created_at: string
+  updated_at: string
+}
+
+export type UptimeMonitorInput = {
+  name: string
+  type: UptimeMonitorType
+  target: string
+  enabled?: boolean
+  interval_seconds: number
+  timeout_seconds: number
+  failure_threshold: number
+  expected_status_min: number
+  expected_status_max: number
+  tls_expiry_threshold_days: number
+  notification_channels: NotificationChannel[]
+}
+
+export type UptimeResult = {
+  id: number
+  monitor_id: number
+  success: boolean
+  latency_ms: number
+  status_code?: number
+  error?: string
+  tls_expires_at?: string
+  checked_at: string
+}
+
+export type UptimeIncident = {
+  id: number
+  monitor_id: number
+  kind: UptimeIncidentKind
+  message: string
+  started_at: string
+  resolved_at?: string
+  notification_sent: boolean
+  notification_error?: string
+  notification_attempted_at?: string
+  recovery_notification_sent: boolean
+  recovery_notification_error?: string
+  recovery_notification_attempted_at?: string
+  created_at: string
+}
+
+export type UptimeMonitorsResponse = { monitors: UptimeMonitor[] }
+export type UptimeResultsResponse = { results: UptimeResult[] }
+export type UptimeIncidentsResponse = { incidents: UptimeIncident[] }
+
 // K8s 集群管理类型
 
 export type K8sCluster = {

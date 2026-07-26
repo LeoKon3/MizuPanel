@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeDockerResources, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, runNodeDockerComposeDeployment, runNodeDockerResourceAction, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
+import { checkUptimeMonitor, createUptimeMonitor, deleteUptimeMonitor, getUptimeIncidents, getUptimeMonitors, getUptimeResults, toggleUptimeMonitor, updateUptimeMonitor } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -373,6 +374,42 @@ describe('api client', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: [42, 43] })
     })
+  })
+
+  test('manages Uptime monitors and history through the typed endpoints', async () => {
+    const monitor = { id: 7, name: 'Website', type: 'http', target: 'https://example.com' }
+    const input = {
+      name: 'Website', type: 'http' as const, target: 'https://example.com', interval_seconds: 60,
+      timeout_seconds: 5, failure_threshold: 3, expected_status_min: 200, expected_status_max: 399,
+      tls_expiry_threshold_days: 30, notification_channels: []
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ monitors: [monitor] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(monitor)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(monitor)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...monitor, enabled: false })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(monitor)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ results: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ incidents: [] })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+
+    await getUptimeMonitors()
+    await createUptimeMonitor(input)
+    await updateUptimeMonitor(7, input)
+    await toggleUptimeMonitor(7, false)
+    await checkUptimeMonitor(7)
+    await getUptimeResults(7, 25)
+    await getUptimeIncidents(7, 10)
+    await deleteUptimeMonitor(7)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/uptime/monitors')
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/uptime/monitors', expect.objectContaining({ method: 'POST', body: JSON.stringify(input) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/uptime/monitors/7', expect.objectContaining({ method: 'PUT', body: JSON.stringify(input) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/uptime/monitors/7/toggle', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ enabled: false }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/uptime/monitors/7/check', { method: 'POST' })
+    expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/uptime/monitors/7/results?limit=25')
+    expect(fetchMock).toHaveBeenNthCalledWith(7, '/api/uptime/monitors/7/incidents?limit=10')
+    expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/uptime/monitors/7', { method: 'DELETE' })
   })
 
   test('marks unauthorized API responses', async () => {

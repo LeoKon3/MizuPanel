@@ -2,6 +2,19 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.7 - 2026-07-26
+
+### Added
+
+- Added Server-originated HTTP, HTTPS, and TCP uptime monitors with scheduled and manual checks, current status and latency projections, and bounded result history.
+- Added verified HTTPS certificate-expiry warnings plus restart-safe availability and certificate incidents with consecutive-failure thresholds, one-time trigger notifications, and recovery notifications through Webhook, DingTalk, and Feishu.
+- Added authenticated monitor CRUD, toggle, check-now, result-history, and incident-history REST APIs under `/api/uptime/monitors`.
+- Added the `/uptime` Dashboard page for monitor summaries, configuration, lifecycle actions, and history, and extracted the notification-channel editor for reuse with alert rules.
+
+### Changed
+
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.7.
+
 ## v0.1.6 - 2026-07-25
 
 ### Added

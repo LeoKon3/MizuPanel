@@ -516,6 +516,7 @@ describe('NodeDetail file manager operations', () => {
     fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
     fireEvent.change(await screen.findByLabelText('直接打开路径'), { target: { value: '/etc' } })
     fireEvent.click(screen.getByRole('button', { name: '打开路径' }))
+    expect(await screen.findByText((_content, element) => element?.textContent === '当前路径：/etc')).toBeInTheDocument()
     expect(await screen.findByText('mizupanel.yaml')).toBeInTheDocument()
 
     const file = new File([new Uint8Array([0, 1, 2])], 'upload.bin', { type: 'application/octet-stream' })

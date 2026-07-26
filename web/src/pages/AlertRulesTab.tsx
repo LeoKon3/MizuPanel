@@ -3,6 +3,7 @@ import { AlertTriangle, Edit2, Plus, Trash2, X } from 'lucide-react'
 import { createAlertRule, deleteAlertRule, getAlertRules, toggleAlertRule, updateAlertRule } from '../api/client'
 import type { AlertRule, Node, NotificationChannel } from '../types'
 import { Toast } from '../components/Toast'
+import { NotificationChannelsEditor } from '../components/NotificationChannelsEditor'
 
 type AlertRulesTabProps = {
   nodes: Node[]
@@ -177,18 +178,6 @@ export function AlertRulesTab({ nodes }: AlertRulesTabProps) {
         setToast({ message: `告警规则删除失败: ${message}`, type: 'error' })
       })
       .finally(() => setDeletingRuleID(undefined))
-  }
-
-  const addChannel = (type: 'webhook' | 'dingtalk' | 'feishu') => {
-    setFormChannels((current) => [...current, { type, webhook_url: '' }])
-  }
-
-  const updateChannel = (index: number, updates: Partial<NotificationChannel>) => {
-    setFormChannels((current) => current.map((ch, i) => (i === index ? { ...ch, ...updates } : ch)))
-  }
-
-  const removeChannel = (index: number) => {
-    setFormChannels((current) => current.filter((_, i) => i !== index))
   }
 
   const toggleNodeSelection = (nodeID: string) => {
@@ -434,83 +423,7 @@ export function AlertRulesTab({ nodes }: AlertRulesTabProps) {
                 ) : null}
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-black text-foreground">通知渠道</p>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => addChannel('webhook')}
-                      className="soft-button min-h-8 cursor-pointer border border-border bg-card px-3 text-xs font-black text-foreground hover:border-primary/50 focus:outline-none focus:ring-4 focus:ring-primary/20"
-                    >
-                      + Webhook
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addChannel('dingtalk')}
-                      className="soft-button min-h-8 cursor-pointer border border-border bg-card px-3 text-xs font-black text-foreground hover:border-primary/50 focus:outline-none focus:ring-4 focus:ring-primary/20"
-                    >
-                      + DingTalk
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addChannel('feishu')}
-                      className="soft-button min-h-8 cursor-pointer border border-border bg-card px-3 text-xs font-black text-foreground hover:border-primary/50 focus:outline-none focus:ring-4 focus:ring-primary/20"
-                    >
-                      + 飞书
-                    </button>
-                  </div>
-                </div>
-
-                {formChannels.length === 0 ? (
-                  <p className="text-xs font-semibold text-muted-foreground">暂无通知渠道，点击上方按钮添加</p>
-                ) : (
-                  <div className="space-y-3">
-                    {formChannels.map((channel, index) => (
-                      <div key={index} className="rounded-2xl border border-border/85 bg-surface/80 p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <span className="text-xs font-black uppercase text-primary">
-                            {channel.type === 'webhook'
-                              ? 'Webhook'
-                              : channel.type === 'dingtalk'
-                                ? 'DingTalk'
-                                : '飞书'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => removeChannel(index)}
-                            className="text-xs font-black text-danger hover:underline"
-                          >
-                            删除
-                          </button>
-                        </div>
-                        <input
-                          type="text"
-                          value={channel.webhook_url || ''}
-                          onChange={(e) => updateChannel(index, { webhook_url: e.target.value })}
-                          placeholder={
-                            channel.type === 'webhook'
-                              ? 'https://...'
-                              : channel.type === 'dingtalk'
-                              ? 'https://oapi.dingtalk.com/robot/send?access_token=...'
-                              : 'https://open.feishu.cn/open-apis/bot/v2/hook/...'
-                          }
-                          className="soft-input min-h-9 w-full px-3 text-xs font-bold"
-                        />
-                        {channel.type === 'dingtalk' || channel.type === 'feishu' ? (
-                          <input
-                            type="text"
-                            value={channel.secret || ''}
-                            onChange={(e) => updateChannel(index, { secret: e.target.value })}
-                            placeholder="Secret（可选，用于签名验证）"
-                            className="soft-input mt-2 min-h-9 w-full px-3 text-xs font-bold"
-                          />
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <NotificationChannelsEditor value={formChannels} onChange={setFormChannels} disabled={formSaving} />
 
               {formError ? (
                 <div className="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm font-black text-danger">

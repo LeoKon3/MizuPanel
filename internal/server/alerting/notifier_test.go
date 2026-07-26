@@ -71,6 +71,156 @@ func TestSendWebhook(t *testing.T) {
 	}
 }
 
+func TestMetricWebhookContractDoesNotGainUptimeFields(t *testing.T) {
+	var received map[string]any
+	notifier := NewNotifier()
+	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		return responseWithBody(http.StatusNoContent, ""), nil
+	})
+	payload := AlertPayload{
+		RuleName: "CPU High", NodeID: "node-1", NodeName: "Node", MetricField: "cpu_usage",
+		MetricValue: 90, Threshold: 80, Operator: ">", Status: "triggered",
+	}
+	if err := notifier.Send(context.Background(), NotificationChannel{Type: "webhook", WebhookURL: "http://webhook.invalid"}, payload); err != nil {
+		t.Fatalf("send metric webhook: %v", err)
+	}
+	wantKeys := []string{"rule_name", "node_id", "node_name", "metric_field", "metric_value", "threshold", "operator", "triggered_at", "status"}
+	if len(received) != len(wantKeys) {
+		t.Fatalf("metric webhook keys = %#v", received)
+	}
+	for _, key := range wantKeys {
+		if _, ok := received[key]; !ok {
+			t.Fatalf("metric webhook missing %q: %#v", key, received)
+		}
+	}
+}
+
+func TestSendUptimeWebhookUsesTypedPayload(t *testing.T) {
+	var received UptimePayload
+	notifier := NewNotifier()
+	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodPost || request.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("request method=%s content-type=%s", request.Method, request.Header.Get("Content-Type"))
+		}
+		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+			t.Fatalf("decode uptime body: %v", err)
+		}
+		return responseWithBody(http.StatusNoContent, ""), nil
+	})
+	triggeredAt := time.Date(2026, 7, 26, 8, 0, 0, 0, time.UTC)
+	payload := UptimePayload{
+		MonitorName: "Website", Target: "https://example.com", IncidentKind: store.UptimeIncidentAvailability,
+		Status: "triggered", MonitorState: store.UptimeStatusDown, LatencyMS: 5000, Error: "连接超时", TriggeredAt: triggeredAt,
+	}
+	if err := notifier.SendUptime(context.Background(), NotificationChannel{Type: "webhook", WebhookURL: "http://webhook.invalid"}, payload); err != nil {
+		t.Fatalf("send uptime webhook: %v", err)
+	}
+	if received.MonitorName != payload.MonitorName || received.Target != payload.Target || received.Error != "连接超时" || !received.TriggeredAt.Equal(triggeredAt) {
+		t.Fatalf("received uptime payload = %+v", received)
+	}
+}
+
+func TestSendUptimeDingTalkAndFeishuContent(t *testing.T) {
+	for _, channelType := range []string{"dingtalk", "feishu"} {
+		t.Run(channelType, func(t *testing.T) {
+			var body string
+			notifier := NewNotifier()
+			notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				encoded, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Fatalf("read body: %v", err)
+				}
+				body = string(encoded)
+				if channelType == "dingtalk" {
+					return responseWithBody(http.StatusOK, `{"errcode":0}`), nil
+				}
+				return responseWithBody(http.StatusOK, `{"code":0}`), nil
+			})
+			expiresAt := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+			payload := UptimePayload{
+				MonitorName: "TLS Site", Target: "https://example.com", IncidentKind: store.UptimeIncidentCertificate,
+				Status: "triggered", MonitorState: store.UptimeStatusWarning, TLSExpiresAt: &expiresAt, TriggeredAt: time.Now().UTC(),
+			}
+			if err := notifier.SendUptime(context.Background(), NotificationChannel{Type: channelType, WebhookURL: "http://webhook.invalid"}, payload); err != nil {
+				t.Fatalf("send %s: %v", channelType, err)
+			}
+			for _, fragment := range []string{"TLS Site", "https://example.com", "HTTPS", "warning"} {
+				if !strings.Contains(body, fragment) {
+					t.Fatalf("%s body missing %q: %s", channelType, fragment, body)
+				}
+			}
+		})
+	}
+}
+
+func TestSendUptimeDingTalkWithSecretPreservesParsedSignature(t *testing.T) {
+	const secret = "test-secret-4"
+	fixedNow := time.UnixMilli(1785052800000)
+	notifier := NewNotifier()
+	notifier.now = func() time.Time { return fixedNow }
+	expectedSign := notifier.dingTalkSign(fixedNow.UnixMilli(), secret)
+	if !strings.Contains(expectedSign, "+") {
+		t.Fatalf("test signature %q does not exercise query escaping", expectedSign)
+	}
+	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if got := request.URL.Query().Get("sign"); got != expectedSign {
+			t.Fatalf("parsed sign = %q, want %q", got, expectedSign)
+		}
+		return responseWithBody(http.StatusOK, `{"errcode":0}`), nil
+	})
+
+	err := notifier.SendUptime(context.Background(), NotificationChannel{
+		Type:       "dingtalk",
+		WebhookURL: "http://dingtalk.invalid/robot/send?access_token=token",
+		Secret:     secret,
+	}, UptimePayload{Status: "triggered", TriggeredAt: fixedNow})
+	if err != nil {
+		t.Fatalf("send uptime dingtalk with secret: %v", err)
+	}
+}
+
+func TestDeliverUptimeRetriesTransientFailuresAndFansOut(t *testing.T) {
+	var retryAttempts atomic.Int32
+	var successAttempts atomic.Int32
+	notifier := NewNotifier()
+	notifier.uptimeRetryDelays = []time.Duration{0, time.Millisecond, time.Millisecond}
+	notifier.uptimeAttemptTimeout = time.Second
+	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host == "retry.invalid" {
+			if retryAttempts.Add(1) < 3 {
+				return responseWithBody(http.StatusServiceUnavailable, ""), nil
+			}
+			return responseWithBody(http.StatusNoContent, ""), nil
+		}
+		successAttempts.Add(1)
+		return responseWithBody(http.StatusNoContent, ""), nil
+	})
+	result := notifier.DeliverUptime(context.Background(), []store.NotificationChannel{
+		{Type: "webhook", WebhookURL: "http://retry.invalid/notify"},
+		{Type: "webhook", WebhookURL: "http://success.invalid/notify"},
+	}, UptimePayload{Status: "triggered"})
+	if !result.Sent || result.Error != "" || result.AttemptedAt.IsZero() {
+		t.Fatalf("delivery = %+v", result)
+	}
+	if retryAttempts.Load() != 3 || successAttempts.Load() != 1 {
+		t.Fatalf("retry attempts=%d success attempts=%d", retryAttempts.Load(), successAttempts.Load())
+	}
+}
+
+func TestDeliverUptimeErrorDoesNotExposeWebhookURL(t *testing.T) {
+	const secretURL = "://uptime-secret-token"
+	result := NewNotifier().DeliverUptime(context.Background(), []store.NotificationChannel{{Type: "webhook", WebhookURL: secretURL}}, UptimePayload{Status: "triggered"})
+	if result.Error == "" {
+		t.Fatal("expected delivery error")
+	}
+	if strings.Contains(result.Error, secretURL) || strings.Contains(result.Error, "secret-token") {
+		t.Fatalf("delivery leaked webhook URL: %q", result.Error)
+	}
+}
+
 func TestSendWebhookWithHeaders(t *testing.T) {
 	notifier := NewNotifier()
 	notifier.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {

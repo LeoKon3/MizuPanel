@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、Systemd、告警和 Kubernetes 资源。
+  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、Systemd、告警、服务拨测和 Kubernetes 资源。
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.6-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.7-14B8A6">
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  Server + Dashboard + Agent 架构。Agent 主动连接 Server，上报指标并承载允许的运维操作；适合个人服务器、家庭实验室、小型主机集群和轻量 Kubernetes 管理。
+  Server + Dashboard + Agent 架构。Agent 主动连接 Server，上报指标并承载允许的运维操作；Server 可主动拨测其网络可达的服务，适合个人服务器、家庭实验室、小型主机集群和轻量 Kubernetes 管理。
 </p>
 
 <table>
@@ -65,6 +65,9 @@
     <td width="33%"><strong>Kubernetes 管理</strong><br /><sub>集群接入、资源概览、Namespace、Node、Pod、Workload、Service、Ingress。</sub></td>
     <td width="33%"><strong>K8s 诊断</strong><br /><sub>Pod 日志、Events、Describe、YAML 查看与编辑、资源操作。</sub></td>
     <td width="33%"><strong>资源创建</strong><br /><sub>Deployment、Pod、Service、Ingress、ConfigMap、Secret、PVC、Job、CronJob。</sub></td>
+  </tr>
+  <tr>
+    <td colspan="3"><strong>服务拨测</strong><br /><sub>由 Server 定时或手动发起 HTTP、HTTPS、TCP 检测，展示状态与延迟，预警 TLS 证书到期，并通过现有渠道发送故障与恢复通知。</sub></td>
   </tr>
 </table>
 

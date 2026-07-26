@@ -50,6 +50,200 @@ func TestMigrateSQLiteCreatesAlertTables(t *testing.T) {
 	}
 }
 
+func TestMigrateSQLiteCreatesUptimeSchema(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for _, table := range []string{"uptime_monitors", "uptime_results", "uptime_incidents"} {
+		var name string
+		if err := database.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
+			t.Fatalf("missing table %s: %v", table, err)
+		}
+	}
+	var indexCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND (name LIKE 'idx_uptime_%' OR name = 'uq_uptime_incidents_active')`).Scan(&indexCount); err != nil {
+		t.Fatalf("query uptime indexes: %v", err)
+	}
+	if indexCount != 4 {
+		t.Fatalf("uptime index count = %d, want 4", indexCount)
+	}
+
+	result, err := database.Exec(`INSERT INTO uptime_monitors (
+		name, type, target, interval_seconds, timeout_seconds, failure_threshold,
+		expected_status_min, expected_status_max, tls_expiry_threshold_days,
+		notification_channels, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"Website", "http", "https://example.com", 60, 5, 3, 200, 399, 30, "[]", "2026-07-25T00:00:00Z", "2026-07-25T00:00:00Z")
+	if err != nil {
+		t.Fatalf("insert monitor: %v", err)
+	}
+	monitorID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("monitor id: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO uptime_results (monitor_id, success, latency_ms, checked_at) VALUES (?, ?, ?, ?)`, monitorID, 1, 25, "2026-07-25T00:01:00Z"); err != nil {
+		t.Fatalf("insert result: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO uptime_incidents (monitor_id, kind, message, started_at, created_at) VALUES (?, ?, ?, ?, ?)`, monitorID, "availability", "down", "2026-07-25T00:01:00Z", "2026-07-25T00:01:00Z"); err != nil {
+		t.Fatalf("insert incident: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO uptime_incidents (monitor_id, kind, message, started_at, created_at) VALUES (?, ?, ?, ?, ?)`, monitorID, "availability", "still down", "2026-07-25T00:02:00Z", "2026-07-25T00:02:00Z"); err == nil {
+		t.Fatal("inserted a second unresolved availability incident")
+	}
+	if _, err := database.Exec(`UPDATE uptime_incidents SET resolved_at = ?, active_marker = NULL WHERE monitor_id = ? AND kind = ?`, "2026-07-25T00:03:00Z", monitorID, "availability"); err != nil {
+		t.Fatalf("resolve incident: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO uptime_incidents (monitor_id, kind, message, started_at, created_at) VALUES (?, ?, ?, ?, ?)`, monitorID, "availability", "down again", "2026-07-25T00:04:00Z", "2026-07-25T00:04:00Z"); err != nil {
+		t.Fatalf("insert incident after resolution: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM uptime_monitors WHERE id = ?`, monitorID); err != nil {
+		t.Fatalf("delete monitor: %v", err)
+	}
+	for _, table := range []string{"uptime_results", "uptime_incidents"} {
+		var count int
+		if err := database.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows = %d, want cascade cleanup", table, count)
+		}
+	}
+}
+
+func TestMigrateSQLiteUpgradesCurrentUptimeIncidentSchema(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	if _, err := database.Exec(`CREATE TABLE uptime_incidents (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		monitor_id INTEGER NOT NULL,
+		kind TEXT NOT NULL,
+		message TEXT NOT NULL DEFAULT '',
+		started_at DATETIME NOT NULL,
+		resolved_at DATETIME,
+		notification_sent INTEGER NOT NULL DEFAULT 0,
+		notification_error TEXT NOT NULL DEFAULT '',
+		notification_attempted_at DATETIME,
+		recovery_notification_sent INTEGER NOT NULL DEFAULT 0,
+		recovery_notification_error TEXT NOT NULL DEFAULT '',
+		recovery_notification_attempted_at DATETIME,
+		created_at DATETIME NOT NULL
+	)`); err != nil {
+		t.Fatalf("create current uptime_incidents schema: %v", err)
+	}
+	for _, values := range []struct {
+		kind       string
+		startedAt  string
+		resolvedAt any
+	}{
+		{kind: "availability", startedAt: "2026-07-25T00:01:00Z"},
+		{kind: "availability", startedAt: "2026-07-25T00:02:00Z"},
+		{kind: "availability", startedAt: "2026-07-25T00:03:00Z", resolvedAt: "2026-07-25T00:04:00Z"},
+		{kind: "certificate", startedAt: "2026-07-25T00:05:00Z"},
+	} {
+		if _, err := database.Exec(`INSERT INTO uptime_incidents (monitor_id, kind, started_at, resolved_at, created_at) VALUES (?, ?, ?, ?, ?)`, 7, values.kind, values.startedAt, values.resolvedAt, values.startedAt); err != nil {
+			t.Fatalf("seed %s incident: %v", values.kind, err)
+		}
+	}
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("migrate current uptime schema: %v", err)
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+
+	rows, err := database.Query(`SELECT id, resolved_at, active_marker FROM uptime_incidents ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query migrated incidents: %v", err)
+	}
+	defer rows.Close()
+	type incidentState struct {
+		resolved sql.NullString
+		active   sql.NullInt64
+	}
+	states := make([]incidentState, 0, 4)
+	for rows.Next() {
+		var id int64
+		var state incidentState
+		if err := rows.Scan(&id, &state.resolved, &state.active); err != nil {
+			t.Fatalf("scan migrated incident: %v", err)
+		}
+		states = append(states, state)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated incidents: %v", err)
+	}
+	if len(states) != 4 {
+		t.Fatalf("migrated incidents = %d, want 4", len(states))
+	}
+	if !states[0].resolved.Valid || states[0].active.Valid {
+		t.Fatalf("older duplicate state = %+v, want resolved and inactive", states[0])
+	}
+	if states[1].resolved.Valid || !states[1].active.Valid || states[1].active.Int64 != 1 {
+		t.Fatalf("newest availability state = %+v, want unresolved and active", states[1])
+	}
+	if !states[2].resolved.Valid || states[2].active.Valid {
+		t.Fatalf("resolved incident state = %+v, want inactive", states[2])
+	}
+	if states[3].resolved.Valid || !states[3].active.Valid || states[3].active.Int64 != 1 {
+		t.Fatalf("certificate state = %+v, want unresolved and active", states[3])
+	}
+
+	var indexSQL string
+	if err := database.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'uq_uptime_incidents_active'`).Scan(&indexSQL); err != nil {
+		t.Fatalf("query active incident index: %v", err)
+	}
+	if !strings.Contains(strings.ToUpper(indexSQL), "CREATE UNIQUE INDEX") {
+		t.Fatalf("active incident index is not unique: %s", indexSQL)
+	}
+	if _, err := database.Exec(`INSERT INTO uptime_incidents (monitor_id, kind, started_at, created_at) VALUES (?, ?, ?, ?)`, 7, "availability", "2026-07-25T00:06:00Z", "2026-07-25T00:06:00Z"); err == nil {
+		t.Fatal("migrated schema allowed a duplicate unresolved incident")
+	}
+}
+
+func TestMySQLMigrationIncludesUptimeSchema(t *testing.T) {
+	statements := strings.Join(mysqlMigrationStatements(), "\n")
+	for _, fragment := range []string{
+		"uptime_monitors",
+		"uptime_results",
+		"uptime_incidents",
+		"idx_uptime_monitors_enabled",
+		"idx_uptime_results_monitor_checked",
+		"active_marker BOOLEAN DEFAULT 1",
+		"notification_channels LONGTEXT",
+		"notification_error VARCHAR(1024) NOT NULL DEFAULT ''",
+	} {
+		if !strings.Contains(statements, fragment) {
+			t.Fatalf("MySQL uptime migration missing %s", fragment)
+		}
+	}
+	compatibility := strings.Join(uptimeIncidentCompatibilityColumnStatements(DialectMySQL), "\n")
+	if !strings.Contains(compatibility, "ADD COLUMN active_marker BOOLEAN DEFAULT 1") {
+		t.Fatalf("MySQL uptime compatibility migration missing active marker: %s", compatibility)
+	}
+	invariant := strings.Join(uptimeIncidentInvariantStatements(DialectMySQL), "\n")
+	for _, fragment := range []string{
+		"JOIN uptime_incidents AS newer",
+		"active_marker = NULL WHERE resolved_at IS NOT NULL",
+		"active_marker = 1 WHERE resolved_at IS NULL",
+		"CREATE UNIQUE INDEX uq_uptime_incidents_active ON uptime_incidents(monitor_id, kind, active_marker)",
+	} {
+		if !strings.Contains(invariant, fragment) {
+			t.Fatalf("MySQL uptime invariant migration missing %s", fragment)
+		}
+	}
+}
+
 func TestMigrateSQLiteAlertRulesSchema(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

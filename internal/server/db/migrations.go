@@ -190,6 +190,60 @@ func sqliteMigrationStatements() []string {
 				);`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_clusters_node ON k8s_clusters(node_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_k8s_clusters_status ON k8s_clusters(status);`,
+		`CREATE TABLE IF NOT EXISTS uptime_monitors (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT NOT NULL,
+					type TEXT NOT NULL,
+					target TEXT NOT NULL,
+					enabled INTEGER NOT NULL DEFAULT 1,
+					interval_seconds INTEGER NOT NULL,
+					timeout_seconds INTEGER NOT NULL,
+					failure_threshold INTEGER NOT NULL,
+					expected_status_min INTEGER NOT NULL,
+					expected_status_max INTEGER NOT NULL,
+					tls_expiry_threshold_days INTEGER NOT NULL,
+					notification_channels TEXT NOT NULL DEFAULT '[]',
+					status TEXT NOT NULL DEFAULT 'pending',
+					consecutive_failures INTEGER NOT NULL DEFAULT 0,
+					last_latency_ms INTEGER NOT NULL DEFAULT 0,
+					last_status_code INTEGER NOT NULL DEFAULT 0,
+					last_error TEXT NOT NULL DEFAULT '',
+					last_checked_at DATETIME,
+					tls_expires_at DATETIME,
+					created_at DATETIME NOT NULL,
+					updated_at DATETIME NOT NULL
+				);`,
+		`CREATE INDEX IF NOT EXISTS idx_uptime_monitors_enabled ON uptime_monitors(enabled);`,
+		`CREATE TABLE IF NOT EXISTS uptime_results (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					monitor_id INTEGER NOT NULL,
+					success INTEGER NOT NULL,
+					latency_ms INTEGER NOT NULL,
+					status_code INTEGER NOT NULL DEFAULT 0,
+					error TEXT NOT NULL DEFAULT '',
+					tls_expires_at DATETIME,
+					checked_at DATETIME NOT NULL,
+					FOREIGN KEY (monitor_id) REFERENCES uptime_monitors(id) ON DELETE CASCADE
+				);`,
+		`CREATE INDEX IF NOT EXISTS idx_uptime_results_monitor_checked ON uptime_results(monitor_id, checked_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS uptime_incidents (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					monitor_id INTEGER NOT NULL,
+					kind TEXT NOT NULL,
+					message TEXT NOT NULL DEFAULT '',
+					started_at DATETIME NOT NULL,
+					resolved_at DATETIME,
+					active_marker INTEGER DEFAULT 1,
+					notification_sent INTEGER NOT NULL DEFAULT 0,
+					notification_error TEXT NOT NULL DEFAULT '',
+					notification_attempted_at DATETIME,
+					recovery_notification_sent INTEGER NOT NULL DEFAULT 0,
+					recovery_notification_error TEXT NOT NULL DEFAULT '',
+					recovery_notification_attempted_at DATETIME,
+					created_at DATETIME NOT NULL,
+					FOREIGN KEY (monitor_id) REFERENCES uptime_monitors(id) ON DELETE CASCADE
+				);`,
+		`CREATE INDEX IF NOT EXISTS idx_uptime_incidents_monitor_started ON uptime_incidents(monitor_id, started_at DESC);`,
 	}
 }
 
@@ -367,6 +421,60 @@ func mysqlMigrationStatements() []string {
 				);`,
 		`CREATE INDEX idx_k8s_clusters_node ON k8s_clusters(node_id);`,
 		`CREATE INDEX idx_k8s_clusters_status ON k8s_clusters(status);`,
+		`CREATE TABLE IF NOT EXISTS uptime_monitors (
+					id BIGINT AUTO_INCREMENT PRIMARY KEY,
+					name VARCHAR(255) NOT NULL,
+					type VARCHAR(16) NOT NULL,
+					target VARCHAR(2048) NOT NULL,
+					enabled BOOLEAN NOT NULL DEFAULT 1,
+					interval_seconds INT NOT NULL,
+					timeout_seconds INT NOT NULL,
+					failure_threshold INT NOT NULL,
+					expected_status_min INT NOT NULL,
+					expected_status_max INT NOT NULL,
+					tls_expiry_threshold_days INT NOT NULL,
+					notification_channels LONGTEXT NOT NULL,
+					status VARCHAR(16) NOT NULL DEFAULT 'pending',
+					consecutive_failures INT NOT NULL DEFAULT 0,
+					last_latency_ms BIGINT NOT NULL DEFAULT 0,
+					last_status_code INT NOT NULL DEFAULT 0,
+					last_error VARCHAR(1024) NOT NULL DEFAULT '',
+					last_checked_at VARCHAR(64),
+					tls_expires_at VARCHAR(64),
+					created_at VARCHAR(64) NOT NULL,
+					updated_at VARCHAR(64) NOT NULL,
+					INDEX idx_uptime_monitors_enabled (enabled)
+				);`,
+		`CREATE TABLE IF NOT EXISTS uptime_results (
+					id BIGINT AUTO_INCREMENT PRIMARY KEY,
+					monitor_id BIGINT NOT NULL,
+					success BOOLEAN NOT NULL,
+					latency_ms BIGINT NOT NULL,
+					status_code INT NOT NULL DEFAULT 0,
+					error VARCHAR(1024) NOT NULL DEFAULT '',
+					tls_expires_at VARCHAR(64),
+					checked_at VARCHAR(64) NOT NULL,
+					INDEX idx_uptime_results_monitor_checked (monitor_id, checked_at),
+					FOREIGN KEY (monitor_id) REFERENCES uptime_monitors(id) ON DELETE CASCADE
+				);`,
+		`CREATE TABLE IF NOT EXISTS uptime_incidents (
+					id BIGINT AUTO_INCREMENT PRIMARY KEY,
+					monitor_id BIGINT NOT NULL,
+					kind VARCHAR(32) NOT NULL,
+					message VARCHAR(1024) NOT NULL DEFAULT '',
+					started_at VARCHAR(64) NOT NULL,
+					resolved_at VARCHAR(64),
+					active_marker BOOLEAN DEFAULT 1,
+					notification_sent BOOLEAN NOT NULL DEFAULT 0,
+					notification_error VARCHAR(1024) NOT NULL DEFAULT '',
+					notification_attempted_at VARCHAR(64),
+					recovery_notification_sent BOOLEAN NOT NULL DEFAULT 0,
+					recovery_notification_error VARCHAR(1024) NOT NULL DEFAULT '',
+					recovery_notification_attempted_at VARCHAR(64),
+					created_at VARCHAR(64) NOT NULL,
+					INDEX idx_uptime_incidents_monitor_started (monitor_id, started_at),
+					FOREIGN KEY (monitor_id) REFERENCES uptime_monitors(id) ON DELETE CASCADE
+				);`,
 	}
 }
 
@@ -404,8 +512,56 @@ func migrateStatements(db *sql.DB, dialect Dialect, statements []string) error {
 			return err
 		}
 	}
+	for _, statement := range uptimeIncidentCompatibilityColumnStatements(dialect) {
+		if err := addColumnIfMissing(db, statement); err != nil {
+			return err
+		}
+	}
+	for _, statement := range uptimeIncidentInvariantStatements(dialect) {
+		if _, err := db.Exec(statement); err != nil && !isIgnorableMigrationError(err) {
+			return err
+		}
+	}
 	_, err := db.Exec(`UPDATE nodes SET agent_mode = COALESCE(NULLIF(agent_mode, ''), 'normal'), agent_user = COALESCE(agent_user, '')`)
 	return err
+}
+
+func uptimeIncidentCompatibilityColumnStatements(dialect Dialect) []string {
+	if dialect == DialectMySQL {
+		return []string{`ALTER TABLE uptime_incidents ADD COLUMN active_marker BOOLEAN DEFAULT 1`}
+	}
+	return []string{`ALTER TABLE uptime_incidents ADD COLUMN active_marker INTEGER DEFAULT 1`}
+}
+
+func uptimeIncidentInvariantStatements(dialect Dialect) []string {
+	resolveDuplicates := `UPDATE uptime_incidents
+		SET resolved_at = started_at
+		WHERE resolved_at IS NULL
+			AND EXISTS (
+				SELECT 1 FROM uptime_incidents AS newer
+				WHERE newer.monitor_id = uptime_incidents.monitor_id
+					AND newer.kind = uptime_incidents.kind
+					AND newer.resolved_at IS NULL
+					AND newer.id > uptime_incidents.id
+			)`
+	uniqueIndex := `CREATE UNIQUE INDEX IF NOT EXISTS uq_uptime_incidents_active ON uptime_incidents(monitor_id, kind, active_marker)`
+	if dialect == DialectMySQL {
+		resolveDuplicates = `UPDATE uptime_incidents AS stale
+			JOIN uptime_incidents AS newer
+				ON newer.monitor_id = stale.monitor_id
+				AND newer.kind = stale.kind
+				AND newer.resolved_at IS NULL
+				AND newer.id > stale.id
+			SET stale.resolved_at = stale.started_at
+			WHERE stale.resolved_at IS NULL`
+		uniqueIndex = `CREATE UNIQUE INDEX uq_uptime_incidents_active ON uptime_incidents(monitor_id, kind, active_marker)`
+	}
+	return []string{
+		resolveDuplicates,
+		`UPDATE uptime_incidents SET active_marker = NULL WHERE resolved_at IS NOT NULL`,
+		`UPDATE uptime_incidents SET active_marker = 1 WHERE resolved_at IS NULL`,
+		uniqueIndex,
+	}
 }
 
 func alertHistoryCompatibilityColumnStatements(dialect Dialect) []string {

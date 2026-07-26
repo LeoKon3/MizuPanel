@@ -17,6 +17,7 @@ import { SystemSettingsPage } from './pages/SystemSettingsPage'
 import { TerminalPage } from './pages/TerminalPage'
 import { K8sClustersPage } from './pages/K8sClustersPage'
 import { K8sClusterDetailPage } from './pages/K8sClusterDetailPage'
+import { UptimePage } from './pages/UptimePage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
 import type { DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
@@ -41,12 +42,13 @@ type AppRoute =
   | { kind: 'history' }
   | { kind: 'settings' }
   | { kind: 'alerts' }
+  | { kind: 'uptime' }
   | { kind: 'logs' }
   | { kind: 'k8s-clusters' }
   | { kind: 'k8s-cluster-detail', clusterID: string }
   | { kind: 'dashboard' }
 
-type AppPage = 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'logs' | 'k8s'
+type AppPage = 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'uptime' | 'logs' | 'k8s'
 type NavPage = Exclude<AppPage, 'history' | 'logs'>
 type ThemeMode = 'light' | 'dark'
 
@@ -63,6 +65,7 @@ function currentRoute(): AppRoute {
   if (window.location.pathname === '/history') return { kind: 'history' }
   if (window.location.pathname === '/settings') return { kind: 'settings' }
   if (window.location.pathname === '/alerts') return { kind: 'alerts' }
+  if (window.location.pathname === '/uptime') return { kind: 'uptime' }
   if (window.location.pathname === '/overview') return { kind: 'overview' }
   if (window.location.pathname === '/logs') return { kind: 'logs' }
   return { kind: 'dashboard' }
@@ -100,22 +103,24 @@ const pageCopy: Record<AppPage, { title: string, description: string }> = {
   history: { title: '历史记录', description: '按节点和时间范围查看历史指标。' },
   settings: { title: '系统设置', description: '调整 MizuPanel 的全局运行参数。' },
   alerts: { title: '告警', description: '查看告警记录和配置告警规则。' },
+  uptime: { title: '服务拨测', description: '从 Server 网络持续检查 HTTP、HTTPS 和 TCP 服务。' },
   logs: { title: '日志', description: '日志接口接入前仅提供控制台空状态壳。' },
   k8s: { title: 'Kubernetes 集群', description: '管理通过 Agent 节点连接的 K8s 集群。' }
 }
 
-const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts' | 'settings' | 'alerts' | 'k8s' }> = [
+const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts' | 'settings' | 'alerts' | 'uptime' | 'k8s' }> = [
   { page: 'overview', label: '概览', icon: 'overview' },
   { page: 'hosts', label: '主机', icon: 'hosts' },
   { page: 'k8s', label: 'Kubernetes', icon: 'k8s' },
   { page: 'alerts', label: '告警', icon: 'alerts' },
+  { page: 'uptime', label: '服务拨测', icon: 'uptime' },
   { page: 'settings', label: '系统设置', icon: 'settings' }
 ]
 
 export default function App() {
   const [routeVersion, setRouteVersion] = useState(0)
   const route = useMemo(() => currentRoute(), [routeVersion])
-  const [page, setPage] = useState<AppPage>(route.kind === 'history' ? 'history' : route.kind === 'settings' ? 'settings' : route.kind === 'alerts' ? 'alerts' : route.kind === 'logs' ? 'logs' : route.kind === 'overview' ? 'overview' : route.kind === 'k8s-clusters' || route.kind === 'k8s-cluster-detail' ? 'k8s' : 'hosts')
+  const [page, setPage] = useState<AppPage>(route.kind === 'history' ? 'history' : route.kind === 'settings' ? 'settings' : route.kind === 'alerts' ? 'alerts' : route.kind === 'uptime' ? 'uptime' : route.kind === 'logs' ? 'logs' : route.kind === 'overview' ? 'overview' : route.kind === 'k8s-clusters' || route.kind === 'k8s-cluster-detail' ? 'k8s' : 'hosts')
   const [theme, setTheme] = useState<ThemeMode>(() => storedTheme())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => storedSidebarCollapsed())
   const [authEnabled, setAuthEnabled] = useState(false)
@@ -628,6 +633,8 @@ export default function App() {
         ? '/settings'
         : nextPage === 'alerts'
           ? '/alerts'
+          : nextPage === 'uptime'
+            ? '/uptime'
           : nextPage === 'logs'
             ? '/logs'
             : nextPage === 'k8s'
@@ -1075,6 +1082,8 @@ export default function App() {
                 <SystemSettingsPage settings={settings} about={systemAbout} selectedRetention={settingsRetention} saving={settingsSaving} message={settingsMessage} error={settingsError} onSelectRetention={setSettingsRetention} onSave={saveSettings} />
               ) : page === 'alerts' ? (
                 <AlertsPage nodes={nodes} />
+              ) : page === 'uptime' ? (
+                <UptimePage />
               ) : page === 'k8s' ? (
                 route.kind === 'k8s-cluster-detail' ? (
                   <K8sClusterDetailPage
@@ -1195,7 +1204,7 @@ function TopStatCard({ title, value, subtitle, tone, sparklineData }: { title: s
   )
 }
 
-function NavIcon({ name }: { name: 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'logs' | 'k8s' }) {
+function NavIcon({ name }: { name: 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'uptime' | 'logs' | 'k8s' }) {
   const common = "h-5 w-5"
   if (name === 'overview') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></svg>
@@ -1211,6 +1220,9 @@ function NavIcon({ name }: { name: 'overview' | 'hosts' | 'history' | 'settings'
   }
   if (name === 'alerts') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+  }
+  if (name === 'uptime') {
+    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 12h4l2-6 4.5 12 2.5-6h4" /><circle cx="12" cy="12" r="9" /></svg>
   }
   if (name === 'settings') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3.5v2.25M12 18.25v2.25M5.99 5.99l1.6 1.6M16.41 16.41l1.6 1.6M3.5 12h2.25M18.25 12h2.25M5.99 18.01l1.6-1.6M16.41 7.59l1.6-1.6" /><circle cx="12" cy="12" r="3.5" /></svg>

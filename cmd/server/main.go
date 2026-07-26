@@ -15,6 +15,7 @@ import (
 	serverdb "github.com/mizupanel/mizupanel/internal/server/db"
 	"github.com/mizupanel/mizupanel/internal/server/retention"
 	"github.com/mizupanel/mizupanel/internal/server/store"
+	serveruptime "github.com/mizupanel/mizupanel/internal/server/uptime"
 	"github.com/mizupanel/mizupanel/internal/version"
 )
 
@@ -50,6 +51,7 @@ func main() {
 	agentTokens := store.NewAgentTokenStoreWithDialect(database, dialect)
 	settings := store.NewSettingsStoreWithDialect(database, dialect)
 	alerts := store.NewAlertStore(database)
+	uptimeMonitors := store.NewUptimeStoreWithDialect(database, dialect)
 	cleaner := retention.NewDynamicCleaner(metrics, func() (time.Duration, error) {
 		return settings.MetricsRetention(context.Background(), cfg.MetricsRetention)
 	})
@@ -63,24 +65,26 @@ func main() {
 		log.Printf("[debug][server] debug logging enabled")
 	}
 	handler := app.NewHandler(app.Dependencies{
-		Nodes:              nodes,
-		Metrics:            metrics,
-		ProcessSnapshots:   processSnapshots,
-		DockerSnapshots:    dockerSnapshots,
-		AgentTokens:        agentTokens,
-		Settings:           settings,
-		Alerts:             alerts,
-		AgentToken:         cfg.AgentToken,
-		PublicURL:          cfg.PublicURL,
-		Interval:           5,
-		StaticDir:          paths.StaticDir,
-		DownloadDir:        paths.DownloadDir,
-		EnableTerminal:     cfg.EnableTerminal,
-		MetricsRetention:   cfg.MetricsRetention,
-		AlertingEnabled:    cfg.Alerting.Enabled,
-		AlertCheckInterval: cfg.Alerting.CheckInterval,
-		Debug:              cfg.Debug,
-		AdminAuth:          appAuthConfig(cfg.AdminAuth),
+		Nodes:               nodes,
+		Metrics:             metrics,
+		ProcessSnapshots:    processSnapshots,
+		DockerSnapshots:     dockerSnapshots,
+		AgentTokens:         agentTokens,
+		Settings:            settings,
+		Alerts:              alerts,
+		Uptime:              uptimeMonitors,
+		AgentToken:          cfg.AgentToken,
+		PublicURL:           cfg.PublicURL,
+		Interval:            5,
+		StaticDir:           paths.StaticDir,
+		DownloadDir:         paths.DownloadDir,
+		EnableTerminal:      cfg.EnableTerminal,
+		MetricsRetention:    cfg.MetricsRetention,
+		AlertingEnabled:     cfg.Alerting.Enabled,
+		AlertCheckInterval:  cfg.Alerting.CheckInterval,
+		UptimeSweepInterval: serveruptime.DefaultSweepInterval,
+		Debug:               cfg.Debug,
+		AdminAuth:           appAuthConfig(cfg.AdminAuth),
 	})
 	log.Printf("MizuPanel server listening on %s", cfg.Listen)
 	log.Fatal(http.ListenAndServe(cfg.Listen, handler))

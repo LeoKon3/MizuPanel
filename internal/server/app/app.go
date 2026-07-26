@@ -21,6 +21,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
 	"github.com/mizupanel/mizupanel/internal/server/sshops"
 	"github.com/mizupanel/mizupanel/internal/server/store"
+	serveruptime "github.com/mizupanel/mizupanel/internal/server/uptime"
 )
 
 //go:embed install-agent.sh
@@ -43,6 +44,7 @@ type Dependencies struct {
 	AgentTokens            *store.AgentTokenStore
 	Settings               *store.SettingsStore
 	Alerts                 *store.AlertStore
+	Uptime                 *store.UptimeStore
 	AgentToken             string
 	PublicURL              string
 	Interval               int
@@ -52,6 +54,7 @@ type Dependencies struct {
 	MetricsRetention       time.Duration
 	AlertingEnabled        bool
 	AlertCheckInterval     time.Duration
+	UptimeSweepInterval    time.Duration
 	Debug                  bool
 	SSHJobs                *sshops.Manager
 	SSHRunner              sshops.Runner
@@ -82,7 +85,11 @@ func NewHandler(deps Dependencies) http.Handler {
 	k8sService.SetDebug(deps.Debug)
 
 	auth := api.NewAuthenticator(deps.AdminAuth)
-	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, auth)
+	var uptimeEngine *serveruptime.Engine
+	if deps.Uptime != nil {
+		uptimeEngine = serveruptime.NewEngine(deps.Uptime)
+	}
+	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, auth)
 
 	// Start alerting engine if enabled
 	if deps.AlertingEnabled && deps.Alerts != nil {
@@ -91,6 +98,10 @@ func NewHandler(deps Dependencies) http.Handler {
 			log.Printf("Warning: failed to initialize alerting engine state: %v", err)
 		}
 		go startAlertingEngine(context.Background(), engine, deps.AlertCheckInterval)
+	}
+	if uptimeEngine != nil && deps.UptimeSweepInterval > 0 {
+		uptimeEngine.SetSweepInterval(deps.UptimeSweepInterval)
+		go uptimeEngine.Run(context.Background())
 	}
 
 	sshJobs := deps.SSHJobs
@@ -110,6 +121,7 @@ func NewHandler(deps Dependencies) http.Handler {
 	mux.Handle("/api/node-tags/", apiRouter)
 	mux.Handle("/api/nodes", apiRouter)
 	mux.Handle("/api/alerts/", apiRouter)
+	mux.Handle("/api/uptime/", apiRouter)
 	mux.Handle("/api/k8s/", apiRouter)
 	mux.HandleFunc("/api/nodes/", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		if handleSSHUninstallRoute(w, r, deps.Nodes, hub, sshJobs, sshRunner, deps.PublicURL, deps.SSHJobTimeout) {

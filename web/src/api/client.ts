@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -320,6 +320,50 @@ export function toggleAlertRule(id: number, enabled: boolean): Promise<AlertRule
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled })
   })
+}
+
+export function getUptimeMonitors(): Promise<UptimeMonitorsResponse> {
+  return request<UptimeMonitorsResponse>('/api/uptime/monitors')
+}
+
+export function createUptimeMonitor(monitor: UptimeMonitorInput): Promise<UptimeMonitor> {
+  return request<UptimeMonitor>('/api/uptime/monitors', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(monitor)
+  })
+}
+
+export function updateUptimeMonitor(id: number, monitor: UptimeMonitorInput): Promise<UptimeMonitor> {
+  return request<UptimeMonitor>(`/api/uptime/monitors/${encodeURIComponent(id.toString())}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(monitor)
+  })
+}
+
+export function deleteUptimeMonitor(id: number): Promise<void> {
+  return requestVoid(`/api/uptime/monitors/${encodeURIComponent(id.toString())}`, { method: 'DELETE' })
+}
+
+export function toggleUptimeMonitor(id: number, enabled: boolean): Promise<UptimeMonitor> {
+  return request<UptimeMonitor>(`/api/uptime/monitors/${encodeURIComponent(id.toString())}/toggle`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  })
+}
+
+export function checkUptimeMonitor(id: number): Promise<UptimeMonitor> {
+  return request<UptimeMonitor>(`/api/uptime/monitors/${encodeURIComponent(id.toString())}/check`, { method: 'POST' })
+}
+
+export function getUptimeResults(id: number, limit = 50): Promise<UptimeResultsResponse> {
+  return request<UptimeResultsResponse>(`/api/uptime/monitors/${encodeURIComponent(id.toString())}/results?limit=${encodeURIComponent(limit.toString())}`)
+}
+
+export function getUptimeIncidents(id: number, limit = 50): Promise<UptimeIncidentsResponse> {
+  return request<UptimeIncidentsResponse>(`/api/uptime/monitors/${encodeURIComponent(id.toString())}/incidents?limit=${encodeURIComponent(limit.toString())}`)
 }
 
 export function getAlertHistory(nodeID: string, limit = 100): Promise<AlertHistoryResponse> {

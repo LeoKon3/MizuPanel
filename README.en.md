@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  A lightweight self-hosted operations panel for hosts, Docker, systemd, alerts, and Kubernetes resources.
+  A lightweight self-hosted operations panel for hosts, Docker, systemd, alerts, uptime monitoring, and Kubernetes resources.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.6-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.7-14B8A6">
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  MizuPanel uses a Server + Dashboard + Agent architecture. Agents actively connect to the Server, report metrics, and carry allowed operations for personal servers, homelabs, small host fleets, and lightweight Kubernetes management.
+  MizuPanel uses a Server + Dashboard + Agent architecture. Agents actively connect to the Server, report metrics, and carry allowed operations, while the Server probes services reachable from its own network. It is designed for personal servers, homelabs, small host fleets, and lightweight Kubernetes management.
 </p>
 
 <table>
@@ -65,6 +65,9 @@
     <td width="33%"><strong>Kubernetes Management</strong><br /><sub>Cluster access, resource summary, Namespace, Node, Pod, Workload, Service, and Ingress views.</sub></td>
     <td width="33%"><strong>K8s Diagnostics</strong><br /><sub>Pod logs, Events, Describe output, YAML view/edit, and resource actions.</sub></td>
     <td width="33%"><strong>Resource Creation</strong><br /><sub>Deployment, Pod, Service, Ingress, ConfigMap, Secret, PVC, Job, and CronJob.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="3"><strong>Uptime Monitoring</strong><br /><sub>Server-originated scheduled or manual HTTP, HTTPS, and TCP checks with status, latency, TLS certificate-expiry warnings, and failure/recovery notifications through existing channels.</sub></td>
   </tr>
 </table>
 

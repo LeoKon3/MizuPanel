@@ -43,7 +43,8 @@ vi.mock('./api/client', () => ({
   createTerminalSession: vi.fn(async () => ({ token: 'terminal-token' })),
   createContainerExecSession: vi.fn(async () => ({ token: 'exec-token' })),
   startSSHInstall: vi.fn(async () => ({ job_id: 'ssh-install-1' })),
-  startSSHUninstall: vi.fn(async () => ({ job_id: 'ssh-uninstall-1' }))
+  startSSHUninstall: vi.fn(async () => ({ job_id: 'ssh-uninstall-1' })),
+  getUptimeMonitors: vi.fn(async () => ({ monitors: [] }))
 }))
 
 describe('App routing', () => {
@@ -54,5 +55,15 @@ describe('App routing', () => {
 
     expect(await screen.findAllByText('Oracle SG')).toHaveLength(2)
     await waitFor(() => expect(window.location.pathname).toBe('/nodes/node-1'))
+  })
+
+  test('renders the Server-side Uptime page at /uptime', async () => {
+    window.history.pushState({}, '', '/uptime')
+
+    render(<App />)
+
+    expect((await screen.findAllByText('服务拨测')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('还没有服务拨测')).toBeInTheDocument()
+    await waitFor(() => expect(window.location.pathname).toBe('/uptime'))
   })
 })
