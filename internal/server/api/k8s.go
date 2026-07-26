@@ -38,17 +38,22 @@ func (s *Server) handleGetK8sClusters(k8sService *k8s.Service, w http.ResponseWr
 
 // handleConnectK8sCluster 连接新集群
 func (s *Server) handleConnectK8sCluster(k8sService *k8s.Service, w http.ResponseWriter, r *http.Request) {
+	markAudit(r, "kubernetes", "cluster_connect", "k8s_cluster", "", "")
 	var req k8s.ConnectClusterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	setAuditTarget(r, "k8s_cluster", "", req.Name)
+	setAuditNode(r, req.NodeID)
 
 	cluster, clusterInfo, err := k8sService.ConnectCluster(r.Context(), &req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditTarget(r, "k8s_cluster", cluster.ID, cluster.Name)
+	setAuditNode(r, cluster.NodeID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":      true,
@@ -169,6 +174,8 @@ func (s *Server) handleGetK8sCluster(k8sService *k8s.Service, clusterID string, 
 
 // handleDeleteK8sCluster 删除集群
 func (s *Server) handleDeleteK8sCluster(k8sService *k8s.Service, clusterID string, w http.ResponseWriter, r *http.Request) {
+	markAudit(r, "kubernetes", "cluster_delete", "k8s_cluster", clusterID, "")
+	setK8sAuditCluster(r, k8sService, clusterID, true)
 	if err := k8sService.DeleteCluster(clusterID); err != nil {
 		writeError(w, http.StatusInternalServerError, "删除集群失败: "+err.Error())
 		return
@@ -350,17 +357,37 @@ func (s *Server) handleK8sResourceAction(k8sService *k8s.Service, clusterID, kin
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "kubernetes", "resource_action", kind, namespace+"/"+name, "")
+	setK8sAuditCluster(r, k8sService, clusterID, false)
+	setAuditMetadata(r, "cluster_id", clusterID)
+	setAuditMetadata(r, "namespace", namespace)
 	var req k8s.ResourceActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式错误")
 		return
+	}
+	if validK8sAuditAction(req.Action) {
+		setAuditAction(r, strings.ToLower(strings.TrimSpace(req.Action)))
+	}
+	if req.Replicas != nil {
+		setAuditMetadata(r, "replicas", strconv.FormatInt(int64(*req.Replicas), 10))
 	}
 	result, err := k8sService.ExecuteResourceAction(r.Context(), clusterID, kind, namespace, name, req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, result.Success)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "message": result.Message})
+}
+
+func validK8sAuditAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "delete", "restart", "scale", "dry_run_apply", "apply":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleK8sApplyManifest(k8sService *k8s.Service, clusterID string, w http.ResponseWriter, r *http.Request) {
@@ -368,15 +395,32 @@ func (s *Server) handleK8sApplyManifest(k8sService *k8s.Service, clusterID strin
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "kubernetes", "manifest_apply", "k8s_cluster", clusterID, "")
+	setK8sAuditCluster(r, k8sService, clusterID, true)
 	var req k8s.ApplyManifestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式错误")
 		return
+	}
+	if req.DryRun {
+		setAuditAction(r, "manifest_dry_run")
 	}
 	result, err := k8sService.ApplyManifest(r.Context(), clusterID, req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, result.Success)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "message": result.Message})
+}
+
+func setK8sAuditCluster(r *http.Request, service *k8s.Service, clusterID string, useAsTarget bool) {
+	cluster, err := service.GetCluster(clusterID)
+	if err != nil {
+		return
+	}
+	setAuditNode(r, cluster.NodeID)
+	if useAsTarget {
+		setAuditTarget(r, "k8s_cluster", cluster.ID, cluster.Name)
+	}
 }

@@ -50,6 +50,43 @@ func TestMigrateSQLiteCreatesAlertTables(t *testing.T) {
 	}
 }
 
+func TestMigrateSQLiteCreatesReplaySafeAuditSchema(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("replay Migrate: %v", err)
+	}
+
+	var tableSQL string
+	if err := database.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'`).Scan(&tableSQL); err != nil {
+		t.Fatalf("audit_events table not found: %v", err)
+	}
+	for _, column := range []string{
+		"request_id", "created_at", "actor_type", "actor_name", "source_ip",
+		"module", "action", "target_type", "target_id", "target_name", "node_id",
+		"result", "duration_ms", "summary", "metadata_json",
+	} {
+		if !strings.Contains(tableSQL, column) {
+			t.Errorf("audit_events schema missing %s: %s", column, tableSQL)
+		}
+	}
+
+	var indexCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_audit_events_%'`).Scan(&indexCount); err != nil {
+		t.Fatalf("query audit indexes: %v", err)
+	}
+	if indexCount != 5 {
+		t.Fatalf("audit index count = %d, want 5", indexCount)
+	}
+}
+
 func TestMigrateSQLiteCreatesUptimeSchema(t *testing.T) {
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -240,6 +277,26 @@ func TestMySQLMigrationIncludesUptimeSchema(t *testing.T) {
 	} {
 		if !strings.Contains(invariant, fragment) {
 			t.Fatalf("MySQL uptime invariant migration missing %s", fragment)
+		}
+	}
+}
+
+func TestMySQLMigrationIncludesAuditSchema(t *testing.T) {
+	statements := strings.Join(mysqlMigrationStatements(), "\n")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS audit_events",
+		"id BIGINT AUTO_INCREMENT PRIMARY KEY",
+		"request_id VARCHAR(64) NOT NULL",
+		"target_id VARCHAR(1024) NOT NULL DEFAULT ''",
+		"metadata_json TEXT NOT NULL",
+		"INDEX idx_audit_events_created_id (created_at, id)",
+		"INDEX idx_audit_events_module_id (module, id)",
+		"INDEX idx_audit_events_node_id (node_id, id)",
+		"INDEX idx_audit_events_result_id (result, id)",
+		"INDEX idx_audit_events_actor_id (actor_type, actor_name, id)",
+	} {
+		if !strings.Contains(statements, fragment) {
+			t.Errorf("MySQL audit migration missing %q", fragment)
 		}
 	}
 }

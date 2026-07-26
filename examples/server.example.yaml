@@ -19,6 +19,10 @@ metrics:
   retention: "6h" # How long historical metrics are kept before cleanup.
   cleanup_interval: "10m" # How often the retention cleanup job runs.
 
+audit:
+  retention: "90d" # How long operational audit events are retained.
+  cleanup_interval: "1h" # How often expired audit events are removed.
+
 security:
   # agent_token is optional and should only be set if you need a long-lived bootstrap token.
   # Prefer the Dashboard-generated one-time install token flow for adding hosts.
@@ -33,4 +37,3 @@ alerting:
   enabled: true # Enable the alerting system; set to false to disable all alert checking.
   check_interval: "30s" # How often the alert engine checks metrics against rules.
   max_rules: 100 # Maximum number of alert rules allowed.
-

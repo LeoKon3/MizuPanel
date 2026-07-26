@@ -44,6 +44,7 @@ func (s *Server) handleAlertRules(alertStore *store.AlertStore) http.HandlerFunc
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
 		case http.MethodPost:
+			markAudit(r, "alert", "rule_create", "alert_rule", "", "")
 			if !sameOrigin(r) {
 				writeError(w, http.StatusForbidden, "forbidden")
 				return
@@ -65,6 +66,8 @@ func (s *Server) handleAlertRules(alertStore *store.AlertStore) http.HandlerFunc
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			setAuditTarget(r, "alert_rule", strconv.FormatInt(rule.ID, 10), rule.Name)
+			setAuditMetadata(r, "enabled", strconv.FormatBool(rule.Enabled))
 			writeJSON(w, http.StatusCreated, rule)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -111,6 +114,7 @@ func (s *Server) handleAlertRule(w http.ResponseWriter, r *http.Request, idStr s
 		}
 		writeJSON(w, http.StatusOK, rule)
 	case http.MethodPut:
+		markAudit(r, "alert", "rule_update", "alert_rule", idStr, "")
 		if !sameOrigin(r) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
@@ -154,8 +158,11 @@ func (s *Server) handleAlertRule(w http.ResponseWriter, r *http.Request, idStr s
 				return
 			}
 		}
+		setAuditTarget(r, "alert_rule", idStr, rule.Name)
+		setAuditMetadata(r, "enabled", strconv.FormatBool(rule.Enabled))
 		writeJSON(w, http.StatusOK, rule)
 	case http.MethodDelete:
+		markAudit(r, "alert", "rule_delete", "alert_rule", idStr, "")
 		if !sameOrigin(r) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
@@ -169,6 +176,7 @@ func (s *Server) handleAlertRule(w http.ResponseWriter, r *http.Request, idStr s
 			writeError(w, http.StatusNotFound, "rule not found")
 			return
 		}
+		setAuditTarget(r, "alert_rule", idStr, rule.Name)
 		if _, err := alertStore.ResolveActiveAlertHistoryByRuleID(id, time.Now().UTC()); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -188,6 +196,7 @@ func (s *Server) handleToggleAlertRule(w http.ResponseWriter, r *http.Request, i
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "alert", "rule_toggle", "alert_rule", idStr, "")
 	if !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -216,6 +225,8 @@ func (s *Server) handleToggleAlertRule(w http.ResponseWriter, r *http.Request, i
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	setAuditTarget(r, "alert_rule", idStr, rule.Name)
+	setAuditMetadata(r, "enabled", strconv.FormatBool(request.Enabled))
 
 	rule.Enabled = request.Enabled
 	if err := alertStore.UpdateAlertRule(rule); err != nil {

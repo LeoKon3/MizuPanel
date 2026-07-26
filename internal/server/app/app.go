@@ -12,12 +12,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mizupanel/mizupanel/internal/server/agenthub"
 	"github.com/mizupanel/mizupanel/internal/server/alerting"
 	"github.com/mizupanel/mizupanel/internal/server/api"
+	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
 	"github.com/mizupanel/mizupanel/internal/server/sshops"
 	"github.com/mizupanel/mizupanel/internal/server/store"
@@ -62,6 +64,7 @@ type Dependencies struct {
 	SSHInstallWaitTimeout  time.Duration
 	SSHInstallPollInterval time.Duration
 	AdminAuth              api.AuthConfig
+	Audit                  *serveraudit.Store
 }
 
 func NewHandler(deps Dependencies) http.Handler {
@@ -89,7 +92,7 @@ func NewHandler(deps Dependencies) http.Handler {
 	if deps.Uptime != nil {
 		uptimeEngine = serveruptime.NewEngine(deps.Uptime)
 	}
-	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, auth)
+	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, auth, deps.Audit)
 
 	// Start alerting engine if enabled
 	if deps.AlertingEnabled && deps.Alerts != nil {
@@ -123,6 +126,7 @@ func NewHandler(deps Dependencies) http.Handler {
 	mux.Handle("/api/alerts/", apiRouter)
 	mux.Handle("/api/uptime/", apiRouter)
 	mux.Handle("/api/k8s/", apiRouter)
+	mux.Handle("/api/audit/", apiRouter)
 	mux.HandleFunc("/api/nodes/", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		if handleSSHUninstallRoute(w, r, deps.Nodes, hub, sshJobs, sshRunner, deps.PublicURL, deps.SSHJobTimeout) {
 			return
@@ -149,7 +153,10 @@ func NewHandler(deps Dependencies) http.Handler {
 	if deps.StaticDir != "" {
 		mux.Handle("/", staticHandler(deps.StaticDir))
 	}
-	return mux
+	if deps.Audit == nil {
+		return serveraudit.Middleware(nil, mux)
+	}
+	return serveraudit.Middleware(deps.Audit, mux)
 }
 
 func agentInstallScriptHandler(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +259,8 @@ func handleSSHInstall(w http.ResponseWriter, r *http.Request, nodes *store.NodeS
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	serveraudit.Mark(r, "agent", "ssh_install")
+	serveraudit.SetTarget(r, "ssh_host", "", "")
 	if !sameOrigin(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -261,6 +270,8 @@ func handleSSHInstall(w http.ResponseWriter, r *http.Request, nodes *store.NodeS
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+	serveraudit.SetTarget(r, "ssh_host", request.Host, request.Name)
+	serveraudit.SetNodeID(r, request.NodeID)
 	if err := sshops.ValidateSSHRequest(&request.SSHRequest); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -417,6 +428,9 @@ func handleSSHUninstallRoute(w http.ResponseWriter, r *http.Request, nodes *stor
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return true
 	}
+	serveraudit.Mark(r, "agent", "ssh_uninstall")
+	serveraudit.SetTarget(r, "node", nodeID, "")
+	serveraudit.SetNodeID(r, nodeID)
 	if !sameOrigin(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return true
@@ -430,6 +444,7 @@ func handleSSHUninstallRoute(w http.ResponseWriter, r *http.Request, nodes *stor
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return true
 	}
+	serveraudit.SetMetadata(r, "remove_node_record", strconv.FormatBool(request.RemoveNodeRecord))
 	if err := sshops.ValidateSSHRequest(&request.SSHRequest); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return true
@@ -469,11 +484,14 @@ func handleInstallCommand(w http.ResponseWriter, r *http.Request, publicURL stri
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	serveraudit.Mark(r, "agent", "install_command_create")
+	serveraudit.SetTarget(r, "agent_installer", "", "")
 	platform, ok := parseInstallPlatform(r.URL.Query().Get("platform"))
 	if !ok {
 		http.Error(w, "unsupported install platform", http.StatusBadRequest)
 		return
 	}
+	serveraudit.SetMetadata(r, "platform", string(platform))
 	installToken, err := randomToken()
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)

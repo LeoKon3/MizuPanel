@@ -32,11 +32,52 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.CleanupInterval != 10*time.Minute {
 		t.Fatalf("CleanupInterval = %s, want 10m", cfg.CleanupInterval)
 	}
+	if cfg.AuditRetention != 90*24*time.Hour {
+		t.Fatalf("AuditRetention = %s, want 90d", cfg.AuditRetention)
+	}
+	if cfg.AuditCleanup != time.Hour {
+		t.Fatalf("AuditCleanup = %s, want 1h", cfg.AuditCleanup)
+	}
 	if cfg.AgentToken != "" {
 		t.Fatalf("AgentToken = %q, want empty default", cfg.AgentToken)
 	}
 	if cfg.EnableTerminal {
 		t.Fatal("EnableTerminal = true, want false default")
+	}
+}
+
+func TestLoadAuditConfigAndEnvironmentOverrides(t *testing.T) {
+	t.Setenv("MIZUPANEL_AUDIT_RETENTION", "120d")
+	t.Setenv("MIZUPANEL_AUDIT_CLEANUP_INTERVAL", "2h")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.yaml")
+	content := []byte("audit:\n  retention: 30d\n  cleanup_interval: 30m\n")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuditRetention != 120*24*time.Hour || cfg.AuditCleanup != 2*time.Hour {
+		t.Fatalf("audit config = %s / %s", cfg.AuditRetention, cfg.AuditCleanup)
+	}
+}
+
+func TestLoadRejectsInvalidAuditDurations(t *testing.T) {
+	for _, content := range []string{
+		"audit:\n  retention: nope\n",
+		"audit:\n  retention: -1h\n",
+		"audit:\n  cleanup_interval: 0s\n",
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "server.yaml")
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatalf("Load(%q) returned nil error", content)
+		}
 	}
 }
 

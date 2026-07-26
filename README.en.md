@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  A lightweight self-hosted operations panel for hosts, Docker, systemd, alerts, uptime monitoring, and Kubernetes resources.
+  A lightweight self-hosted operations panel for hosts, Docker, systemd, alerts, uptime monitoring, operational auditing, and Kubernetes resources.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.7-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.8-14B8A6">
 </p>
 
 <p align="center">
@@ -69,7 +69,24 @@
   <tr>
     <td colspan="3"><strong>Uptime Monitoring</strong><br /><sub>Server-originated scheduled or manual HTTP, HTTPS, and TCP checks with status, latency, TLS certificate-expiry warnings, and failure/recovery notifications through existing channels.</sub></td>
   </tr>
+  <tr>
+    <td colspan="3"><strong>Audit Trail</strong><br /><sub>Records the time, result, actor type, target, and node for sensitive operations, with filters, incremental pagination, and safe details in the Audit page; request bodies, secrets, terminal commands, and terminal output are not recorded.</sub></td>
+  </tr>
 </table>
+
+<strong>Audit Trail</strong>
+
+The top-level **Audit Trail** page (`/audit`) follows the existing admin-auth configuration and provides time, module, node, result, and keyword filters. Its read-only Dashboard API is `GET /api/audit/events`, with cursor pagination and filters for time, actor, module, action, node, result, and safe target/summary keywords.
+
+Events are retained for 90 days by default and expired rows are cleaned hourly:
+
+```yaml
+audit:
+  retention: "90d"
+  cleanup_interval: "1h"
+```
+
+Docker deployments can override these values with `MIZUPANEL_AUDIT_RETENTION` and `MIZUPANEL_AUDIT_CLEANUP_INTERVAL`. Audit persistence is best-effort after an operation and does not replace that operation's response if writing the event fails. This is operational evidence, not a compliance-grade immutable ledger, and it does not provide multi-user/RBAC attribution, export, or terminal command capture. See the [configuration docs](docs/configuration.en.md) for the full configuration, API parameters, and data boundary.
 
 <strong>Run From Release Package</strong>
 

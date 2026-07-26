@@ -690,6 +690,47 @@ export type UptimeMonitorsResponse = { monitors: UptimeMonitor[] }
 export type UptimeResultsResponse = { results: UptimeResult[] }
 export type UptimeIncidentsResponse = { incidents: UptimeIncident[] }
 
+export type AuditActorType = 'admin' | 'unauthenticated' | 'local_admin' | 'system'
+export type AuditResult = 'success' | 'failure' | 'accepted'
+
+export type AuditEvent = {
+  id: number
+  request_id: string
+  created_at: string
+  actor_type: AuditActorType
+  actor_name: string
+  source_ip: string
+  module: string
+  action: string
+  target_type: string
+  target_id: string
+  target_name: string
+  node_id: string
+  result: AuditResult
+  duration_ms: number
+  summary: string
+  metadata: Record<string, string>
+}
+
+export type AuditEventsQuery = {
+  before_id?: number
+  limit?: number
+  from?: string
+  to?: string
+  actor_type?: AuditActorType
+  actor_name?: string
+  module?: string
+  action?: string
+  node_id?: string
+  result?: AuditResult
+  q?: string
+}
+
+export type AuditEventsResponse = {
+  events: AuditEvent[]
+  next_before_id: number | null
+}
+
 // K8s 集群管理类型
 
 export type K8sCluster = {

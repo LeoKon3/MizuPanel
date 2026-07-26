@@ -11,6 +11,7 @@ import (
 
 	"github.com/mizupanel/mizupanel/internal/server/api"
 	"github.com/mizupanel/mizupanel/internal/server/app"
+	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/config"
 	serverdb "github.com/mizupanel/mizupanel/internal/server/db"
 	"github.com/mizupanel/mizupanel/internal/server/retention"
@@ -52,10 +53,13 @@ func main() {
 	settings := store.NewSettingsStoreWithDialect(database, dialect)
 	alerts := store.NewAlertStore(database)
 	uptimeMonitors := store.NewUptimeStoreWithDialect(database, dialect)
+	auditStore := serveraudit.NewStore(database, dialect)
 	cleaner := retention.NewDynamicCleaner(metrics, func() (time.Duration, error) {
 		return settings.MetricsRetention(context.Background(), cfg.MetricsRetention)
 	})
 	go cleaner.Run(context.Background(), cfg.CleanupInterval)
+	auditCleaner := retention.NewAuditCleaner(auditStore, cfg.AuditRetention)
+	go auditCleaner.Run(context.Background(), cfg.AuditCleanup)
 
 	paths, err := runtimeReleasePaths(os.Executable)
 	if err != nil {
@@ -85,6 +89,7 @@ func main() {
 		UptimeSweepInterval: serveruptime.DefaultSweepInterval,
 		Debug:               cfg.Debug,
 		AdminAuth:           appAuthConfig(cfg.AdminAuth),
+		Audit:               auditStore,
 	})
 	log.Printf("MizuPanel server listening on %s", cfg.Listen)
 	log.Fatal(http.ListenAndServe(cfg.Listen, handler))

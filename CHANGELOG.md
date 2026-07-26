@@ -2,6 +2,25 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.8 - 2026-07-26
+
+### Added
+
+- Added a best-effort operational Audit Trail for sensitive authentication, host, Docker and Compose, Systemd, Kubernetes, file, Agent, organization, settings, alert, and uptime operations, plus real terminal and container Exec session boundaries.
+- Added the authenticated, read-only `GET /api/audit/events` endpoint with keyset pagination and filters for time, actor, module, action, node, result, and safe target/summary keywords.
+- Added the `/audit` Dashboard page with time, module, node, result, and keyword filters, incremental pagination, result states, and safe event details.
+- Added configurable Audit Trail retention with a 90-day default, hourly cleanup, and `MIZUPANEL_AUDIT_RETENTION` / `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` overrides.
+
+### Changed
+
+- Added a fresh Server-generated `X-Request-ID` to every HTTP request and ignored caller-supplied request-ID and forwarding headers for audit attribution.
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.8.
+
+### Security
+
+- Audit events keep bounded, allowlisted operational metadata and omit passwords, cookies, tokens, webhook URLs, Compose definitions and environment values, file contents, terminal commands and output, Kubernetes Secret data, request/response bodies, and raw diagnostics.
+- Audit records are operational evidence, not compliance-grade immutable records: this release does not add multi-user/RBAC attribution, cryptographic signing, WORM storage, export, or terminal command capture.
+
 ## v0.1.7 - 2026-07-26
 
 ### Added

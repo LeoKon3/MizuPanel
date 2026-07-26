@@ -2,7 +2,7 @@
 
 [返回 README](../README.md) · [English](configuration.en.md)
 
-这份文档收纳 README 中不适合展开太长的细节：Docker、Release 包、`server.yaml`、Agent 安装、认证、告警和 Token 模型。
+这份文档收纳 README 中不适合展开太长的细节：Docker、Release 包、`server.yaml`、Agent 安装、认证、告警、操作审计和 Token 模型。
 
 ## Docker 部署
 
@@ -26,6 +26,8 @@ MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d
 | `MIZUPANEL_PORT` | `8080` | 宿主机端口 |
 | `MIZUPANEL_DATA_DIR` | `./data` | SQLite 数据目录 |
 | `MIZUPANEL_CONTAINER_NAME` | `mizupanel` | 容器名称 |
+| `MIZUPANEL_AUDIT_RETENTION` | `90d` | 审计事件保留时间 |
+| `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` | `1h` | 审计过期清理间隔 |
 
 常用命令：
 
@@ -159,6 +161,10 @@ metrics:
   retention: "6h"
   cleanup_interval: "10m"
 
+audit:
+  retention: "90d"
+  cleanup_interval: "1h"
+
 security:
   admin:
     enabled: false
@@ -181,6 +187,8 @@ alerting:
 | `server.enable_terminal` | 是否启用浏览器终端路由 |
 | `storage.driver` | `sqlite` 或 `mysql` |
 | `metrics.retention` | 历史指标保留时间 |
+| `audit.retention` | 操作审计事件保留时间，必须为正数时长 |
+| `audit.cleanup_interval` | 审计过期清理间隔，必须为正数时长 |
 | `security.admin.enabled` | 是否启用 Dashboard 管理员登录 |
 | `alerting.enabled` | 是否启用告警引擎 |
 | `alerting.check_interval` | 告警规则检查间隔 |
@@ -233,6 +241,29 @@ MIZUPANEL_ALERT_CHECK_INTERVAL=30s
 ```
 
 当前告警规则支持 CPU、内存、磁盘、Swap、系统负载等指标，支持 `>`、`>=`、`<`、`<=`、`=` 等比较方式，也支持持续时间判断。
+
+## 操作审计
+
+Server 默认保留 90 天操作审计记录，并每小时删除一次过期记录：
+
+```yaml
+audit:
+  retention: "90d"
+  cleanup_interval: "1h"
+```
+
+也可以通过环境变量覆盖：
+
+```bash
+MIZUPANEL_AUDIT_RETENTION=90d
+MIZUPANEL_AUDIT_CLEANUP_INTERVAL=1h
+```
+
+两个值都必须是 Go 时长格式的正数；配置无效时 Server 会拒绝启动。清理任务只删除超过保留期的事件，不会为清理本身再创建审计记录。
+
+Dashboard 的 **审计日志** 页面使用只读接口 `GET /api/audit/events`。接口沿用管理员认证，支持 `before_id`、`limit`、`from`、`to`、`actor_type`、`actor_name`、`module`、`action`、`node_id`、`result` 和 `q` 参数；`limit` 最大为 100，分页使用返回的 `next_before_id`。
+
+审计事件只保存有界的操作类别、发起者类型、来源 IP、显式目标、结果、耗时、稳定摘要和白名单元数据。不会保存密码、Cookie、Token、Webhook URL、Compose YAML 或 `.env`、文件内容、终端命令/输出、Kubernetes Secret、原始请求/响应正文或远程诊断。写入失败不会替换原操作响应；该功能提供运维追溯证据，不是合规级不可变账本，也不提供多用户/RBAC 归属、导出、签名或 WORM 存储。
 
 ## Agent 安装
 

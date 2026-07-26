@@ -62,6 +62,7 @@ func (s *Server) handleUptimeMonitors(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"monitors": monitors})
 	case http.MethodPost:
+		markAudit(r, "uptime", "monitor_create", "uptime_monitor", "", "")
 		if !authorizeUptimeMutation(r, true) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
@@ -80,6 +81,8 @@ func (s *Server) handleUptimeMonitors(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
+		setAuditTarget(r, "uptime_monitor", strconv.FormatInt(monitor.ID, 10), monitor.Name)
+		setAuditMetadata(r, "enabled", strconv.FormatBool(monitor.Enabled))
 		writeJSON(w, http.StatusCreated, monitor)
 	default:
 		writeMethodNotAllowed(w, http.MethodGet, http.MethodPost)
@@ -129,6 +132,7 @@ func (s *Server) handleUptimeMonitor(w http.ResponseWriter, r *http.Request, mon
 		}
 		writeJSON(w, http.StatusOK, monitor)
 	case http.MethodPut:
+		markAudit(r, "uptime", "monitor_update", "uptime_monitor", strconv.FormatInt(monitorID, 10), "")
 		if !authorizeUptimeMutation(r, true) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
@@ -142,6 +146,7 @@ func (s *Server) handleUptimeMonitor(w http.ResponseWriter, r *http.Request, mon
 		if !writeUptimeMonitorLookup(w, existing, err, "get for update", monitorID) {
 			return
 		}
+		setAuditTarget(r, "uptime_monitor", strconv.FormatInt(monitorID, 10), existing.Name)
 		var request uptimeMonitorRequest
 		if !decodeUptimeRequest(w, r, &request) {
 			return
@@ -164,8 +169,11 @@ func (s *Server) handleUptimeMonitor(w http.ResponseWriter, r *http.Request, mon
 			}
 			monitor = *updated
 		}
+		setAuditTarget(r, "uptime_monitor", strconv.FormatInt(monitorID, 10), monitor.Name)
+		setAuditMetadata(r, "enabled", strconv.FormatBool(monitor.Enabled))
 		writeJSON(w, http.StatusOK, monitor)
 	case http.MethodDelete:
+		markAudit(r, "uptime", "monitor_delete", "uptime_monitor", strconv.FormatInt(monitorID, 10), "")
 		if !authorizeUptimeMutation(r, false) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
@@ -195,6 +203,7 @@ func (s *Server) handleUptimeToggle(w http.ResponseWriter, r *http.Request, moni
 		writeMethodNotAllowed(w, http.MethodPatch)
 		return
 	}
+	markAudit(r, "uptime", "monitor_toggle", "uptime_monitor", strconv.FormatInt(monitorID, 10), "")
 	if !authorizeUptimeMutation(r, true) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -219,6 +228,8 @@ func (s *Server) handleUptimeToggle(w http.ResponseWriter, r *http.Request, moni
 		writeUptimeStoreError(w, err, "toggle", monitorID)
 		return
 	}
+	setAuditTarget(r, "uptime_monitor", strconv.FormatInt(monitorID, 10), monitor.Name)
+	setAuditMetadata(r, "enabled", strconv.FormatBool(monitor.Enabled))
 	writeJSON(w, http.StatusOK, monitor)
 }
 
@@ -227,6 +238,7 @@ func (s *Server) handleUptimeCheck(w http.ResponseWriter, r *http.Request, monit
 		writeMethodNotAllowed(w, http.MethodPost)
 		return
 	}
+	markAudit(r, "uptime", "monitor_check", "uptime_monitor", strconv.FormatInt(monitorID, 10), "")
 	if !authorizeUptimeMutation(r, false) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -250,6 +262,7 @@ func (s *Server) handleUptimeCheck(w http.ResponseWriter, r *http.Request, monit
 		}
 		return
 	}
+	setAuditTarget(r, "uptime_monitor", strconv.FormatInt(monitorID, 10), monitor.Name)
 	writeJSON(w, http.StatusOK, monitor)
 }
 

@@ -2,7 +2,7 @@
 
 [Back to README](../README.en.md) · [中文](configuration.md)
 
-This page keeps the detailed setup notes out of the README: Docker, release packages, `server.yaml`, Agent installation, authentication, alerting, and token behavior.
+This page keeps the detailed setup notes out of the README: Docker, release packages, `server.yaml`, Agent installation, authentication, alerting, operational auditing, and token behavior.
 
 ## Docker
 
@@ -26,6 +26,8 @@ Useful environment variables:
 | `MIZUPANEL_PORT` | `8080` | Host port |
 | `MIZUPANEL_DATA_DIR` | `./data` | SQLite data directory |
 | `MIZUPANEL_CONTAINER_NAME` | `mizupanel` | Container name |
+| `MIZUPANEL_AUDIT_RETENTION` | `90d` | Audit-event retention |
+| `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` | `1h` | Expired-event cleanup interval |
 
 Useful commands:
 
@@ -134,6 +136,10 @@ metrics:
   retention: "6h"
   cleanup_interval: "10m"
 
+audit:
+  retention: "90d"
+  cleanup_interval: "1h"
+
 security:
   admin:
     enabled: false
@@ -156,6 +162,8 @@ Important fields:
 | `server.enable_terminal` | Enables browser terminal routes |
 | `storage.driver` | `sqlite` or `mysql` |
 | `metrics.retention` | Historical metric retention |
+| `audit.retention` | Operational audit-event retention; must be a positive duration |
+| `audit.cleanup_interval` | Expired audit-event cleanup interval; must be a positive duration |
 | `security.admin.enabled` | Enables Dashboard admin login |
 | `alerting.enabled` | Enables alert engine |
 | `alerting.check_interval` | Alert rule check interval |
@@ -208,6 +216,29 @@ MIZUPANEL_ALERT_CHECK_INTERVAL=30s
 ```
 
 Alert rules currently support CPU, memory, disk, swap, and system load metrics, comparison operators such as `>`, `>=`, `<`, `<=`, `=`, and duration-based conditions.
+
+## Audit Trail
+
+The Server retains operational audit events for 90 days by default and removes expired rows hourly:
+
+```yaml
+audit:
+  retention: "90d"
+  cleanup_interval: "1h"
+```
+
+Environment overrides are also available:
+
+```bash
+MIZUPANEL_AUDIT_RETENTION=90d
+MIZUPANEL_AUDIT_CLEANUP_INTERVAL=1h
+```
+
+Both values must be positive Go duration strings; invalid values prevent the Server from starting. Cleanup only removes events outside the retention window and does not audit itself.
+
+The Dashboard **Audit Trail** page uses the read-only `GET /api/audit/events` endpoint. It follows admin authentication and accepts `before_id`, `limit`, `from`, `to`, `actor_type`, `actor_name`, `module`, `action`, `node_id`, `result`, and `q`; `limit` is capped at 100 and pagination continues with the returned `next_before_id`.
+
+Events contain only bounded operation categories, actor types, source IPs, explicit targets, results, durations, stable summaries, and allowlisted metadata. They do not store passwords, cookies, tokens, webhook URLs, Compose YAML or `.env`, file contents, terminal commands/output, Kubernetes Secret data, raw request/response bodies, or remote diagnostics. A persistence failure does not replace the original operation response. This is operational evidence rather than a compliance-grade immutable ledger and does not add multi-user/RBAC attribution, export, signing, or WORM storage.
 
 ## Agent Install
 

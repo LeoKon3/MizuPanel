@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
+	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
 	"github.com/mizupanel/mizupanel/internal/server/store"
 	"github.com/mizupanel/mizupanel/internal/version"
@@ -89,6 +90,7 @@ type Server struct {
 	terminalTokens          map[string]terminalToken
 	terminalMu              sync.Mutex
 	auth                    *Authenticator
+	audit                   *serveraudit.Store
 }
 
 type terminalToken struct {
@@ -192,6 +194,8 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 			server.auth = NewAuthenticator(typed)
 		case *Authenticator:
 			server.auth = typed
+		case *serveraudit.Store:
+			server.audit = typed
 		case NodeOperations:
 			server.agentOps = typed
 		}
@@ -221,6 +225,9 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 	if k8sService != nil {
 		mux.HandleFunc("/api/k8s/clusters", server.requireAuth(server.handleK8sClusters(k8sService)))
 		mux.HandleFunc("/api/k8s/clusters/", server.requireAuth(server.handleK8sClusterRoutes(k8sService)))
+	}
+	if server.audit != nil {
+		mux.HandleFunc("/api/audit/events", server.requireAuth(server.handleAuditEvents))
 	}
 	return mux
 }
@@ -259,7 +266,9 @@ func (a *Authenticator) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	serveraudit.Mark(r, "auth", "login")
 	if !a.config.Enabled {
+		serveraudit.SetPrincipal(r, serveraudit.ActorLocalAdmin, "local")
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": ""})
 		return
 	}
@@ -268,10 +277,12 @@ func (a *Authenticator) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		serveraudit.SetPrincipal(r, serveraudit.ActorUnauthenticated, "")
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(request.Username), []byte(a.config.Username)) != 1 || subtle.ConstantTimeCompare([]byte(request.Password), []byte(a.config.Password)) != 1 {
+		serveraudit.SetPrincipal(r, serveraudit.ActorUnauthenticated, request.Username)
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
@@ -280,6 +291,7 @@ func (a *Authenticator) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
+	serveraudit.SetPrincipal(r, serveraudit.ActorAdmin, a.config.Username)
 	http.SetCookie(w, a.sessionCookie(r, token, int(a.config.SessionTTL.Seconds())))
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": a.config.Username})
 }
@@ -288,6 +300,14 @@ func (a *Authenticator) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
+	}
+	serveraudit.Mark(r, "auth", "logout")
+	if !a.config.Enabled {
+		serveraudit.SetPrincipal(r, serveraudit.ActorLocalAdmin, "local")
+	} else if username, ok := a.authenticatedUsername(r); ok {
+		serveraudit.SetPrincipal(r, serveraudit.ActorAdmin, username)
+	} else {
+		serveraudit.SetPrincipal(r, serveraudit.ActorUnauthenticated, "")
 	}
 	if cookie, err := r.Cookie("mizupanel_session"); err == nil {
 		a.deleteSession(cookie.Value)
@@ -299,13 +319,16 @@ func (a *Authenticator) HandleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *Authenticator) Require(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !a.config.Enabled {
+			serveraudit.SetPrincipal(r, serveraudit.ActorLocalAdmin, "local")
 			next(w, r)
 			return
 		}
-		if _, ok := a.authenticatedUsername(r); !ok {
+		username, ok := a.authenticatedUsername(r)
+		if !ok {
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
+		serveraudit.SetPrincipal(r, serveraudit.ActorAdmin, username)
 		next(w, r)
 	}
 }
@@ -379,6 +402,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.writeSettings(w, r)
 	case http.MethodPut:
+		markAudit(r, "settings", "update", "settings", "metrics", "")
 		if !sameOrigin(r) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
@@ -394,6 +418,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		serveraudit.SetMetadata(r, "metrics_retention", request.MetricsRetention)
 		s.writeSettings(w, r)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -627,6 +652,7 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request, id string) {
+	markAudit(r, "node", "delete", "node", id, id)
 	if !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -748,6 +774,11 @@ func (s *Server) handleNodeFiles(w http.ResponseWriter, r *http.Request, nodeID 
 }
 
 func (s *Server) handleNodeFileContent(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method == http.MethodPut {
+		markAudit(r, "file", "write", "path", "", nodeID)
+	} else if r.Method == http.MethodDelete {
+		markAudit(r, "file", "delete", "path", "", nodeID)
+	}
 	if !authorizeBrowserNodeOperation(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -787,11 +818,13 @@ func (s *Server) handleNodeFileContent(w http.ResponseWriter, r *http.Request, n
 			writeError(w, http.StatusBadRequest, "path is required")
 			return
 		}
+		setAuditTarget(r, "path", request.Path, "")
 		response, err := s.agentOps.FileWrite(r.Context(), nodeID, request.Path, request.Content)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		setAuditOutcome(r, response.Saved)
 		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		r.Body = http.MaxBytesReader(w, r.Body, maxNodeOperationBodyBytes)
@@ -806,11 +839,13 @@ func (s *Server) handleNodeFileContent(w http.ResponseWriter, r *http.Request, n
 			writeError(w, http.StatusBadRequest, "path is required")
 			return
 		}
+		setAuditTarget(r, "path", request.Path, "")
 		response, err := s.agentOps.FileDelete(r.Context(), nodeID, request.Path)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		setAuditOutcome(r, response.Deleted)
 		writeJSON(w, http.StatusOK, response)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -822,6 +857,7 @@ func (s *Server) handleNodeFileUpload(w http.ResponseWriter, r *http.Request, no
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "file", "upload", "path", "", nodeID)
 	if !authorizeBrowserNodeOperation(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -847,11 +883,13 @@ func (s *Server) handleNodeFileUpload(w http.ResponseWriter, r *http.Request, no
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
+	setAuditTarget(r, "path", request.Path, "")
 	response, err := s.agentOps.FileUpload(r.Context(), nodeID, request.Path, request.ContentBase64)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Uploaded)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -860,6 +898,7 @@ func (s *Server) handleNodeReboot(w http.ResponseWriter, r *http.Request, nodeID
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "node", "reboot", "node", nodeID, nodeID)
 	if !authorizeBrowserNodeOperation(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -877,6 +916,7 @@ func (s *Server) handleNodeReboot(w http.ResponseWriter, r *http.Request, nodeID
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditAccepted(r, response.Accepted)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -885,6 +925,7 @@ func (s *Server) handleNodeDockerExec(w http.ResponseWriter, r *http.Request, no
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "docker", "exec", "node", nodeID, nodeID)
 	if !authorizeBrowserNodeOperation(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -913,6 +954,7 @@ func (s *Server) handleNodeDockerExec(w http.ResponseWriter, r *http.Request, no
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Accepted && response.ExitCode == 0 && response.Error == "")
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -937,6 +979,7 @@ func (s *Server) handleNodeAgentRestart(w http.ResponseWriter, r *http.Request, 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "agent", "restart", "node", nodeID, nodeID)
 	if !authorizeBrowserNodeOperation(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -949,6 +992,7 @@ func (s *Server) handleNodeAgentRestart(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditAccepted(r, response.Accepted)
 	writeAgentOperationResponse(w, response.Code, response.Error, response)
 }
 
@@ -973,6 +1017,8 @@ func (s *Server) handleNodeAgentUpgrade(w http.ResponseWriter, r *http.Request, 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "agent", "upgrade", "node", nodeID, nodeID)
+	serveraudit.SetMetadata(r, "target_version", version.Current)
 	if !authorizeBrowserNodeOperation(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -986,6 +1032,7 @@ func (s *Server) handleNodeAgentUpgrade(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditAccepted(r, response.Accepted)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -1118,7 +1165,11 @@ func (s *Server) handleNodeTerminal(w http.ResponseWriter, r *http.Request, node
 	}
 	defer conn.Close()
 	conn.SetReadLimit(maxTerminalWebSocketBytes)
-	_ = s.terminalHub.AttachTerminal(r.Context(), nodeID, conn)
+	startedAt := time.Now()
+	serveraudit.Record(r, serveraudit.RecordOptions{Module: "terminal", Action: "session_open", TargetType: "node", TargetID: nodeID, NodeID: nodeID, Result: serveraudit.ResultSuccess, Summary: "connected"})
+	err = s.terminalHub.AttachTerminal(r.Context(), nodeID, conn)
+	result, summary := auditWebSocketCloseOutcome(err)
+	serveraudit.Record(r, serveraudit.RecordOptions{Module: "terminal", Action: "session_close", TargetType: "node", TargetID: nodeID, NodeID: nodeID, Result: result, Summary: summary, Duration: time.Since(startedAt)})
 }
 
 func (s *Server) handleContainerExecSession(w http.ResponseWriter, r *http.Request, nodeID string, containerID string) {
@@ -1182,7 +1233,18 @@ func (s *Server) handleContainerExec(w http.ResponseWriter, r *http.Request, nod
 	}
 	defer conn.Close()
 	conn.SetReadLimit(maxTerminalWebSocketBytes)
-	_ = s.terminalHub.AttachContainerExec(r.Context(), nodeID, containerID, conn)
+	startedAt := time.Now()
+	serveraudit.Record(r, serveraudit.RecordOptions{Module: "terminal", Action: "container_exec_open", TargetType: "container", TargetID: containerID, NodeID: nodeID, Result: serveraudit.ResultSuccess, Summary: "connected"})
+	err = s.terminalHub.AttachContainerExec(r.Context(), nodeID, containerID, conn)
+	result, summary := auditWebSocketCloseOutcome(err)
+	serveraudit.Record(r, serveraudit.RecordOptions{Module: "terminal", Action: "container_exec_close", TargetType: "container", TargetID: containerID, NodeID: nodeID, Result: result, Summary: summary, Duration: time.Since(startedAt)})
+}
+
+func auditWebSocketCloseOutcome(err error) (string, string) {
+	if err == nil || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return serveraudit.ResultSuccess, "closed"
+	}
+	return serveraudit.ResultFailure, "remote_operation_failed"
 }
 
 func (s *Server) handleNodeLogTail(w http.ResponseWriter, r *http.Request, nodeID string) {
@@ -1370,6 +1432,7 @@ func (s *Server) handleNodeDockerComposeAction(w http.ResponseWriter, r *http.Re
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "compose", "action", "compose_project", "", nodeID)
 	if s.agentOps == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
 		return
@@ -1383,16 +1446,44 @@ func (s *Server) handleNodeDockerComposeAction(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid Compose action request")
 		return
 	}
+	setAuditTarget(r, "compose_project", request.ProjectName, "")
 	if strings.TrimSpace(request.ProjectName) == "" || strings.TrimSpace(request.Action) == "" {
 		writeError(w, http.StatusBadRequest, "Compose project_name and action are required")
 		return
+	}
+	request.Action = strings.ToLower(strings.TrimSpace(request.Action))
+	if !validDockerComposeAction(request.Action) {
+		writeError(w, http.StatusBadRequest, "unsupported Compose action")
+		return
+	}
+	if isMutatingDockerComposeAction(request.Action) {
+		setAuditAction(r, request.Action)
+		serveraudit.SetMetadata(r, "service", request.ServiceName)
+	} else {
+		serveraudit.Unmark(r)
 	}
 	response, err := s.agentOps.DockerComposeAction(r.Context(), nodeID, request.ProjectName, request.ServiceName, request.Action)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if isMutatingDockerComposeAction(request.Action) {
+		setAuditOutcome(r, response.Success)
+	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func validDockerComposeAction(action string) bool {
+	switch action {
+	case "pull", "up", "restart", "stop", "down", "logs", "validate":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMutatingDockerComposeAction(action string) bool {
+	return validDockerComposeAction(action) && action != "logs" && action != "validate"
 }
 
 func (s *Server) handleNodeDockerComposeDeployment(w http.ResponseWriter, r *http.Request, nodeID string) {
@@ -1400,6 +1491,7 @@ func (s *Server) handleNodeDockerComposeDeployment(w http.ResponseWriter, r *htt
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "compose", "deployment", "compose_project", "", nodeID)
 	if !authorizeBrowserNodeOperation(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -1419,18 +1511,22 @@ func (s *Server) handleNodeDockerComposeDeployment(w http.ResponseWriter, r *htt
 		return
 	}
 	request.Action = strings.TrimSpace(request.Action)
+	setAuditTarget(r, "compose_project", request.ProjectID, request.DisplayName)
 	switch request.Action {
 	case "preview":
+		serveraudit.Unmark(r)
 		if strings.TrimSpace(request.ComposeYAML) == "" {
 			writeError(w, http.StatusBadRequest, "compose_yaml is required for preview")
 			return
 		}
 	case "apply":
+		serveraudit.SetAction(r, request.Action)
 		if strings.TrimSpace(request.ComposeYAML) == "" || strings.TrimSpace(request.ConfirmationToken) == "" {
 			writeError(w, http.StatusBadRequest, "compose_yaml and confirmation_token are required for apply")
 			return
 		}
 	case "rollback", "archive":
+		serveraudit.SetAction(r, request.Action)
 		if strings.TrimSpace(request.ProjectID) == "" {
 			writeError(w, http.StatusBadRequest, "project_id is required")
 			return
@@ -1448,6 +1544,7 @@ func (s *Server) handleNodeDockerComposeDeployment(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Success)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -1473,6 +1570,7 @@ func (s *Server) handleNodeDockerResourceAction(w http.ResponseWriter, r *http.R
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "docker_resource", "action", "docker_resource", "", nodeID)
 	if s.agentOps == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
 		return
@@ -1497,11 +1595,15 @@ func (s *Server) handleNodeDockerResourceAction(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "unsupported Docker resource action")
 		return
 	}
+	serveraudit.SetAction(r, request.Action)
+	setAuditTarget(r, request.ResourceType, request.ResourceID, "")
+	serveraudit.SetMetadata(r, "resource_type", request.ResourceType)
 	response, err := s.agentOps.DockerResourceAction(r.Context(), nodeID, request.ResourceType, request.ResourceID, request.Action)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Success)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -1538,6 +1640,7 @@ func (s *Server) handleNodeSystemdServiceAction(w http.ResponseWriter, r *http.R
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "systemd", "action", "service", "", nodeID)
 	if s.agentOps == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
 		return
@@ -1554,12 +1657,33 @@ func (s *Server) handleNodeSystemdServiceAction(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "systemd service_name and action are required")
 		return
 	}
+	request.Action = strings.ToLower(strings.TrimSpace(request.Action))
+	if !validSystemdServiceAction(request.Action) {
+		writeError(w, http.StatusBadRequest, "unsupported systemd service action")
+		return
+	}
+	if request.Action == "logs" {
+		serveraudit.Unmark(r)
+	} else {
+		serveraudit.SetAction(r, request.Action)
+	}
+	setAuditTarget(r, "service", request.ServiceName, request.ServiceName)
 	response, err := s.agentOps.SystemdServiceAction(r.Context(), nodeID, request.ServiceName, request.Action)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Success)
 	writeJSON(w, http.StatusOK, response)
+}
+
+func validSystemdServiceAction(action string) bool {
+	switch action {
+	case "start", "stop", "restart", "logs":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request, nodeID string, containerID string) {
@@ -1567,6 +1691,7 @@ func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request, no
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "docker", "container_start", "container", containerID, nodeID)
 	if s.agentOps == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
 		return
@@ -1576,6 +1701,7 @@ func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request, no
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Success)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -1584,6 +1710,7 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request, nod
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "docker", "container_stop", "container", containerID, nodeID)
 	if s.agentOps == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
 		return
@@ -1593,6 +1720,7 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request, nod
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Success)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -1601,6 +1729,7 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request, 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "docker", "container_restart", "container", containerID, nodeID)
 	if s.agentOps == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
 		return
@@ -1610,6 +1739,7 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Success)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -1618,17 +1748,20 @@ func (s *Server) handleContainerDelete(w http.ResponseWriter, r *http.Request, n
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "docker", "container_delete", "container", containerID, nodeID)
 	if s.agentOps == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent operations not available")
 		return
 	}
 	// Parse force parameter from query string
 	force := r.URL.Query().Get("force") == "true"
+	serveraudit.SetMetadata(r, "force", strconv.FormatBool(force))
 	response, err := s.agentOps.ContainerDelete(r.Context(), nodeID, containerID, force)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditOutcome(r, response.Success)
 	writeJSON(w, http.StatusOK, response)
 }
 

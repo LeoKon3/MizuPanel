@@ -244,6 +244,29 @@ func sqliteMigrationStatements() []string {
 					FOREIGN KEY (monitor_id) REFERENCES uptime_monitors(id) ON DELETE CASCADE
 				);`,
 		`CREATE INDEX IF NOT EXISTS idx_uptime_incidents_monitor_started ON uptime_incidents(monitor_id, started_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS audit_events (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					request_id TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					actor_type TEXT NOT NULL,
+					actor_name TEXT NOT NULL DEFAULT '',
+					source_ip TEXT NOT NULL DEFAULT '',
+					module TEXT NOT NULL,
+					action TEXT NOT NULL,
+					target_type TEXT NOT NULL DEFAULT '',
+					target_id TEXT NOT NULL DEFAULT '',
+					target_name TEXT NOT NULL DEFAULT '',
+					node_id TEXT NOT NULL DEFAULT '',
+					result TEXT NOT NULL,
+					duration_ms INTEGER NOT NULL DEFAULT 0,
+					summary TEXT NOT NULL DEFAULT '',
+					metadata_json TEXT NOT NULL DEFAULT '{}'
+				);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_events_created_id ON audit_events(created_at DESC, id DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_events_module_id ON audit_events(module, id DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_events_node_id ON audit_events(node_id, id DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_events_result_id ON audit_events(result, id DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_events_actor_id ON audit_events(actor_type, actor_name, id DESC);`,
 	}
 }
 
@@ -474,6 +497,29 @@ func mysqlMigrationStatements() []string {
 					created_at VARCHAR(64) NOT NULL,
 					INDEX idx_uptime_incidents_monitor_started (monitor_id, started_at),
 					FOREIGN KEY (monitor_id) REFERENCES uptime_monitors(id) ON DELETE CASCADE
+				);`,
+		`CREATE TABLE IF NOT EXISTS audit_events (
+					id BIGINT AUTO_INCREMENT PRIMARY KEY,
+					request_id VARCHAR(64) NOT NULL,
+					created_at VARCHAR(64) NOT NULL,
+					actor_type VARCHAR(32) NOT NULL,
+					actor_name VARCHAR(128) NOT NULL DEFAULT '',
+					source_ip VARCHAR(64) NOT NULL DEFAULT '',
+					module VARCHAR(64) NOT NULL,
+					action VARCHAR(64) NOT NULL,
+					target_type VARCHAR(64) NOT NULL DEFAULT '',
+					target_id VARCHAR(1024) NOT NULL DEFAULT '',
+					target_name VARCHAR(256) NOT NULL DEFAULT '',
+					node_id VARCHAR(191) NOT NULL DEFAULT '',
+					result VARCHAR(16) NOT NULL,
+					duration_ms BIGINT NOT NULL DEFAULT 0,
+					summary VARCHAR(64) NOT NULL DEFAULT '',
+					metadata_json TEXT NOT NULL,
+					INDEX idx_audit_events_created_id (created_at, id),
+					INDEX idx_audit_events_module_id (module, id),
+					INDEX idx_audit_events_node_id (node_id, id),
+					INDEX idx_audit_events_result_id (result, id),
+					INDEX idx_audit_events_actor_id (actor_type, actor_name, id)
 				);`,
 	}
 }

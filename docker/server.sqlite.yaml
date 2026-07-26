@@ -12,6 +12,10 @@ metrics:
   retention: "6h"
   cleanup_interval: "10m"
 
+audit:
+  retention: "90d"
+  cleanup_interval: "1h"
+
 security:
   # Prefer Dashboard-generated one-time install tokens.
   # agent_token: "change-this-to-a-random-secret"

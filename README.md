@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、Systemd、告警、服务拨测和 Kubernetes 资源。
+  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、Systemd、告警、服务拨测、操作审计和 Kubernetes 资源。
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.7-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.8-14B8A6">
 </p>
 
 <p align="center">
@@ -69,7 +69,24 @@
   <tr>
     <td colspan="3"><strong>服务拨测</strong><br /><sub>由 Server 定时或手动发起 HTTP、HTTPS、TCP 检测，展示状态与延迟，预警 TLS 证书到期，并通过现有渠道发送故障与恢复通知。</sub></td>
   </tr>
+  <tr>
+    <td colspan="3"><strong>操作审计</strong><br /><sub>记录敏感操作的时间、结果、发起者类型、目标和节点，并在审计日志页面提供筛选、增量分页与安全详情；不会记录请求正文、机密内容或终端命令与输出。</sub></td>
+  </tr>
 </table>
+
+<strong>操作审计</strong>
+
+Dashboard 顶层的 **审计日志**（`/audit`）沿用现有管理员认证配置，提供时间、模块、节点、结果和关键词筛选。供 Dashboard 使用的只读接口是 `GET /api/audit/events`；它支持游标分页以及时间、发起者、模块、操作、节点、结果和安全目标/摘要关键词过滤。
+
+默认保留 90 天，每小时清理一次过期记录：
+
+```yaml
+audit:
+  retention: "90d"
+  cleanup_interval: "1h"
+```
+
+Docker 部署可使用 `MIZUPANEL_AUDIT_RETENTION` 和 `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` 覆盖这两个值。审计写入是操作完成后的尽力记录，不会把写入失败变成原操作失败。它是运维证据，不是合规级不可变账本，也不提供多用户/RBAC 归属、导出或终端命令捕获。完整配置、API 参数和数据边界见 [配置部署文档](docs/configuration.md)。
 
 <strong>Release 包部署运行</strong>
 

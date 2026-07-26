@@ -19,6 +19,8 @@ type Config struct {
 	Storage          serverdb.StorageConfig
 	MetricsRetention time.Duration
 	CleanupInterval  time.Duration
+	AuditRetention   time.Duration
+	AuditCleanup     time.Duration
 	AgentToken       string
 	PublicURL        string
 	EnableTerminal   bool
@@ -64,6 +66,10 @@ type fileConfig struct {
 		Retention       string `yaml:"retention"`
 		CleanupInterval string `yaml:"cleanup_interval"`
 	} `yaml:"metrics"`
+	Audit struct {
+		Retention       string `yaml:"retention"`
+		CleanupInterval string `yaml:"cleanup_interval"`
+	} `yaml:"audit"`
 	Security struct {
 		AgentToken string `yaml:"agent_token"`
 		Admin      struct {
@@ -119,6 +125,8 @@ func Load(path string) (Config, error) {
 		},
 		MetricsRetention: 6 * time.Hour,
 		CleanupInterval:  10 * time.Minute,
+		AuditRetention:   90 * 24 * time.Hour,
+		AuditCleanup:     time.Hour,
 		AgentToken:       os.Getenv("MIZUPANEL_AGENT_TOKEN"),
 		AdminAuth: AdminAuthConfig{
 			Username:   "admin",
@@ -228,6 +236,20 @@ func applyFileConfig(cfg *Config, file fileConfig) error {
 		}
 		cfg.CleanupInterval = duration
 	}
+	if file.Audit.Retention != "" {
+		duration, err := parseDuration(file.Audit.Retention)
+		if err != nil {
+			return fmt.Errorf("parse audit.retention: %w", err)
+		}
+		cfg.AuditRetention = duration
+	}
+	if file.Audit.CleanupInterval != "" {
+		duration, err := parseDuration(file.Audit.CleanupInterval)
+		if err != nil {
+			return fmt.Errorf("parse audit.cleanup_interval: %w", err)
+		}
+		cfg.AuditCleanup = duration
+	}
 	if file.Security.AgentToken != "" {
 		cfg.AgentToken = file.Security.AgentToken
 	}
@@ -309,6 +331,20 @@ func applyEnvironmentConfig(cfg *Config) error {
 		}
 		cfg.Alerting.CheckInterval = duration
 	}
+	if value, ok := os.LookupEnv("MIZUPANEL_AUDIT_RETENTION"); ok {
+		duration, err := parseDuration(value)
+		if err != nil {
+			return fmt.Errorf("parse MIZUPANEL_AUDIT_RETENTION: %w", err)
+		}
+		cfg.AuditRetention = duration
+	}
+	if value, ok := os.LookupEnv("MIZUPANEL_AUDIT_CLEANUP_INTERVAL"); ok {
+		duration, err := parseDuration(value)
+		if err != nil {
+			return fmt.Errorf("parse MIZUPANEL_AUDIT_CLEANUP_INTERVAL: %w", err)
+		}
+		cfg.AuditCleanup = duration
+	}
 	return nil
 }
 
@@ -321,6 +357,12 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.AdminAuth.Enabled && cfg.AdminAuth.Password == "" {
 		return fmt.Errorf("security.admin.password is required when admin auth is enabled")
+	}
+	if cfg.AuditRetention <= 0 {
+		return fmt.Errorf("audit.retention must be positive")
+	}
+	if cfg.AuditCleanup <= 0 {
+		return fmt.Errorf("audit.cleanup_interval must be positive")
 	}
 	return nil
 }

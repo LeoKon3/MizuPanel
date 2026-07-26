@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/mizupanel/mizupanel/internal/server/store"
@@ -59,6 +60,7 @@ func (s *Server) handleNodeGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
 	case http.MethodPost:
+		markAudit(r, "organization", "group_create", "node_group", "", "")
 		if !authorizeOrganizationMutation(r, true) {
 			writeError(w, http.StatusForbidden, "origin or content type is not allowed")
 			return
@@ -72,6 +74,7 @@ func (s *Server) handleNodeGroups(w http.ResponseWriter, r *http.Request) {
 			writeOrganizationError(w, err)
 			return
 		}
+		setAuditTarget(r, "node_group", group.ID, group.Name)
 		writeJSON(w, http.StatusCreated, group)
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -87,6 +90,7 @@ func (s *Server) handleNodeGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPatch:
+		markAudit(r, "organization", "group_update", "node_group", id, "")
 		if !authorizeOrganizationMutation(r, true) {
 			writeError(w, http.StatusForbidden, "origin or content type is not allowed")
 			return
@@ -100,8 +104,10 @@ func (s *Server) handleNodeGroup(w http.ResponseWriter, r *http.Request) {
 			writeOrganizationError(w, err)
 			return
 		}
+		setAuditTarget(r, "node_group", group.ID, group.Name)
 		writeJSON(w, http.StatusOK, group)
 	case http.MethodDelete:
+		markAudit(r, "organization", "group_delete", "node_group", id, "")
 		if !authorizeOrganizationMutation(r, false) {
 			writeError(w, http.StatusForbidden, "origin is not allowed")
 			return
@@ -127,6 +133,7 @@ func (s *Server) handleNodeTags(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"tags": tags})
 	case http.MethodPost:
+		markAudit(r, "organization", "tag_create", "node_tag", "", "")
 		if !authorizeOrganizationMutation(r, true) {
 			writeError(w, http.StatusForbidden, "origin or content type is not allowed")
 			return
@@ -140,6 +147,8 @@ func (s *Server) handleNodeTags(w http.ResponseWriter, r *http.Request) {
 			writeOrganizationError(w, err)
 			return
 		}
+		setAuditTarget(r, "node_tag", tag.ID, tag.Name)
+		setAuditMetadata(r, "color", tag.Color)
 		writeJSON(w, http.StatusCreated, tag)
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -155,6 +164,7 @@ func (s *Server) handleNodeTag(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPatch:
+		markAudit(r, "organization", "tag_update", "node_tag", id, "")
 		if !authorizeOrganizationMutation(r, true) {
 			writeError(w, http.StatusForbidden, "origin or content type is not allowed")
 			return
@@ -168,8 +178,11 @@ func (s *Server) handleNodeTag(w http.ResponseWriter, r *http.Request) {
 			writeOrganizationError(w, err)
 			return
 		}
+		setAuditTarget(r, "node_tag", tag.ID, tag.Name)
+		setAuditMetadata(r, "color", tag.Color)
 		writeJSON(w, http.StatusOK, tag)
 	case http.MethodDelete:
+		markAudit(r, "organization", "tag_delete", "node_tag", id, "")
 		if !authorizeOrganizationMutation(r, false) {
 			writeError(w, http.StatusForbidden, "origin is not allowed")
 			return
@@ -191,6 +204,7 @@ func (s *Server) handleBatchNodeMetadata(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "organization", "node_metadata_update", "node_batch", "", "")
 	if !authorizeOrganizationMutation(r, true) {
 		writeError(w, http.StatusForbidden, "origin or content type is not allowed")
 		return
@@ -199,6 +213,7 @@ func (s *Server) handleBatchNodeMetadata(w http.ResponseWriter, r *http.Request)
 	if !decodeOrganizationRequest(w, r, &request) {
 		return
 	}
+	setAuditMetadata(r, "node_count", strconv.Itoa(len(request.NodeIDs)))
 	organizations, err := s.organizations.BatchUpdateMetadata(r.Context(), store.BatchNodeMetadataUpdate{
 		NodeIDs:      request.NodeIDs,
 		GroupIDSet:   request.GroupID.Present,

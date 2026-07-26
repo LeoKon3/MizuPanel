@@ -75,6 +75,7 @@ func (s *Server) handleResolveAlertHistory(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "alert", "history_resolve", "alert_history", idStr, "")
 	if !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -95,6 +96,8 @@ func (s *Server) handleResolveAlertHistory(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "alert history not found")
 		return
 	}
+	setAuditTarget(r, "alert_history", idStr, history.RuleName)
+	setAuditNode(r, history.NodeID)
 
 	writeJSON(w, http.StatusOK, history)
 }
@@ -104,6 +107,7 @@ func (s *Server) handleDeleteAlertHistory(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	markAudit(r, "alert", "history_delete", "alert_history", idStr, "")
 	if !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -124,6 +128,8 @@ func (s *Server) handleDeleteAlertHistory(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "alert history not found")
 		return
 	}
+	setAuditTarget(r, "alert_history", idStr, history.RuleName)
+	setAuditNode(r, history.NodeID)
 	if history.ResolvedAt == nil {
 		writeError(w, http.StatusConflict, "active alert must be resolved before deletion")
 		return
@@ -143,6 +149,7 @@ func (s *Server) handleDeleteAlertHistory(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleDeleteAlertHistories(w http.ResponseWriter, r *http.Request, alertStore *store.AlertStore) {
+	markAudit(r, "alert", "history_delete_bulk", "alert_history_batch", "", "")
 	if !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -161,6 +168,7 @@ func (s *Server) handleDeleteAlertHistories(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "ids are required")
 		return
 	}
+	setAuditMetadata(r, "requested_count", strconv.Itoa(len(ids)))
 
 	for _, id := range ids {
 		history, err := alertStore.GetAlertHistoryByID(id)
@@ -183,6 +191,7 @@ func (s *Server) handleDeleteAlertHistories(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	setAuditMetadata(r, "deleted_count", strconv.FormatInt(deleted, 10))
 
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
