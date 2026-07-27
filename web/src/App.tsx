@@ -1,5 +1,5 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { X } from 'lucide-react'
+import { CalendarClock, X } from 'lucide-react'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 
 import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAgentUpgradeStatus, getAuthSession, getConnectionDiagnostics, getNodeDocker, getNodeDockerCompose, getNodeDockerResources, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodeSystemdServices, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, runNodeDockerComposeAction, runNodeDockerComposeDeployment, runNodeDockerResourceAction, runNodeSystemdServiceAction, setUnauthorizedHandler, startSSHUninstall, updateSettings, upgradeAgent, uploadNodeFile, writeNodeFile } from './api/client'
@@ -19,6 +19,7 @@ import { K8sClustersPage } from './pages/K8sClustersPage'
 import { K8sClusterDetailPage } from './pages/K8sClusterDetailPage'
 import { UptimePage } from './pages/UptimePage'
 import { AuditPage } from './pages/AuditPage'
+import { TasksPage } from './pages/TasksPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
 import type { DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
@@ -45,12 +46,13 @@ type AppRoute =
   | { kind: 'alerts' }
   | { kind: 'uptime' }
   | { kind: 'audit' }
+  | { kind: 'tasks' }
   | { kind: 'logs' }
   | { kind: 'k8s-clusters' }
   | { kind: 'k8s-cluster-detail', clusterID: string }
   | { kind: 'dashboard' }
 
-type AppPage = 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'logs' | 'k8s'
+type AppPage = 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s'
 type NavPage = Exclude<AppPage, 'history' | 'logs'>
 type ThemeMode = 'light' | 'dark'
 
@@ -69,6 +71,7 @@ function currentRoute(): AppRoute {
   if (window.location.pathname === '/alerts') return { kind: 'alerts' }
   if (window.location.pathname === '/uptime') return { kind: 'uptime' }
   if (window.location.pathname === '/audit') return { kind: 'audit' }
+  if (window.location.pathname === '/tasks') return { kind: 'tasks' }
   if (window.location.pathname === '/overview') return { kind: 'overview' }
   if (window.location.pathname === '/logs') return { kind: 'logs' }
   return { kind: 'dashboard' }
@@ -108,13 +111,15 @@ const pageCopy: Record<AppPage, { title: string, description: string }> = {
   alerts: { title: '告警', description: '查看告警记录和配置告警规则。' },
   uptime: { title: '服务拨测', description: '从 Server 网络持续检查 HTTP、HTTPS 和 TCP 服务。' },
   audit: { title: '审计日志', description: '追溯平台敏感操作的操作者、目标与结果。' },
+  tasks: { title: '任务中心', description: '统一管理脚本、Cron 计划和多节点执行记录。' },
   logs: { title: '日志', description: '日志接口接入前仅提供控制台空状态壳。' },
   k8s: { title: 'Kubernetes 集群', description: '管理通过 Agent 节点连接的 K8s 集群。' }
 }
 
-const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'k8s' }> = [
+const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'k8s' }> = [
   { page: 'overview', label: '概览', icon: 'overview' },
   { page: 'hosts', label: '主机', icon: 'hosts' },
+  { page: 'tasks', label: '任务中心', icon: 'tasks' },
   { page: 'k8s', label: 'Kubernetes', icon: 'k8s' },
   { page: 'alerts', label: '告警', icon: 'alerts' },
   { page: 'uptime', label: '服务拨测', icon: 'uptime' },
@@ -125,7 +130,7 @@ const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts'
 export default function App() {
   const [routeVersion, setRouteVersion] = useState(0)
   const route = useMemo(() => currentRoute(), [routeVersion])
-  const [page, setPage] = useState<AppPage>(route.kind === 'history' ? 'history' : route.kind === 'settings' ? 'settings' : route.kind === 'alerts' ? 'alerts' : route.kind === 'uptime' ? 'uptime' : route.kind === 'audit' ? 'audit' : route.kind === 'logs' ? 'logs' : route.kind === 'overview' ? 'overview' : route.kind === 'k8s-clusters' || route.kind === 'k8s-cluster-detail' ? 'k8s' : 'hosts')
+  const [page, setPage] = useState<AppPage>(route.kind === 'history' ? 'history' : route.kind === 'settings' ? 'settings' : route.kind === 'alerts' ? 'alerts' : route.kind === 'uptime' ? 'uptime' : route.kind === 'audit' ? 'audit' : route.kind === 'tasks' ? 'tasks' : route.kind === 'logs' ? 'logs' : route.kind === 'overview' ? 'overview' : route.kind === 'k8s-clusters' || route.kind === 'k8s-cluster-detail' ? 'k8s' : 'hosts')
   const [theme, setTheme] = useState<ThemeMode>(() => storedTheme())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => storedSidebarCollapsed())
   const [authEnabled, setAuthEnabled] = useState(false)
@@ -235,7 +240,8 @@ export default function App() {
 
   useEffect(() => {
     if (page !== 'hosts' || !selectedNodeID) return
-    if (window.location.pathname === '/history' || window.location.pathname === '/settings' || window.location.pathname === '/alerts' || window.location.pathname === '/overview' || window.location.pathname === '/logs') return
+    const activeRoute = currentRoute()
+    if (activeRoute.kind !== 'dashboard' && activeRoute.kind !== 'node-detail') return
     if (window.location.pathname !== nodePath(selectedNodeID)) {
       window.history.replaceState({}, '', nodePath(selectedNodeID))
     }
@@ -642,6 +648,8 @@ export default function App() {
             ? '/uptime'
           : nextPage === 'audit'
             ? '/audit'
+          : nextPage === 'tasks'
+            ? '/tasks'
           : nextPage === 'logs'
             ? '/logs'
             : nextPage === 'k8s'
@@ -1093,6 +1101,8 @@ export default function App() {
                 <UptimePage />
               ) : page === 'audit' ? (
                 <AuditPage nodes={nodes} />
+              ) : page === 'tasks' ? (
+                <TasksPage nodes={nodes} />
               ) : page === 'k8s' ? (
                 route.kind === 'k8s-cluster-detail' ? (
                   <K8sClusterDetailPage
@@ -1213,7 +1223,7 @@ function TopStatCard({ title, value, subtitle, tone, sparklineData }: { title: s
   )
 }
 
-function NavIcon({ name }: { name: 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'logs' | 'k8s' }) {
+function NavIcon({ name }: { name: 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s' }) {
   const common = "h-5 w-5"
   if (name === 'overview') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></svg>
@@ -1236,6 +1246,7 @@ function NavIcon({ name }: { name: 'overview' | 'hosts' | 'history' | 'settings'
   if (name === 'audit') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3.5 19 6v5.2c0 4.2-2.7 7.5-7 9.3-4.3-1.8-7-5.1-7-9.3V6l7-2.5Z" /><path d="m9 12 2 2 4-4" /></svg>
   }
+  if (name === 'tasks') return <CalendarClock aria-hidden="true" className={common} strokeWidth={2.1} />
   if (name === 'settings') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3.5v2.25M12 18.25v2.25M5.99 5.99l1.6 1.6M16.41 16.41l1.6 1.6M3.5 12h2.25M18.25 12h2.25M5.99 18.01l1.6-1.6M16.41 7.59l1.6-1.6" /><circle cx="12" cy="12" r="3.5" /></svg>
   }

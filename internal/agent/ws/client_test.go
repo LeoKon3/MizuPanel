@@ -156,6 +156,167 @@ func TestRunRespondsToAgentManagementRequests(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesScriptExecutionWithoutBlockingMetrics(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	runnerStarted := make(chan struct{})
+	releaseRunner := make(chan struct{})
+	responseReceived := make(chan protocol.ScriptExecutionResponse, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		var hello protocol.HelloMessage
+		if err := conn.ReadJSON(&hello); err != nil {
+			t.Errorf("read hello: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(protocol.HelloAckMessage{Type: protocol.MessageTypeHelloAck, NodeID: "node-1", Interval: 1}); err != nil {
+			t.Errorf("write ack: %v", err)
+			return
+		}
+		var initial protocol.MetricsMessage
+		if err := conn.ReadJSON(&initial); err != nil {
+			t.Errorf("read initial metric: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(protocol.ScriptExecutionRequest{Type: protocol.MessageTypeScriptExecutionRequest, RequestID: "req-1", ExecutionID: 11, Script: "true", TimeoutSeconds: 5}); err != nil {
+			t.Errorf("write script request: %v", err)
+			return
+		}
+		select {
+		case <-runnerStarted:
+		case <-time.After(time.Second):
+			t.Error("task runner did not start")
+			return
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		var whileRunning struct {
+			Type string `json:"type"`
+		}
+		if err := conn.ReadJSON(&whileRunning); err != nil {
+			t.Errorf("read while runner blocked: %v", err)
+			return
+		}
+		if whileRunning.Type != protocol.MessageTypeMetrics {
+			t.Errorf("message while runner blocked = %q, want metrics", whileRunning.Type)
+			return
+		}
+		close(releaseRunner)
+		for {
+			var raw json.RawMessage
+			if err := conn.ReadJSON(&raw); err != nil {
+				t.Errorf("read script response: %v", err)
+				return
+			}
+			var header struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(raw, &header); err != nil || header.Type != protocol.MessageTypeScriptExecutionResponse {
+				continue
+			}
+			var response protocol.ScriptExecutionResponse
+			if err := json.Unmarshal(raw, &response); err != nil {
+				t.Errorf("unmarshal response: %v", err)
+				return
+			}
+			responseReceived <- response
+			return
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	client := NewClient("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	client.SetTaskRunner(fakeTaskRunner{run: func(context.Context, protocol.ScriptExecutionRequest) protocol.ScriptExecutionResponse {
+		close(runnerStarted)
+		<-releaseRunner
+		exitCode := 0
+		return protocol.ScriptExecutionResponse{Status: protocol.ScriptExecutionStatusSuccess, ExitCode: &exitCode, Output: "ok\n"}
+	}})
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Run(ctx, protocol.HelloMessage{Type: protocol.MessageTypeHello, Hostname: "oracle-sg"}, 20*time.Millisecond, func(nodeID string, timestamp int64) (protocol.MetricsMessage, error) {
+			return protocol.MetricsMessage{Type: protocol.MessageTypeMetrics, NodeID: nodeID, Timestamp: timestamp}, nil
+		})
+	}()
+
+	response := <-responseReceived
+	cancel()
+	if err := <-done; err != nil && err != context.Canceled && !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if response.Type != protocol.MessageTypeScriptExecutionResponse || response.RequestID != "req-1" || response.ExecutionID != 11 || response.Status != protocol.ScriptExecutionStatusSuccess || response.Output != "ok\n" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestRunCancelsScriptExecutionWhenConnectionEnds(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	runnerStarted := make(chan struct{})
+	runnerCancelled := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		var hello protocol.HelloMessage
+		if err := conn.ReadJSON(&hello); err != nil {
+			t.Errorf("read hello: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(protocol.HelloAckMessage{Type: protocol.MessageTypeHelloAck, NodeID: "node-1", Interval: 1}); err != nil {
+			t.Errorf("write ack: %v", err)
+			return
+		}
+		var metric protocol.MetricsMessage
+		if err := conn.ReadJSON(&metric); err != nil {
+			t.Errorf("read metric: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(protocol.ScriptExecutionRequest{Type: protocol.MessageTypeScriptExecutionRequest, RequestID: "req-cancel", ExecutionID: 12, Script: "sleep 30", TimeoutSeconds: 30}); err != nil {
+			t.Errorf("write script request: %v", err)
+			return
+		}
+		select {
+		case <-runnerStarted:
+		case <-time.After(time.Second):
+			t.Error("task runner did not start")
+		}
+		_ = conn.Close()
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	client.SetTaskRunner(fakeTaskRunner{run: func(ctx context.Context, _ protocol.ScriptExecutionRequest) protocol.ScriptExecutionResponse {
+		close(runnerStarted)
+		<-ctx.Done()
+		close(runnerCancelled)
+		return protocol.ScriptExecutionResponse{Status: protocol.ScriptExecutionStatusCancelled, Error: "cancelled"}
+	}})
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Run(t.Context(), protocol.HelloMessage{Type: protocol.MessageTypeHello, Hostname: "oracle-sg"}, time.Hour, func(nodeID string, timestamp int64) (protocol.MetricsMessage, error) {
+			return protocol.MetricsMessage{Type: protocol.MessageTypeMetrics, NodeID: nodeID, Timestamp: timestamp}, nil
+		})
+	}()
+
+	select {
+	case <-runnerCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("script execution was not cancelled after disconnect")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after disconnect")
+	}
+}
+
 func TestRunDispatchesAllK8sResourceRequests(t *testing.T) {
 	k8sTypes := []string{
 		protocol.MessageTypeK8sClusterConnect,
@@ -235,6 +396,14 @@ func TestRunDispatchesAllK8sResourceRequests(t *testing.T) {
 
 type fakeKubectlHandler struct {
 	handled chan<- string
+}
+
+type fakeTaskRunner struct {
+	run func(context.Context, protocol.ScriptExecutionRequest) protocol.ScriptExecutionResponse
+}
+
+func (r fakeTaskRunner) Run(ctx context.Context, request protocol.ScriptExecutionRequest) protocol.ScriptExecutionResponse {
+	return r.run(ctx, request)
 }
 
 func (h fakeKubectlHandler) Handle(_ context.Context, msgType string, _ json.RawMessage, _ func(interface{}) error) error {

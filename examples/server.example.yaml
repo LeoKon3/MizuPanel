@@ -23,6 +23,10 @@ audit:
   retention: "90d" # How long operational audit events are retained.
   cleanup_interval: "1h" # How often expired audit events are removed.
 
+tasks:
+  retention: "30d" # How long script and scheduled-task execution history is retained.
+  cleanup_interval: "1h" # How often expired task runs and bounded output are removed.
+
 security:
   # agent_token is optional and should only be set if you need a long-lived bootstrap token.
   # Prefer the Dashboard-generated one-time install token flow for adding hosts.

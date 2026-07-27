@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、Systemd、告警、服务拨测、操作审计和 Kubernetes 资源。
+  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、Systemd、自动化任务、告警、服务拨测、操作审计和 Kubernetes 资源。
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.8-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.9-14B8A6">
 </p>
 
 <p align="center">
@@ -67,12 +67,31 @@
     <td width="33%"><strong>资源创建</strong><br /><sub>Deployment、Pod、Service、Ingress、ConfigMap、Secret、PVC、Job、CronJob。</sub></td>
   </tr>
   <tr>
+    <td colspan="3"><strong>计划任务与脚本库</strong><br /><sub>集中保存 Shell 脚本，按标准五段 Cron 和独立时区在一个或多个 Agent 上执行，并查看每个节点的状态、耗时与有限输出。</sub></td>
+  </tr>
+  <tr>
     <td colspan="3"><strong>服务拨测</strong><br /><sub>由 Server 定时或手动发起 HTTP、HTTPS、TCP 检测，展示状态与延迟，预警 TLS 证书到期，并通过现有渠道发送故障与恢复通知。</sub></td>
   </tr>
   <tr>
     <td colspan="3"><strong>操作审计</strong><br /><sub>记录敏感操作的时间、结果、发起者类型、目标和节点，并在审计日志页面提供筛选、增量分页与安全详情；不会记录请求正文、机密内容或终端命令与输出。</sub></td>
   </tr>
 </table>
+
+<strong>计划任务与脚本库</strong>
+
+Dashboard 顶层的 **任务中心**（`/tasks`）提供计划任务、脚本库和执行记录三个视图。脚本可在最多 100 个目标节点上手动批量执行；计划任务使用标准五段 Cron 和独立 IANA 时区，可启用、暂停或立即触发，并按“不通知 / 失败时 / 始终”复用 Webhook、钉钉和飞书渠道。
+
+调度由 Server 持久化管理，不会读取或修改宿主机已有的 `crontab`。Server 停止期间错过的多个周期在恢复后最多合并补跑一次，同一计划上一次仍未完成时会留下明确的 `skipped` 记录。Agent 使用固定 `/bin/sh <临时脚本>` 执行，脚本上限 128 KiB，单节点合并输出上限 64 KiB，默认超时 300 秒、最大 1800 秒；离线节点和不支持该能力的旧 Agent 会分别记录。
+
+执行历史默认保留 30 天，每小时清理一次：
+
+```yaml
+tasks:
+  retention: "30d"
+  cleanup_interval: "1h"
+```
+
+Docker 部署可使用 `MIZUPANEL_TASK_RETENTION` 和 `MIZUPANEL_TASK_CLEANUP_INTERVAL` 覆盖这两个值。脚本内容、执行输出和通知凭据不会写入审计事件；完整配置和 API 边界见 [配置部署文档](docs/configuration.md)。
 
 <strong>操作审计</strong>
 

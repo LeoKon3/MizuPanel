@@ -83,6 +83,8 @@ const (
 	MessageTypeSystemdServiceListResponse      = "systemd_service_list_response"
 	MessageTypeSystemdServiceActionRequest     = "systemd_service_action_request"
 	MessageTypeSystemdServiceActionResponse    = "systemd_service_action_response"
+	MessageTypeScriptExecutionRequest          = "script_execution_request"
+	MessageTypeScriptExecutionResponse         = "script_execution_response"
 
 	// K8s 集群管理相关消息类型
 	MessageTypeK8sClusterConnect        = "k8s_cluster_connect"
@@ -115,6 +117,20 @@ const (
 	MessageTypeK8sApplyManifestResult   = "k8s_apply_manifest_result"
 )
 
+const (
+	ScriptExecutionStatusSuccess     = "success"
+	ScriptExecutionStatusFailed      = "failed"
+	ScriptExecutionStatusTimedOut    = "timed_out"
+	ScriptExecutionStatusBusy        = "busy"
+	ScriptExecutionStatusCancelled   = "cancelled"
+	ScriptExecutionStatusUnsupported = "unsupported"
+
+	ScriptExecutionMaxScriptBytes        = 128 * 1024
+	ScriptExecutionMaxOutputBytes        = 64 * 1024
+	ScriptExecutionDefaultTimeoutSeconds = 300
+	ScriptExecutionMaxTimeoutSeconds     = 1800
+)
+
 type HelloMessage struct {
 	Type                        string `json:"type"`
 	NodeID                      string `json:"node_id"`
@@ -133,6 +149,7 @@ type HelloMessage struct {
 	DockerComposeDeployment     bool   `json:"docker_compose_deployment,omitempty"`
 	DockerResources             bool   `json:"docker_resources,omitempty"`
 	SystemdServices             bool   `json:"systemd_services,omitempty"`
+	TaskRunner                  bool   `json:"task_runner,omitempty"`
 	AgentMode                   string `json:"agent_mode,omitempty"`
 	AgentUser                   string `json:"agent_user,omitempty"`
 	AgentManagement             bool   `json:"agent_management,omitempty"`
@@ -144,6 +161,26 @@ type HelloAckMessage struct {
 	NodeID    string `json:"node_id"`
 	NodeToken string `json:"node_token,omitempty"`
 	Interval  int    `json:"interval"`
+}
+
+type ScriptExecutionRequest struct {
+	Type           string `json:"type"`
+	RequestID      string `json:"request_id"`
+	ExecutionID    int64  `json:"execution_id"`
+	Script         string `json:"script"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
+type ScriptExecutionResponse struct {
+	Type            string `json:"type"`
+	RequestID       string `json:"request_id"`
+	ExecutionID     int64  `json:"execution_id"`
+	Status          string `json:"status"`
+	ExitCode        *int   `json:"exit_code,omitempty"`
+	Output          string `json:"output"`
+	OutputTruncated bool   `json:"output_truncated"`
+	Error           string `json:"error,omitempty"`
+	DurationMS      int64  `json:"duration_ms"`
 }
 
 type FileListRequest struct {

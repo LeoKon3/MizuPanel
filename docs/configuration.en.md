@@ -2,7 +2,7 @@
 
 [Back to README](../README.en.md) · [中文](configuration.md)
 
-This page keeps the detailed setup notes out of the README: Docker, release packages, `server.yaml`, Agent installation, authentication, alerting, operational auditing, and token behavior.
+This page keeps the detailed setup notes out of the README: Docker, release packages, `server.yaml`, Agent installation, authentication, alerting, scheduled tasks, operational auditing, and token behavior.
 
 ## Docker
 
@@ -28,6 +28,8 @@ Useful environment variables:
 | `MIZUPANEL_CONTAINER_NAME` | `mizupanel` | Container name |
 | `MIZUPANEL_AUDIT_RETENTION` | `90d` | Audit-event retention |
 | `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` | `1h` | Expired-event cleanup interval |
+| `MIZUPANEL_TASK_RETENTION` | `30d` | Task-run history retention |
+| `MIZUPANEL_TASK_CLEANUP_INTERVAL` | `1h` | Expired task-run cleanup interval |
 
 Useful commands:
 
@@ -140,6 +142,10 @@ audit:
   retention: "90d"
   cleanup_interval: "1h"
 
+tasks:
+  retention: "30d"
+  cleanup_interval: "1h"
+
 security:
   admin:
     enabled: false
@@ -164,6 +170,8 @@ Important fields:
 | `metrics.retention` | Historical metric retention |
 | `audit.retention` | Operational audit-event retention; must be a positive duration |
 | `audit.cleanup_interval` | Expired audit-event cleanup interval; must be a positive duration |
+| `tasks.retention` | Script and scheduled-task run-history retention; must be a positive duration |
+| `tasks.cleanup_interval` | Expired task-run cleanup interval; must be a positive duration |
 | `security.admin.enabled` | Enables Dashboard admin login |
 | `alerting.enabled` | Enables alert engine |
 | `alerting.check_interval` | Alert rule check interval |
@@ -197,7 +205,7 @@ MIZUPANEL_ADMIN_PASSWORD=your-secret-password
 MIZUPANEL_SESSION_TTL=24h
 ```
 
-When enabled, node management, system settings, Agent installation, alerts, and Kubernetes APIs require login. Agent WebSocket connections are not affected by Dashboard sessions.
+When enabled, node management, system settings, Agent installation, automation tasks, alerts, and Kubernetes APIs require login. Agent WebSocket connections are not affected by Dashboard sessions.
 
 ## Alerting
 
@@ -216,6 +224,37 @@ MIZUPANEL_ALERT_CHECK_INTERVAL=30s
 ```
 
 Alert rules currently support CPU, memory, disk, swap, and system load metrics, comparison operators such as `>`, `>=`, `<`, `<=`, `=`, and duration-based conditions.
+
+## Scheduled Tasks And Script Library
+
+The Dashboard **Task Center** uses authenticated endpoints under `/api/automation` for scripts, schedules, and run history. Schedules accept standard five-field Cron expressions and a separate IANA time zone such as `Asia/Shanghai` or `UTC`. Seconds, macros such as `@daily`, and embedded `CRON_TZ` or `TZ` directives are rejected. The browser displays the UTC `next_run_at` computed by the Server and does not derive schedule times itself.
+
+Scripts and schedules are persisted in the Server database. MizuPanel never imports, reads, or modifies an Agent host's existing `crontab`. Runs left incomplete by a Server restart become `interrupted`; multiple periods missed during downtime collapse into at most one catch-up run. If the previous batch for the same schedule is still active, the new occurrence is recorded as `skipped` instead of overlapping or silently queueing.
+
+Execution boundaries:
+
+- Script content is limited to 128 KiB. Agents use fixed `/bin/sh <private-temporary-script>` argv and do not accept an interpreter, working directory, environment, arguments, stdin, or a `sh -c` command string.
+- Combined stdout/stderr is truncated during execution at 64 KiB. The default timeout is 300 seconds and the maximum is 1,800 seconds.
+- A batch targets at most 100 nodes. The Server allows eight target executions globally and one per node; each Agent allows two concurrent tasks.
+- Target results distinguish success, non-zero exit, timeout, busy, cancelled, offline, and unsupported older Agents. One failed node does not stop the other targets.
+- Notification policies are `never`, `failure`, and `always`, reusing Webhook, DingTalk, and Feishu. Delivery failure is stored independently and never changes the execution result.
+
+Run history is retained for 30 days by default, with expired batches and their bounded output removed hourly:
+
+```yaml
+tasks:
+  retention: "30d"
+  cleanup_interval: "1h"
+```
+
+Environment overrides:
+
+```bash
+MIZUPANEL_TASK_RETENTION=30d
+MIZUPANEL_TASK_CLEANUP_INTERVAL=1h
+```
+
+Both values must be positive Go duration strings. Script CRUD, schedule CRUD/toggle, and manual execution write safe audit summaries; script bodies, commands, output, environment, notification URLs, and credentials never enter audit events.
 
 ## Audit Trail
 

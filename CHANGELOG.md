@@ -2,6 +2,26 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.9 - 2026-07-26
+
+### Added
+
+- Added a Server-managed Shell script library with bounded content, descriptions, default timeouts, revision tracking, and conflict-safe CRUD.
+- Added multi-Agent manual execution and standard five-field Cron schedules with explicit IANA time zones, enable/pause controls, immediate runs, restart recovery, missed-run coalescing, and overlap records.
+- Added per-node execution history with keyset pagination, bounded output, stable offline/unsupported/timeout/failure states, configurable 30-day retention, and reusable Webhook, DingTalk, and Feishu notifications.
+- Added the `/tasks` Dashboard page with scheduled-task, script-library, and run-history views, including capability-aware node selection and accessible operation dialogs.
+
+### Changed
+
+- Added the optional Agent task-runner capability and context-aware execution RPC while keeping older Agents connected with explicit upgrade-required results.
+- Made task list and detail polling resilient to transient failures, pagination races, filter changes, and late responses.
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.9.
+
+### Security
+
+- Agent tasks run through fixed `/bin/sh <private-temporary-script>` arguments with bounded script/output sizes, minimal environment inheritance, concurrency and timeout limits, process-group termination, and cleanup.
+- Automation audit events and notifications exclude script content, command output, environment values, notification destinations, headers, and signing secrets.
+
 ## v0.1.8 - 2026-07-26
 
 ### Added

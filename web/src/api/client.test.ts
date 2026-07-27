@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeDockerResources, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, runNodeDockerComposeDeployment, runNodeDockerResourceAction, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
 import { checkUptimeMonitor, createUptimeMonitor, deleteUptimeMonitor, getUptimeIncidents, getUptimeMonitors, getUptimeResults, toggleUptimeMonitor, updateUptimeMonitor } from './client'
+import { createAutomationScript, createScheduledTask, deleteAutomationScript, deleteScheduledTask, getAutomationRun, getAutomationRuns, getAutomationScripts, getScheduledTasks, runAutomationScript, runScheduledTask, toggleScheduledTask, updateAutomationScript, updateScheduledTask } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -410,6 +411,66 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/uptime/monitors/7/results?limit=25')
     expect(fetchMock).toHaveBeenNthCalledWith(7, '/api/uptime/monitors/7/incidents?limit=10')
     expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/uptime/monitors/7', { method: 'DELETE' })
+  })
+
+  test('manages automation scripts, schedules, and keyset run history through typed endpoints', async () => {
+    const scriptInput = { name: 'Cleanup', description: 'Clear cache', content: 'echo done', timeout_seconds: 300 }
+    const script = { id: 7, ...scriptInput, revision: 1, created_at: '', updated_at: '' }
+    const taskInput = {
+      name: 'Nightly cleanup', script_id: 7, node_ids: ['node-1'], cron_expression: '0 2 * * *', timezone: 'Asia/Shanghai',
+      timeout_seconds: 300, notification_policy: 'failure' as const, notification_channels: []
+    }
+    const task = {
+      id: 9, ...taskInput, script_name: 'Cleanup', script_revision: 1, enabled: true, next_run_at: null,
+      last_scheduled_at: null, created_at: '', updated_at: ''
+    }
+    const run = {
+      id: 11, task_name: '', script_id: 7, script_name: 'Cleanup', script_revision: 1,
+      trigger: 'manual', status: 'queued', total_targets: 1, completed_targets: 0, success_targets: 0,
+      failed_targets: 0, notification_sent: false, created_at: ''
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ scripts: [script] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(script)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...script, revision: 2 })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(run), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tasks: [task] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(task)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(task)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...task, enabled: false })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...run, task_id: 9, task_name: 'Nightly cleanup' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ runs: [run], next_before_id: 10 })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...run, targets: [] })))
+
+    await getAutomationScripts()
+    await createAutomationScript(scriptInput)
+    await updateAutomationScript(7, scriptInput)
+    await deleteAutomationScript(7)
+    await runAutomationScript(7, ['node-1'])
+    await getScheduledTasks()
+    await createScheduledTask(taskInput)
+    await updateScheduledTask(9, taskInput)
+    await toggleScheduledTask(9, false)
+    await runScheduledTask(9)
+    await deleteScheduledTask(9)
+    await getAutomationRuns({ before_id: 42, limit: 25, status: 'failed', node_id: 'node/1' })
+    await getAutomationRun(11)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/automation/scripts')
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/automation/scripts', expect.objectContaining({ method: 'POST', body: JSON.stringify(scriptInput) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/automation/scripts/7', expect.objectContaining({ method: 'PUT', body: JSON.stringify(scriptInput) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/automation/scripts/7', { method: 'DELETE' })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/automation/scripts/7/runs', expect.objectContaining({ method: 'POST', body: JSON.stringify({ node_ids: ['node-1'] }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/automation/tasks')
+    expect(fetchMock).toHaveBeenNthCalledWith(7, '/api/automation/tasks', expect.objectContaining({ method: 'POST', body: JSON.stringify(taskInput) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/automation/tasks/9', expect.objectContaining({ method: 'PUT', body: JSON.stringify(taskInput) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(9, '/api/automation/tasks/9/toggle', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ enabled: false }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(10, '/api/automation/tasks/9/runs', { method: 'POST' })
+    expect(fetchMock).toHaveBeenNthCalledWith(11, '/api/automation/tasks/9', { method: 'DELETE' })
+    expect(fetchMock).toHaveBeenNthCalledWith(12, '/api/automation/runs?before_id=42&limit=25&status=failed&node_id=node%2F1')
+    expect(fetchMock).toHaveBeenNthCalledWith(13, '/api/automation/runs/11')
   })
 
   test('marks unauthorized API responses', async () => {

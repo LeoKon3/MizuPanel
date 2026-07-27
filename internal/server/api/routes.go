@@ -67,6 +67,10 @@ type ConnectionDiagnosticsProvider interface {
 	ConnectionDiagnostics(ctx context.Context, nodeID string) (store.ConnectionDiagnostics, error)
 }
 
+type TaskRunnerCapabilityProvider interface {
+	TaskRunnerSupported(nodeID string) bool
+}
+
 type UptimeChecker interface {
 	CheckNow(ctx context.Context, monitorID int64) (store.UptimeMonitor, error)
 	BeginMonitorMutation(monitorID int64) (func(), error)
@@ -83,6 +87,9 @@ type Server struct {
 	agentOps                NodeOperations
 	disconnecter            NodeDisconnecter
 	diagnostics             ConnectionDiagnosticsProvider
+	taskCapabilities        TaskRunnerCapabilityProvider
+	automation              *store.TaskStore
+	automationRunner        AutomationRunner
 	settings                *store.SettingsStore
 	uptime                  *store.UptimeStore
 	uptimeChecker           UptimeChecker
@@ -180,6 +187,9 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 			if diagnostics, ok := snapshotStore.(ConnectionDiagnosticsProvider); ok {
 				server.diagnostics = diagnostics
 			}
+			if capabilities, ok := snapshotStore.(TaskRunnerCapabilityProvider); ok {
+				server.taskCapabilities = capabilities
+			}
 		case TerminalConfig:
 			server.terminalEnabled = typed.Enabled
 		case SettingsConfig:
@@ -190,6 +200,9 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 		case UptimeConfig:
 			server.uptime = typed.Store
 			server.uptimeChecker = typed.Checker
+		case AutomationConfig:
+			server.automation = typed.Store
+			server.automationRunner = typed.Runner
 		case AuthConfig:
 			server.auth = NewAuthenticator(typed)
 		case *Authenticator:
@@ -198,6 +211,8 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 			server.audit = typed
 		case NodeOperations:
 			server.agentOps = typed
+		case TaskRunnerCapabilityProvider:
+			server.taskCapabilities = typed
 		}
 	}
 	mux := http.NewServeMux()
@@ -228,6 +243,14 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 	}
 	if server.audit != nil {
 		mux.HandleFunc("/api/audit/events", server.requireAuth(server.handleAuditEvents))
+	}
+	if server.automation != nil {
+		mux.HandleFunc("/api/automation/scripts", server.requireAuth(server.handleAutomationScripts))
+		mux.HandleFunc("/api/automation/scripts/", server.requireAuth(server.handleAutomationScriptRoutes))
+		mux.HandleFunc("/api/automation/tasks", server.requireAuth(server.handleAutomationTasks))
+		mux.HandleFunc("/api/automation/tasks/", server.requireAuth(server.handleAutomationTaskRoutes))
+		mux.HandleFunc("/api/automation/runs", server.requireAuth(server.handleAutomationRuns))
+		mux.HandleFunc("/api/automation/runs/", server.requireAuth(server.handleAutomationRunRoutes))
 	}
 	return mux
 }
@@ -472,6 +495,9 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		if s.terminalEnabled && s.terminalHub != nil {
 			item.TerminalEnabled = s.terminalHub.NodeTerminalEnabled(node.ID)
 		}
+		if s.taskCapabilities != nil {
+			item.TaskRunner = s.taskCapabilities.TaskRunnerSupported(node.ID)
+		}
 		metric, ok, err := s.metrics.Latest(r.Context(), node.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -647,6 +673,9 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, id string) {
 	response.Tags = organization.Tags
 	if s.terminalEnabled && s.terminalHub != nil {
 		response.TerminalEnabled = s.terminalHub.NodeTerminalEnabled(id)
+	}
+	if s.taskCapabilities != nil {
+		response.TaskRunner = s.taskCapabilities.TaskRunnerSupported(id)
 	}
 	writeJSON(w, http.StatusOK, response)
 }

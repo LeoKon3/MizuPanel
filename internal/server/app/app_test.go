@@ -154,6 +154,29 @@ func TestNewHandlerWiresUptimeRoutes(t *testing.T) {
 	}
 }
 
+func TestNewHandlerWiresAutomationRoutes(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	handler := NewHandler(Dependencies{
+		Nodes:             store.NewNodeStore(database),
+		Metrics:           store.NewMetricStore(database),
+		Tasks:             store.NewTaskStore(database),
+		TaskSweepInterval: time.Hour,
+	})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/automation/scripts", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"scripts":[]`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestNewHandlerCreatesInstallCommandWithoutLogin(t *testing.T) {
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

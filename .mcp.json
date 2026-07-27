@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "keepm": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "keepm",
+        "keepm"
+      ],
+      "env": {}
+    }
+  }
+}

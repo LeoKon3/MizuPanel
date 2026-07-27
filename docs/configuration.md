@@ -2,7 +2,7 @@
 
 [返回 README](../README.md) · [English](configuration.en.md)
 
-这份文档收纳 README 中不适合展开太长的细节：Docker、Release 包、`server.yaml`、Agent 安装、认证、告警、操作审计和 Token 模型。
+这份文档收纳 README 中不适合展开太长的细节：Docker、Release 包、`server.yaml`、Agent 安装、认证、告警、计划任务、操作审计和 Token 模型。
 
 ## Docker 部署
 
@@ -28,6 +28,8 @@ MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d
 | `MIZUPANEL_CONTAINER_NAME` | `mizupanel` | 容器名称 |
 | `MIZUPANEL_AUDIT_RETENTION` | `90d` | 审计事件保留时间 |
 | `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` | `1h` | 审计过期清理间隔 |
+| `MIZUPANEL_TASK_RETENTION` | `30d` | 任务执行历史保留时间 |
+| `MIZUPANEL_TASK_CLEANUP_INTERVAL` | `1h` | 任务历史清理间隔 |
 
 常用命令：
 
@@ -165,6 +167,10 @@ audit:
   retention: "90d"
   cleanup_interval: "1h"
 
+tasks:
+  retention: "30d"
+  cleanup_interval: "1h"
+
 security:
   admin:
     enabled: false
@@ -189,6 +195,8 @@ alerting:
 | `metrics.retention` | 历史指标保留时间 |
 | `audit.retention` | 操作审计事件保留时间，必须为正数时长 |
 | `audit.cleanup_interval` | 审计过期清理间隔，必须为正数时长 |
+| `tasks.retention` | 脚本和计划任务执行历史保留时间，必须为正数时长 |
+| `tasks.cleanup_interval` | 任务历史过期清理间隔，必须为正数时长 |
 | `security.admin.enabled` | 是否启用 Dashboard 管理员登录 |
 | `alerting.enabled` | 是否启用告警引擎 |
 | `alerting.check_interval` | 告警规则检查间隔 |
@@ -222,7 +230,7 @@ MIZUPANEL_ADMIN_PASSWORD=your-secret-password
 MIZUPANEL_SESSION_TTL=24h
 ```
 
-启用后，节点管理、系统设置、Agent 安装、告警和 Kubernetes API 都需要登录。Agent WebSocket 连接不受 Dashboard 登录态影响。
+启用后，节点管理、系统设置、Agent 安装、计划任务、告警和 Kubernetes API 都需要登录。Agent WebSocket 连接不受 Dashboard 登录态影响。
 
 ## 告警配置
 
@@ -241,6 +249,37 @@ MIZUPANEL_ALERT_CHECK_INTERVAL=30s
 ```
 
 当前告警规则支持 CPU、内存、磁盘、Swap、系统负载等指标，支持 `>`、`>=`、`<`、`<=`、`=` 等比较方式，也支持持续时间判断。
+
+## 计划任务与脚本库
+
+Dashboard 的 **任务中心** 页面使用 `/api/automation` 下的认证接口管理脚本、计划和执行历史。计划表达式必须是标准五段 Cron，时区单独使用 IANA 名称（例如 `Asia/Shanghai` 或 `UTC`）；不支持秒字段、`@daily` 等宏、`CRON_TZ` 或 `TZ` 行。浏览器只展示 Server 返回的 UTC `next_run_at`，不会自行推导下次运行时间。
+
+调度与脚本均保存在 Server 数据库中，不会导入、读取或修改 Agent 宿主机现有 `crontab`。Server 重启时，未完成的执行会标记为 `interrupted`；停机期间错过的多个周期最多合并补跑一次，不逐次回放。上一批相同计划仍运行时，新周期记录为 `skipped`，不会排队形成重叠执行。
+
+执行边界：
+
+- 脚本正文最大 128 KiB；Agent 以固定 `/bin/sh <私有临时脚本>` 运行，不接受解释器、工作目录、环境变量、参数、stdin 或 `sh -c` 命令字符串。
+- 合并 stdout/stderr 最大保留 64 KiB，并在运行过程中截断；默认超时 300 秒，最大 1800 秒。
+- 单批次最多 100 个节点；Server 全局最多并发 8 个目标、同一节点 1 个，Agent 最多同时执行 2 个任务。
+- 目标状态区分成功、非零退出、超时、繁忙、取消、离线和旧 Agent 不支持。某个节点失败不会阻止同批次其他节点。
+- 通知策略为 `never`、`failure` 或 `always`，复用现有 Webhook、钉钉和飞书配置；通知失败独立记录，不改变真实执行状态。
+
+任务执行历史默认保留 30 天，并每小时删除过期批次和对应有限输出：
+
+```yaml
+tasks:
+  retention: "30d"
+  cleanup_interval: "1h"
+```
+
+环境变量覆盖：
+
+```bash
+MIZUPANEL_TASK_RETENTION=30d
+MIZUPANEL_TASK_CLEANUP_INTERVAL=1h
+```
+
+两个值都必须是正数 Go 时长。脚本 CRUD、计划 CRUD/启停和手动执行会写入安全审计摘要；脚本正文、命令、输出、环境和通知 URL/密钥不会进入审计事件。
 
 ## 操作审计
 

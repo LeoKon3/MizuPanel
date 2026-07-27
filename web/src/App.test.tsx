@@ -63,6 +63,9 @@ vi.mock('./api/client', () => ({
   getAlertHistory: vi.fn(async () => ({ history: [] })),
   getAlertRules: vi.fn(async () => ({ rules: [] })),
   getAuditEvents: vi.fn(async () => ({ events: [], next_before_id: null })),
+  getAutomationScripts: vi.fn(async () => ({ scripts: [] })),
+  getScheduledTasks: vi.fn(async () => ({ tasks: [] })),
+  getAutomationRuns: vi.fn(async () => ({ runs: [], next_before_id: null })),
   getK8sClusters: vi.fn(async () => ({ clusters: [] })),
   createInstallCommand: vi.fn(async () => ({ command: 'curl install', install_token: 'install-token' })),
   getNodeFiles: vi.fn(async () => ({ path: '/', entries: [] })),
@@ -201,6 +204,17 @@ describe('App', () => {
     expect(window.location.pathname).toBe('/audit')
     expect(await screen.findAllByRole('heading', { name: '审计日志', level: 1 })).toHaveLength(2)
     expect(screen.getByLabelText('审计日志筛选')).toBeInTheDocument()
+  })
+
+  test('opens the task center from the top-level sidebar', async () => {
+    render(<App />)
+
+    const sidebarNavigation = await screen.findByRole('navigation', { name: '侧边导航' })
+    fireEvent.click(within(sidebarNavigation).getByRole('button', { name: '任务中心' }))
+
+    expect(await screen.findByText('还没有计划任务')).toBeInTheDocument()
+    await waitFor(() => expect(window.location.pathname).toBe('/tasks'))
+    expect(within(sidebarNavigation).getByRole('button', { name: '任务中心' })).toHaveAttribute('aria-current', 'page')
   })
 
   test('creates a fresh manual install token when the add host dialog opens', async () => {

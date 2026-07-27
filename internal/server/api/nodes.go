@@ -45,6 +45,7 @@ type NodeResponse struct {
 	Status          string                  `json:"status"`
 	LastSeenAt      time.Time               `json:"last_seen_at"`
 	TerminalEnabled bool                    `json:"terminal_enabled"`
+	TaskRunner      bool                    `json:"task_runner_supported"`
 	LatestMetric    *MetricResponse         `json:"latest_metric,omitempty"`
 	Group           *store.NodeGroupSummary `json:"group"`
 	Tags            []store.NodeTagSummary  `json:"tags"`

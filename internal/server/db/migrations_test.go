@@ -301,6 +301,136 @@ func TestMySQLMigrationIncludesAuditSchema(t *testing.T) {
 	}
 }
 
+func TestMigrateSQLiteCreatesReplaySafeAutomationSchema(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("replay Migrate: %v", err)
+	}
+	for _, table := range []string{
+		"automation_scripts", "scheduled_tasks", "scheduled_task_nodes",
+		"task_runs", "task_run_targets",
+	} {
+		var name string
+		if err := database.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
+			t.Fatalf("missing table %s: %v", table, err)
+		}
+	}
+	var indexes int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (
+		'idx_automation_scripts_updated', 'idx_scheduled_tasks_due',
+		'idx_scheduled_tasks_script', 'idx_scheduled_task_nodes_node',
+		'idx_task_runs_task_id', 'idx_task_runs_script_id',
+		'idx_task_runs_status_id', 'idx_task_runs_trigger_id',
+		'idx_task_runs_created_id', 'idx_task_run_targets_run_id',
+		'idx_task_run_targets_node_run'
+	)`).Scan(&indexes); err != nil {
+		t.Fatalf("query automation indexes: %v", err)
+	}
+	if indexes != 11 {
+		t.Fatalf("automation index count = %d, want 11", indexes)
+	}
+
+	now := "2026-07-26T08:00:00Z"
+	result, err := database.Exec(`INSERT INTO automation_scripts
+		(name, normalized_name, content, timeout_seconds, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, "Cleanup", "cleanup", "echo ok", 30, now, now)
+	if err != nil {
+		t.Fatalf("insert script: %v", err)
+	}
+	scriptID, _ := result.LastInsertId()
+	if _, err := database.Exec(`INSERT INTO automation_scripts
+		(name, normalized_name, content, timeout_seconds, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, "cleanup", "cleanup", "echo duplicate", 30, now, now); err == nil {
+		t.Fatal("duplicate normalized script name was accepted")
+	}
+	result, err = database.Exec(`INSERT INTO scheduled_tasks
+		(name, normalized_name, script_id, cron_expression, timezone, timeout_seconds,
+		notification_channels, next_run_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "Nightly", "nightly", scriptID,
+		"0 2 * * *", "UTC", 30, "[]", "2026-07-27T02:00:00Z", now, now)
+	if err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+	taskID, _ := result.LastInsertId()
+	if _, err := database.Exec(`DELETE FROM automation_scripts WHERE id = ?`, scriptID); err == nil {
+		t.Fatal("deleted script referenced by scheduled task")
+	}
+	if _, err := database.Exec(`INSERT INTO scheduled_task_nodes (task_id, node_id, created_at) VALUES (?, ?, ?)`, taskID, "node-1", now); err != nil {
+		t.Fatalf("insert task target: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO task_runs (
+		task_id, script_id, task_name, script_name, script_revision, script_content,
+		timeout_seconds, notification_channels, trigger_type, scheduled_for, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, taskID, scriptID, "Nightly", "Cleanup",
+		1, "echo ok", 30, "[]", "scheduled", "2026-07-27T02:00:00Z", now, now); err != nil {
+		t.Fatalf("insert scheduled run: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO task_runs (
+		task_id, script_id, task_name, script_name, script_revision, script_content,
+		timeout_seconds, notification_channels, trigger_type, scheduled_for, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, taskID, scriptID, "Nightly", "Cleanup",
+		1, "echo ok", 30, "[]", "scheduled", "2026-07-27T02:00:00Z", now, now); err == nil {
+		t.Fatal("duplicate scheduled occurrence was accepted")
+	}
+	if _, err := database.Exec(`DELETE FROM scheduled_tasks WHERE id = ?`, taskID); err != nil {
+		t.Fatalf("delete task: %v", err)
+	}
+	var targets int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM scheduled_task_nodes`).Scan(&targets); err != nil {
+		t.Fatalf("count task targets: %v", err)
+	}
+	if targets != 0 {
+		t.Fatalf("task targets after cascade = %d, want 0", targets)
+	}
+	var historicalTaskID, historicalScriptID sql.NullInt64
+	if err := database.QueryRow(`SELECT task_id, script_id FROM task_runs`).Scan(&historicalTaskID, &historicalScriptID); err != nil {
+		t.Fatalf("query historical run ids: %v", err)
+	}
+	if historicalTaskID.Valid || !historicalScriptID.Valid {
+		t.Fatalf("historical ids after task delete = task:%v script:%v", historicalTaskID, historicalScriptID)
+	}
+	if _, err := database.Exec(`DELETE FROM automation_scripts WHERE id = ?`, scriptID); err != nil {
+		t.Fatalf("delete script referenced only by history: %v", err)
+	}
+	var content string
+	if err := database.QueryRow(`SELECT script_id, script_content FROM task_runs`).Scan(&historicalScriptID, &content); err != nil {
+		t.Fatalf("query historical script snapshot: %v", err)
+	}
+	if historicalScriptID.Valid || content != "echo ok" {
+		t.Fatalf("historical script after delete = id:%v content:%q", historicalScriptID, content)
+	}
+}
+
+func TestMySQLMigrationIncludesAutomationSchema(t *testing.T) {
+	statements := strings.Join(mysqlMigrationStatements(), "\n")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS automation_scripts",
+		"UNIQUE KEY uq_automation_scripts_normalized_name",
+		"CREATE TABLE IF NOT EXISTS scheduled_tasks",
+		"INDEX idx_scheduled_tasks_due (enabled, next_run_at, id)",
+		"CREATE TABLE IF NOT EXISTS scheduled_task_nodes",
+		"CREATE TABLE IF NOT EXISTS task_runs",
+		"UNIQUE KEY uq_task_runs_scheduled_occurrence (task_id, scheduled_for)",
+		"script_content LONGTEXT NOT NULL",
+		"CREATE TABLE IF NOT EXISTS task_run_targets",
+		"UNIQUE KEY uq_task_run_targets_run_node (run_id, node_id)",
+		"output LONGTEXT NOT NULL",
+		"FOREIGN KEY (script_id) REFERENCES automation_scripts(id) ON DELETE RESTRICT",
+	} {
+		if !strings.Contains(statements, fragment) {
+			t.Errorf("MySQL automation migration missing %q", fragment)
+		}
+	}
+}
+
 func TestMigrateSQLiteAlertRulesSchema(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

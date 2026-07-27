@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuditEventsQuery, AuditEventsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -373,6 +373,87 @@ export function getAuditEvents(query: AuditEventsQuery = {}, signal?: AbortSigna
   }
   const suffix = params.size > 0 ? `?${params.toString()}` : ''
   return request<AuditEventsResponse>(`/api/audit/events${suffix}`, signal ? { signal } : undefined)
+}
+
+export function getAutomationScripts(signal?: AbortSignal): Promise<AutomationScriptsResponse> {
+  return request<AutomationScriptsResponse>('/api/automation/scripts', signal ? { signal } : undefined)
+}
+
+export function createAutomationScript(script: AutomationScriptInput): Promise<AutomationScript> {
+  return request<AutomationScript>('/api/automation/scripts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(script)
+  })
+}
+
+export function updateAutomationScript(id: number, script: AutomationScriptInput): Promise<AutomationScript> {
+  return request<AutomationScript>(`/api/automation/scripts/${encodeURIComponent(id.toString())}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(script)
+  })
+}
+
+export function deleteAutomationScript(id: number): Promise<void> {
+  return requestVoid(`/api/automation/scripts/${encodeURIComponent(id.toString())}`, { method: 'DELETE' })
+}
+
+export function runAutomationScript(id: number, nodeIDs: string[]): Promise<AutomationRun> {
+  return request<AutomationRun>(`/api/automation/scripts/${encodeURIComponent(id.toString())}/runs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ node_ids: nodeIDs })
+  })
+}
+
+export function getScheduledTasks(signal?: AbortSignal): Promise<ScheduledTasksResponse> {
+  return request<ScheduledTasksResponse>('/api/automation/tasks', signal ? { signal } : undefined)
+}
+
+export function createScheduledTask(task: ScheduledTaskInput): Promise<ScheduledTask> {
+  return request<ScheduledTask>('/api/automation/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(task)
+  })
+}
+
+export function updateScheduledTask(id: number, task: ScheduledTaskInput): Promise<ScheduledTask> {
+  return request<ScheduledTask>(`/api/automation/tasks/${encodeURIComponent(id.toString())}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(task)
+  })
+}
+
+export function deleteScheduledTask(id: number): Promise<void> {
+  return requestVoid(`/api/automation/tasks/${encodeURIComponent(id.toString())}`, { method: 'DELETE' })
+}
+
+export function toggleScheduledTask(id: number, enabled: boolean): Promise<ScheduledTask> {
+  return request<ScheduledTask>(`/api/automation/tasks/${encodeURIComponent(id.toString())}/toggle`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  })
+}
+
+export function runScheduledTask(id: number): Promise<AutomationRun> {
+  return request<AutomationRun>(`/api/automation/tasks/${encodeURIComponent(id.toString())}/runs`, { method: 'POST' })
+}
+
+export function getAutomationRuns(query: AutomationRunsQuery = {}, signal?: AbortSignal): Promise<AutomationRunsResponse> {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== '') params.set(key, String(value))
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : ''
+  return request<AutomationRunsResponse>(`/api/automation/runs${suffix}`, signal ? { signal } : undefined)
+}
+
+export function getAutomationRun(id: number, signal?: AbortSignal): Promise<AutomationRunDetail> {
+  return request<AutomationRunDetail>(`/api/automation/runs/${encodeURIComponent(id.toString())}`, signal ? { signal } : undefined)
 }
 
 export function getAlertHistory(nodeID: string, limit = 100): Promise<AlertHistoryResponse> {

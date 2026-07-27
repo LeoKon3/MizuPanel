@@ -30,6 +30,7 @@ type Client struct {
 	containerOpsHandler         ContainerOperationsHandler
 	systemdServiceHandler       SystemdServiceHandler
 	kubectlHandler              KubectlHandler
+	taskRunner                  TaskRunner
 }
 
 type TerminalSender interface {
@@ -102,6 +103,10 @@ type KubectlHandler interface {
 	Handle(context.Context, string, json.RawMessage, func(interface{}) error) error
 }
 
+type TaskRunner interface {
+	Run(context.Context, protocol.ScriptExecutionRequest) protocol.ScriptExecutionResponse
+}
+
 type TerminalHandlerFactory func(TerminalSender) TerminalHandler
 
 type ContainerExecHandlerFactory func(ContainerExecSender) ContainerExecHandler
@@ -165,6 +170,10 @@ func (c *Client) SetKubectlHandler(handler KubectlHandler) {
 	c.kubectlHandler = handler
 }
 
+func (c *Client) SetTaskRunner(runner TaskRunner) {
+	c.taskRunner = runner
+}
+
 func (c *Client) SendHelloAndMetric(ctx context.Context, hello protocol.HelloMessage, metric protocol.MetricsMessage) (protocol.HelloAckMessage, error) {
 	conn, ack, err := c.connect(ctx, hello)
 	if err != nil {
@@ -186,7 +195,6 @@ func (c *Client) Run(ctx context.Context, hello protocol.HelloMessage, interval 
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
 	writer := &connectionWriter{conn: conn}
 	var terminalHandler TerminalHandler
 	if c.terminalHandlerFactory != nil {
@@ -202,8 +210,20 @@ func (c *Client) Run(ctx context.Context, hello protocol.HelloMessage, interval 
 		defer c.logTailHandler.CloseAll()
 	}
 
+	connectionCtx, cancelConnection := context.WithCancel(ctx)
+	var taskExecutions sync.WaitGroup
+	readDone := make(chan struct{})
+	defer func() {
+		cancelConnection()
+		_ = conn.Close()
+		<-readDone
+		taskExecutions.Wait()
+	}()
 	errCh := make(chan error, 1)
-	go c.readLoop(ctx, writer, terminalHandler, containerExecHandler, errCh)
+	go func() {
+		defer close(readDone)
+		c.readLoop(connectionCtx, writer, terminalHandler, containerExecHandler, &taskExecutions, errCh)
+	}()
 	if err := c.writeCollectedMetric(writer, ack.NodeID, collect); err != nil {
 		return err
 	}
@@ -275,7 +295,7 @@ func (c *Client) connect(ctx context.Context, hello protocol.HelloMessage) (*web
 	return conn, ack, nil
 }
 
-func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, terminalHandler TerminalHandler, containerExecHandler ContainerExecHandler, errCh chan<- error) {
+func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, terminalHandler TerminalHandler, containerExecHandler ContainerExecHandler, taskExecutions *sync.WaitGroup, errCh chan<- error) {
 	for {
 		var raw json.RawMessage
 		if err := writer.conn.ReadJSON(&raw); err != nil {
@@ -617,6 +637,27 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 			go func() {
 				response := c.systemdServiceHandler.HandleAction(ctx, request)
 				response.RequestID = request.RequestID
+				_ = writer.writeJSON(response)
+			}()
+		case protocol.MessageTypeScriptExecutionRequest:
+			var request protocol.ScriptExecutionRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			taskExecutions.Add(1)
+			go func() {
+				defer taskExecutions.Done()
+				response := protocol.ScriptExecutionResponse{
+					Status: protocol.ScriptExecutionStatusUnsupported,
+					Error:  "script execution is not supported on this Agent",
+					Output: "",
+				}
+				if c.taskRunner != nil {
+					response = c.taskRunner.Run(ctx, request)
+				}
+				response.Type = protocol.MessageTypeScriptExecutionResponse
+				response.RequestID = request.RequestID
+				response.ExecutionID = request.ExecutionID
 				_ = writer.writeJSON(response)
 			}()
 		case protocol.MessageTypeK8sClusterConnect,

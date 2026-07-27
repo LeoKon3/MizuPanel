@@ -107,6 +107,7 @@ export type Node = {
   terminal_enabled?: boolean
   agent_mode?: AgentMode
   agent_user?: string
+  task_runner_supported?: boolean
   latest_metric?: Metric
   group?: NodeGroupSummary | null
   tags?: NodeTagSummary[]
@@ -729,6 +730,148 @@ export type AuditEventsQuery = {
 export type AuditEventsResponse = {
   events: AuditEvent[]
   next_before_id: number | null
+}
+
+export type AutomationNotificationPolicy = 'never' | 'failure' | 'always'
+export type AutomationRunTrigger = 'manual' | 'scheduled'
+export type AutomationRunStatus =
+  | 'queued'
+  | 'running'
+  | 'success'
+  | 'partial'
+  | 'failed'
+  | 'interrupted'
+  | 'skipped'
+export type AutomationTargetStatus =
+  | 'queued'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'timed_out'
+  | 'busy'
+  | 'cancelled'
+  | 'offline'
+  | 'unsupported'
+  | 'skipped'
+  | 'interrupted'
+
+export type AutomationScript = {
+  id: number
+  name: string
+  description: string
+  content: string
+  timeout_seconds: number
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+export type AutomationScriptInput = {
+  name: string
+  description: string
+  content: string
+  timeout_seconds: number
+}
+
+export type AutomationScriptsResponse = {
+  scripts: AutomationScript[]
+}
+
+export type ScheduledTask = {
+  id: number
+  name: string
+  script_id: number
+  script_name: string
+  script_revision: number
+  node_ids: string[]
+  cron_expression: string
+  timezone: string
+  timeout_seconds: number
+  enabled: boolean
+  notification_policy: AutomationNotificationPolicy
+  notification_channels: NotificationChannel[]
+  next_run_at: string | null
+  last_scheduled_at: string | null
+  latest_run_status?: AutomationRunStatus | null
+  latest_run_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ScheduledTaskInput = {
+  name: string
+  script_id: number
+  node_ids: string[]
+  cron_expression: string
+  timezone: string
+  timeout_seconds: number
+  enabled?: boolean
+  notification_policy: AutomationNotificationPolicy
+  notification_channels: NotificationChannel[]
+}
+
+export type ScheduledTasksResponse = {
+  tasks: ScheduledTask[]
+}
+
+export type AutomationRun = {
+  id: number
+  task_id?: number
+  task_name: string
+  script_id?: number
+  script_name: string
+  script_revision: number
+  trigger: AutomationRunTrigger
+  scheduled_for?: string | null
+  status: AutomationRunStatus
+  total_targets: number
+  completed_targets: number
+  success_targets: number
+  failed_targets: number
+  notification_sent: boolean
+  notification_error?: string
+  notification_attempted_at?: string | null
+  error?: string
+  started_at?: string | null
+  completed_at?: string | null
+  created_at: string
+}
+
+export type AutomationRunTarget = {
+  id: number
+  run_id: number
+  node_id: string
+  node_name: string
+  status: AutomationTargetStatus
+  exit_code?: number | null
+  output: string
+  output_truncated: boolean
+  error?: string
+  duration_ms: number
+  started_at?: string | null
+  completed_at?: string | null
+  created_at: string
+}
+
+export type AutomationRunsQuery = {
+  before_id?: number
+  limit?: number
+  status?: AutomationRunStatus
+  trigger?: AutomationRunTrigger
+  task_id?: number
+  script_id?: number
+  node_id?: string
+  from?: string
+  to?: string
+}
+
+export type AutomationRunsResponse = {
+  runs: AutomationRun[]
+  next_before_id: number | null
+}
+
+export type AutomationRunDetail = AutomationRun & {
+  targets: AutomationRunTarget[]
 }
 
 // K8s 集群管理类型

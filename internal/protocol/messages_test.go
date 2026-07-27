@@ -34,13 +34,73 @@ func TestHelloMessageJSON(t *testing.T) {
 }
 
 func TestHelloMessageJSONIncludesProtocolIdentityMetadata(t *testing.T) {
-	data, err := json.Marshal(HelloMessage{Type: MessageTypeHello, NodeID: "agent-1", ProtocolVersion: CurrentProtocolVersion, IdentitySource: "persistent_uuid", DockerComposeDeployment: true})
+	data, err := json.Marshal(HelloMessage{Type: MessageTypeHello, NodeID: "agent-1", ProtocolVersion: CurrentProtocolVersion, IdentitySource: "persistent_uuid", DockerComposeDeployment: true, TaskRunner: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, `"protocol_version":1`) || !strings.Contains(text, `"identity_source":"persistent_uuid"`) || !strings.Contains(text, `"docker_compose_deployment":true`) {
+	if !strings.Contains(text, `"protocol_version":1`) || !strings.Contains(text, `"identity_source":"persistent_uuid"`) || !strings.Contains(text, `"docker_compose_deployment":true`) || !strings.Contains(text, `"task_runner":true`) {
 		t.Fatalf("hello metadata missing: %s", text)
+	}
+}
+
+func TestHelloMessageJSONOmitsAbsentTaskRunnerCapability(t *testing.T) {
+	data, err := json.Marshal(HelloMessage{Type: MessageTypeHello, NodeID: "legacy-agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "task_runner") {
+		t.Fatalf("absent optional capability was serialized: %s", data)
+	}
+}
+
+func TestScriptExecutionMessagesJSON(t *testing.T) {
+	request := ScriptExecutionRequest{
+		Type:           MessageTypeScriptExecutionRequest,
+		RequestID:      "req-1",
+		ExecutionID:    42,
+		Script:         "printf 'ok\\n'\n",
+		TimeoutSeconds: 15,
+	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotRequest ScriptExecutionRequest
+	if err := json.Unmarshal(data, &gotRequest); err != nil {
+		t.Fatal(err)
+	}
+	if gotRequest != request {
+		t.Fatalf("request = %#v, want %#v", gotRequest, request)
+	}
+
+	exitCode := 7
+	response := ScriptExecutionResponse{
+		Type:            MessageTypeScriptExecutionResponse,
+		RequestID:       "req-1",
+		ExecutionID:     42,
+		Status:          ScriptExecutionStatusFailed,
+		ExitCode:        &exitCode,
+		Output:          "failed\n",
+		OutputTruncated: true,
+		Error:           "script exited with a non-zero status",
+		DurationMS:      123,
+	}
+	data, err = json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotResponse ScriptExecutionResponse
+	if err := json.Unmarshal(data, &gotResponse); err != nil {
+		t.Fatal(err)
+	}
+	if gotResponse.Type != response.Type || gotResponse.RequestID != response.RequestID || gotResponse.ExecutionID != response.ExecutionID || gotResponse.Status != response.Status || gotResponse.ExitCode == nil || *gotResponse.ExitCode != exitCode || gotResponse.Output != response.Output || !gotResponse.OutputTruncated || gotResponse.Error != response.Error || gotResponse.DurationMS != response.DurationMS {
+		t.Fatalf("response = %#v, want %#v", gotResponse, response)
+	}
+	for _, status := range []string{ScriptExecutionStatusSuccess, ScriptExecutionStatusFailed, ScriptExecutionStatusTimedOut, ScriptExecutionStatusBusy, ScriptExecutionStatusCancelled, ScriptExecutionStatusUnsupported} {
+		if status == "" {
+			t.Fatal("script execution status must be stable and non-empty")
+		}
 	}
 }
 

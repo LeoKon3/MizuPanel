@@ -132,6 +132,16 @@ describe('AuditPage', () => {
     expect(await screen.findByText('没有匹配的审计事件')).toBeInTheDocument()
   })
 
+  test('offers task automation as an audit module', async () => {
+    render(<AuditPage nodes={[node]} />)
+    await screen.findByText('暂无审计记录')
+
+    const moduleSelect = screen.getByLabelText('模块')
+    expect(within(moduleSelect).getByRole('option', { name: '任务中心' })).toHaveValue('automation')
+    fireEvent.change(moduleSelect, { target: { value: 'automation' } })
+    await waitFor(() => expect(api.getAuditEvents).toHaveBeenCalledWith(expect.objectContaining({ module: 'automation' }), expect.anything()))
+  })
+
   test('loads the next keyset page without duplicating events', async () => {
     vi.mocked(api.getAuditEvents)
       .mockResolvedValueOnce({ events: [baseEvent], next_before_id: 101 })

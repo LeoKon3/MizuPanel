@@ -44,7 +44,10 @@ vi.mock('./api/client', () => ({
   createContainerExecSession: vi.fn(async () => ({ token: 'exec-token' })),
   startSSHInstall: vi.fn(async () => ({ job_id: 'ssh-install-1' })),
   startSSHUninstall: vi.fn(async () => ({ job_id: 'ssh-uninstall-1' })),
-  getUptimeMonitors: vi.fn(async () => ({ monitors: [] }))
+  getUptimeMonitors: vi.fn(async () => ({ monitors: [] })),
+  getAutomationScripts: vi.fn(async () => ({ scripts: [] })),
+  getScheduledTasks: vi.fn(async () => ({ tasks: [] })),
+  getAutomationRuns: vi.fn(async () => ({ runs: [], next_before_id: null }))
 }))
 
 describe('App routing', () => {
@@ -65,5 +68,15 @@ describe('App routing', () => {
     expect((await screen.findAllByText('服务拨测')).length).toBeGreaterThan(0)
     expect(await screen.findByText('还没有服务拨测')).toBeInTheDocument()
     await waitFor(() => expect(window.location.pathname).toBe('/uptime'))
+  })
+
+  test('renders the task center directly at /tasks', async () => {
+    window.history.pushState({}, '', '/tasks')
+
+    render(<App />)
+
+    expect((await screen.findAllByRole('heading', { name: '任务中心', level: 1 })).length).toBeGreaterThan(0)
+    expect(await screen.findByText('还没有计划任务')).toBeInTheDocument()
+    await waitFor(() => expect(window.location.pathname).toBe('/tasks'))
   })
 })

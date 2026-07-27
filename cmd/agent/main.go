@@ -16,6 +16,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/agent/metrics"
 	agentprocess "github.com/mizupanel/mizupanel/internal/agent/process"
 	agentsystemd "github.com/mizupanel/mizupanel/internal/agent/systemd"
+	agenttaskrunner "github.com/mizupanel/mizupanel/internal/agent/taskrunner"
 	agentterminal "github.com/mizupanel/mizupanel/internal/agent/terminal"
 	agentupgrade "github.com/mizupanel/mizupanel/internal/agent/upgrade"
 	agentws "github.com/mizupanel/mizupanel/internal/agent/ws"
@@ -58,6 +59,7 @@ func runAgent(ctx context.Context, configPath string) error {
 	}
 	collector := metrics.NewCollector()
 	processCollector := agentprocess.NewCollector()
+	taskRunner := agenttaskrunner.New()
 	var dockerCollector *agentdocker.Collector
 	var composeHandler *agentdocker.ComposeHandler
 	if cfg.EnableDocker {
@@ -105,6 +107,7 @@ func runAgent(ctx context.Context, configPath string) error {
 	client.SetLogTailHandler(agentlogtail.NewHandler())
 	systemdHandler := agentsystemd.NewHandler()
 	client.SetSystemdServiceHandler(systemdHandler)
+	client.SetTaskRunner(taskRunner)
 	kubectlHandler := agentkubectl.NewHandler()
 	kubectlHandler.SetDebug(cfg.Debug)
 	client.SetKubectlHandler(kubectlHandler)
@@ -136,6 +139,7 @@ func runAgent(ctx context.Context, configPath string) error {
 		DockerComposeDeployment:     composeHandler != nil && composeHandler.SupportsDeployment(),
 		DockerResources:             dockerCollector != nil,
 		SystemdServices:             systemdHandler.Supported(),
+		TaskRunner:                  taskRunner.Supported(),
 		AgentMode:                   cfg.AgentMode,
 		AgentUser:                   currentUsername(),
 		AgentManagement:             true,

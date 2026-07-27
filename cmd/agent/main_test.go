@@ -48,6 +48,19 @@ func TestAgentManagementDockerStatusUsesCollector(t *testing.T) {
 	}
 }
 
+func TestAgentTaskRunnerCapabilityIsWired(t *testing.T) {
+	content, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read agent main: %v", err)
+	}
+	source := string(content)
+	for _, want := range []string{"agenttaskrunner.New()", "client.SetTaskRunner(taskRunner)", "TaskRunner:", "taskRunner.Supported()"} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("Agent task runner capability is not wired, missing %q", want)
+		}
+	}
+}
+
 func TestAgentPackageBuildsForWindows(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("cross-build test is for non-Windows CI")

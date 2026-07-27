@@ -21,6 +21,8 @@ type Config struct {
 	CleanupInterval  time.Duration
 	AuditRetention   time.Duration
 	AuditCleanup     time.Duration
+	TaskRetention    time.Duration
+	TaskCleanup      time.Duration
 	AgentToken       string
 	PublicURL        string
 	EnableTerminal   bool
@@ -70,6 +72,10 @@ type fileConfig struct {
 		Retention       string `yaml:"retention"`
 		CleanupInterval string `yaml:"cleanup_interval"`
 	} `yaml:"audit"`
+	Tasks struct {
+		Retention       string `yaml:"retention"`
+		CleanupInterval string `yaml:"cleanup_interval"`
+	} `yaml:"tasks"`
 	Security struct {
 		AgentToken string `yaml:"agent_token"`
 		Admin      struct {
@@ -127,6 +133,8 @@ func Load(path string) (Config, error) {
 		CleanupInterval:  10 * time.Minute,
 		AuditRetention:   90 * 24 * time.Hour,
 		AuditCleanup:     time.Hour,
+		TaskRetention:    30 * 24 * time.Hour,
+		TaskCleanup:      time.Hour,
 		AgentToken:       os.Getenv("MIZUPANEL_AGENT_TOKEN"),
 		AdminAuth: AdminAuthConfig{
 			Username:   "admin",
@@ -250,6 +258,20 @@ func applyFileConfig(cfg *Config, file fileConfig) error {
 		}
 		cfg.AuditCleanup = duration
 	}
+	if file.Tasks.Retention != "" {
+		duration, err := parseDuration(file.Tasks.Retention)
+		if err != nil {
+			return fmt.Errorf("parse tasks.retention: %w", err)
+		}
+		cfg.TaskRetention = duration
+	}
+	if file.Tasks.CleanupInterval != "" {
+		duration, err := parseDuration(file.Tasks.CleanupInterval)
+		if err != nil {
+			return fmt.Errorf("parse tasks.cleanup_interval: %w", err)
+		}
+		cfg.TaskCleanup = duration
+	}
 	if file.Security.AgentToken != "" {
 		cfg.AgentToken = file.Security.AgentToken
 	}
@@ -345,6 +367,20 @@ func applyEnvironmentConfig(cfg *Config) error {
 		}
 		cfg.AuditCleanup = duration
 	}
+	if value, ok := os.LookupEnv("MIZUPANEL_TASK_RETENTION"); ok {
+		duration, err := parseDuration(value)
+		if err != nil {
+			return fmt.Errorf("parse MIZUPANEL_TASK_RETENTION: %w", err)
+		}
+		cfg.TaskRetention = duration
+	}
+	if value, ok := os.LookupEnv("MIZUPANEL_TASK_CLEANUP_INTERVAL"); ok {
+		duration, err := parseDuration(value)
+		if err != nil {
+			return fmt.Errorf("parse MIZUPANEL_TASK_CLEANUP_INTERVAL: %w", err)
+		}
+		cfg.TaskCleanup = duration
+	}
 	return nil
 }
 
@@ -363,6 +399,12 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.AuditCleanup <= 0 {
 		return fmt.Errorf("audit.cleanup_interval must be positive")
+	}
+	if cfg.TaskRetention <= 0 {
+		return fmt.Errorf("tasks.retention must be positive")
+	}
+	if cfg.TaskCleanup <= 0 {
+		return fmt.Errorf("tasks.cleanup_interval must be positive")
 	}
 	return nil
 }

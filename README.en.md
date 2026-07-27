@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  A lightweight self-hosted operations panel for hosts, Docker, systemd, alerts, uptime monitoring, operational auditing, and Kubernetes resources.
+  A lightweight self-hosted operations panel for hosts, Docker, systemd, automation tasks, alerts, uptime monitoring, operational auditing, and Kubernetes resources.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.8-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.9-14B8A6">
 </p>
 
 <p align="center">
@@ -67,12 +67,31 @@
     <td width="33%"><strong>Resource Creation</strong><br /><sub>Deployment, Pod, Service, Ingress, ConfigMap, Secret, PVC, Job, and CronJob.</sub></td>
   </tr>
   <tr>
+    <td colspan="3"><strong>Scheduled Tasks And Script Library</strong><br /><sub>Store Shell scripts centrally, run them on one or more Agents with standard five-field Cron schedules and explicit time zones, and inspect per-node status, duration, and bounded output.</sub></td>
+  </tr>
+  <tr>
     <td colspan="3"><strong>Uptime Monitoring</strong><br /><sub>Server-originated scheduled or manual HTTP, HTTPS, and TCP checks with status, latency, TLS certificate-expiry warnings, and failure/recovery notifications through existing channels.</sub></td>
   </tr>
   <tr>
     <td colspan="3"><strong>Audit Trail</strong><br /><sub>Records the time, result, actor type, target, and node for sensitive operations, with filters, incremental pagination, and safe details in the Audit page; request bodies, secrets, terminal commands, and terminal output are not recorded.</sub></td>
   </tr>
 </table>
+
+<strong>Scheduled Tasks And Script Library</strong>
+
+The top-level **Task Center** (`/tasks`) provides Scheduled Tasks, Script Library, and Run History views. Scripts can run manually across up to 100 target nodes. Schedules use standard five-field Cron expressions with separate IANA time zones, can be enabled, paused, or triggered immediately, and reuse Webhook, DingTalk, and Feishu with never, failure-only, or always notification policies.
+
+Scheduling is persisted and owned by the Server; MizuPanel never reads or changes an existing host `crontab`. Multiple periods missed while the Server is stopped collapse into at most one catch-up run, and an occurrence overlapping the previous run is recorded explicitly as `skipped`. Agents execute fixed `/bin/sh <temporary-script>` argv with a 128 KiB script limit, 64 KiB combined-output limit, 300-second default timeout, and 1,800-second maximum. Offline nodes and older Agents without the capability receive distinct results.
+
+Run history is retained for 30 days by default and cleaned hourly:
+
+```yaml
+tasks:
+  retention: "30d"
+  cleanup_interval: "1h"
+```
+
+Docker deployments can override these values with `MIZUPANEL_TASK_RETENTION` and `MIZUPANEL_TASK_CLEANUP_INTERVAL`. Script content, execution output, and notification credentials are excluded from audit events. See the [configuration docs](docs/configuration.en.md) for the full configuration and API boundary.
 
 <strong>Audit Trail</strong>
 

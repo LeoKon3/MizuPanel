@@ -38,6 +38,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AuditCleanup != time.Hour {
 		t.Fatalf("AuditCleanup = %s, want 1h", cfg.AuditCleanup)
 	}
+	if cfg.TaskRetention != 30*24*time.Hour {
+		t.Fatalf("TaskRetention = %s, want 30d", cfg.TaskRetention)
+	}
+	if cfg.TaskCleanup != time.Hour {
+		t.Fatalf("TaskCleanup = %s, want 1h", cfg.TaskCleanup)
+	}
 	if cfg.AgentToken != "" {
 		t.Fatalf("AgentToken = %q, want empty default", cfg.AgentToken)
 	}
@@ -69,6 +75,41 @@ func TestLoadRejectsInvalidAuditDurations(t *testing.T) {
 		"audit:\n  retention: nope\n",
 		"audit:\n  retention: -1h\n",
 		"audit:\n  cleanup_interval: 0s\n",
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "server.yaml")
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatalf("Load(%q) returned nil error", content)
+		}
+	}
+}
+
+func TestLoadTaskConfigAndEnvironmentOverrides(t *testing.T) {
+	t.Setenv("MIZUPANEL_TASK_RETENTION", "45d")
+	t.Setenv("MIZUPANEL_TASK_CLEANUP_INTERVAL", "2h")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.yaml")
+	content := []byte("tasks:\n  retention: 14d\n  cleanup_interval: 30m\n")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TaskRetention != 45*24*time.Hour || cfg.TaskCleanup != 2*time.Hour {
+		t.Fatalf("task config = %s / %s", cfg.TaskRetention, cfg.TaskCleanup)
+	}
+}
+
+func TestLoadRejectsInvalidTaskDurations(t *testing.T) {
+	for _, content := range []string{
+		"tasks:\n  retention: nope\n",
+		"tasks:\n  retention: -1h\n",
+		"tasks:\n  cleanup_interval: 0s\n",
 	} {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "server.yaml")

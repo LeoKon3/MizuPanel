@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 
@@ -195,6 +196,7 @@ type agentConnection struct {
 	supportsDockerComposeDeployment     bool
 	supportsDockerResources             bool
 	supportsSystemdServices             bool
+	supportsTaskRunner                  bool
 	sessionMu                           sync.Mutex
 	terminals                           map[string]*browserTerminal
 	containerExecs                      map[string]*browserContainerExec
@@ -218,7 +220,17 @@ type agentConnection struct {
 	pendingContainerRestarts            map[string]chan protocol.ContainerRestartResponse
 	pendingContainerDeletes             map[string]chan protocol.ContainerDeleteResponse
 	pendingK8sMessages                  map[string]chan json.RawMessage
+	pendingRPCs                         map[string]chan rpcDelivery
+	closed                              chan struct{}
+	closeOnce                           sync.Once
 }
+
+type rpcDelivery struct {
+	raw json.RawMessage
+	err error
+}
+
+var errAgentRPCDisconnected = errors.New("agent RPC connection closed")
 
 type browserTerminal struct {
 	sessionID string
@@ -417,7 +429,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := h.startSession(nodeID)
-	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerComposeDeployment: hello.DockerComposeDeployment, supportsDockerResources: hello.DockerResources, supportsSystemdServices: hello.SystemdServices, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage)}
+	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerComposeDeployment: hello.DockerComposeDeployment, supportsDockerResources: hello.DockerResources, supportsSystemdServices: hello.SystemdServices, supportsTaskRunner: hello.TaskRunner, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage), pendingRPCs: make(map[string]chan rpcDelivery), closed: make(chan struct{})}
 	h.recordConnectionEvent(agent, store.ConnectionEventConnected, "")
 	h.registerConnection(agent)
 	h.observeAgentUpgradeReconnect(nodeID, hello.AgentVersion)
@@ -549,6 +561,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			agent.deliverContainerDelete(message)
+		case protocol.MessageTypeScriptExecutionResponse:
+			var message protocol.ScriptExecutionResponse
+			if err := json.Unmarshal(rawMessage, &message); err != nil || message.RequestID == "" {
+				continue
+			}
+			agent.deliverRPC(message.RequestID, rawMessage)
 		case protocol.MessageTypeTerminalStarted, protocol.MessageTypeTerminalData, protocol.MessageTypeTerminalExit, protocol.MessageTypeTerminalError, protocol.MessageTypeTerminalClose:
 			var message protocol.TerminalMessage
 			if err := json.Unmarshal(rawMessage, &message); err != nil {
@@ -698,6 +716,98 @@ func (h *Handler) NodeTerminalEnabled(nodeID string) bool {
 	defer h.mu.Unlock()
 	connection := h.connections[nodeID]
 	return connection != nil && connection.terminalEnabled
+}
+
+func (h *Handler) TaskRunnerSupported(nodeID string) bool {
+	agent := h.connection(nodeID)
+	return agent != nil && agent.supportsTaskRunner
+}
+
+func (h *Handler) RunScript(ctx context.Context, nodeID string, request protocol.ScriptExecutionRequest) (protocol.ScriptExecutionResponse, error) {
+	base := protocol.ScriptExecutionResponse{
+		Type:        protocol.MessageTypeScriptExecutionResponse,
+		ExecutionID: request.ExecutionID,
+		Status:      protocol.ScriptExecutionStatusFailed,
+		Output:      "",
+	}
+	agent := h.connection(nodeID)
+	if agent == nil {
+		base.Error = "Agent 离线，无法执行脚本。"
+		return base, nil
+	}
+	if !agent.supportsTaskRunner {
+		base.Status = protocol.ScriptExecutionStatusUnsupported
+		base.Error = "当前 Agent 不支持脚本执行，请升级 Agent 后再试。"
+		return base, nil
+	}
+
+	requestID, err := randomTerminalSessionID()
+	if err != nil {
+		return protocol.ScriptExecutionResponse{}, err
+	}
+	request.Type = protocol.MessageTypeScriptExecutionRequest
+	request.RequestID = requestID
+
+	timeoutSeconds := request.TimeoutSeconds
+	if timeoutSeconds < 1 || timeoutSeconds > protocol.ScriptExecutionMaxTimeoutSeconds {
+		timeoutSeconds = protocol.ScriptExecutionDefaultTimeoutSeconds
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second+10*time.Second)
+	defer cancel()
+	var response protocol.ScriptExecutionResponse
+	if err := agent.callRPC(rpcCtx, requestID, request, &response); err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			base.Status = protocol.ScriptExecutionStatusCancelled
+			base.Error = "脚本执行已取消。"
+		case errors.Is(err, context.DeadlineExceeded):
+			base.Status = protocol.ScriptExecutionStatusTimedOut
+			base.Error = "等待 Agent 执行结果超时。"
+		case errors.Is(err, errAgentRPCDisconnected):
+			base.Error = "Agent 连接已断开。"
+		default:
+			base.Error = "无法向 Agent 发送脚本执行请求。"
+		}
+		return base, nil
+	}
+	if response.Type != protocol.MessageTypeScriptExecutionResponse || response.RequestID != requestID || response.ExecutionID != request.ExecutionID || !validScriptExecutionStatus(response.Status) {
+		base.Error = "Agent 返回了无效的脚本执行结果。"
+		return base, nil
+	}
+	if response.DurationMS < 0 {
+		response.DurationMS = 0
+	}
+	if len(response.Output) > protocol.ScriptExecutionMaxOutputBytes {
+		response.Output = boundRPCText(response.Output, protocol.ScriptExecutionMaxOutputBytes)
+		response.OutputTruncated = true
+	}
+	response.Error = boundRPCText(response.Error, 1024)
+	return response, nil
+}
+
+func validScriptExecutionStatus(status string) bool {
+	switch status {
+	case protocol.ScriptExecutionStatusSuccess,
+		protocol.ScriptExecutionStatusFailed,
+		protocol.ScriptExecutionStatusTimedOut,
+		protocol.ScriptExecutionStatusBusy,
+		protocol.ScriptExecutionStatusCancelled,
+		protocol.ScriptExecutionStatusUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+func boundRPCText(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	value = value[:limit]
+	for len(value) > 0 && !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func (h *Handler) FileList(ctx context.Context, nodeID string, path string) (protocol.FileListResponse, error) {
@@ -2286,6 +2396,67 @@ func (c *agentConnection) deliverK8sMessage(requestID string, rawMessage json.Ra
 	}
 }
 
+func (c *agentConnection) callRPC(ctx context.Context, requestID string, request any, response any) error {
+	ch := make(chan rpcDelivery, 1)
+	c.pendingMu.Lock()
+	if c.closed != nil {
+		select {
+		case <-c.closed:
+			c.pendingMu.Unlock()
+			return errAgentRPCDisconnected
+		default:
+		}
+	}
+	if c.pendingRPCs == nil {
+		c.pendingRPCs = make(map[string]chan rpcDelivery)
+	}
+	if _, exists := c.pendingRPCs[requestID]; exists {
+		c.pendingMu.Unlock()
+		return errors.New("duplicate agent RPC request ID")
+	}
+	c.pendingRPCs[requestID] = ch
+	c.pendingMu.Unlock()
+	defer c.removeRPC(requestID, ch)
+
+	if err := c.writeJSON(request); err != nil {
+		return err
+	}
+	select {
+	case delivery := <-ch:
+		if delivery.err != nil {
+			return delivery.err
+		}
+		if err := json.Unmarshal(delivery.raw, response); err != nil {
+			return errors.New("invalid agent RPC response")
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *agentConnection) removeRPC(requestID string, ch chan rpcDelivery) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	if c.pendingRPCs[requestID] == ch {
+		delete(c.pendingRPCs, requestID)
+	}
+}
+
+func (c *agentConnection) deliverRPC(requestID string, rawMessage json.RawMessage) {
+	c.pendingMu.Lock()
+	ch := c.pendingRPCs[requestID]
+	c.pendingMu.Unlock()
+	if ch == nil {
+		return
+	}
+	delivery := rpcDelivery{raw: append(json.RawMessage(nil), rawMessage...)}
+	select {
+	case ch <- delivery:
+	default:
+	}
+}
+
 func (c *agentConnection) closePendingOperations(reason string) {
 	c.pendingMu.Lock()
 	lists := c.pendingLists
@@ -2304,6 +2475,7 @@ func (c *agentConnection) closePendingOperations(reason string) {
 	containerRestarts := c.pendingContainerRestarts
 	containerDeletes := c.pendingContainerDeletes
 	k8sMessages := c.pendingK8sMessages
+	rpcs := c.pendingRPCs
 	c.pendingLists = make(map[string]chan protocol.FileListResponse)
 	c.pendingReads = make(map[string]chan protocol.FileReadResponse)
 	c.pendingWrites = make(map[string]chan protocol.FileWriteResponse)
@@ -2320,7 +2492,17 @@ func (c *agentConnection) closePendingOperations(reason string) {
 	c.pendingContainerRestarts = make(map[string]chan protocol.ContainerRestartResponse)
 	c.pendingContainerDeletes = make(map[string]chan protocol.ContainerDeleteResponse)
 	c.pendingK8sMessages = make(map[string]chan json.RawMessage)
+	c.pendingRPCs = make(map[string]chan rpcDelivery)
+	if c.closed != nil {
+		c.closeOnce.Do(func() { close(c.closed) })
+	}
 	c.pendingMu.Unlock()
+	for _, ch := range rpcs {
+		select {
+		case ch <- rpcDelivery{err: errAgentRPCDisconnected}:
+		default:
+		}
+	}
 	for requestID, ch := range lists {
 		ch <- protocol.FileListResponse{Type: protocol.MessageTypeFileListResponse, RequestID: requestID, Code: "offline", Error: reason}
 	}

@@ -53,6 +53,7 @@ func main() {
 	settings := store.NewSettingsStoreWithDialect(database, dialect)
 	alerts := store.NewAlertStore(database)
 	uptimeMonitors := store.NewUptimeStoreWithDialect(database, dialect)
+	tasks := store.NewTaskStoreWithDialect(database, dialect)
 	auditStore := serveraudit.NewStore(database, dialect)
 	cleaner := retention.NewDynamicCleaner(metrics, func() (time.Duration, error) {
 		return settings.MetricsRetention(context.Background(), cfg.MetricsRetention)
@@ -60,6 +61,8 @@ func main() {
 	go cleaner.Run(context.Background(), cfg.CleanupInterval)
 	auditCleaner := retention.NewAuditCleaner(auditStore, cfg.AuditRetention)
 	go auditCleaner.Run(context.Background(), cfg.AuditCleanup)
+	taskCleaner := retention.NewTaskRunCleaner(tasks, cfg.TaskRetention)
+	go taskCleaner.Run(context.Background(), cfg.TaskCleanup)
 
 	paths, err := runtimeReleasePaths(os.Executable)
 	if err != nil {
@@ -77,6 +80,7 @@ func main() {
 		Settings:            settings,
 		Alerts:              alerts,
 		Uptime:              uptimeMonitors,
+		Tasks:               tasks,
 		AgentToken:          cfg.AgentToken,
 		PublicURL:           cfg.PublicURL,
 		Interval:            5,

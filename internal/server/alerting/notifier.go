@@ -148,6 +148,12 @@ func (n *Notifier) SendUptime(ctx context.Context, channel NotificationChannel, 
 // DeliverUptime fans out concurrently and applies the same bounded retry
 // policy used by metric alert notifications.
 func (n *Notifier) DeliverUptime(ctx context.Context, channels []store.NotificationChannel, payload UptimePayload) UptimeDeliveryResult {
+	return n.deliverChannels(ctx, channels, func(sendCtx context.Context, channel NotificationChannel) error {
+		return n.SendUptime(sendCtx, channel, payload)
+	})
+}
+
+func (n *Notifier) deliverChannels(ctx context.Context, channels []store.NotificationChannel, send func(context.Context, NotificationChannel) error) UptimeDeliveryResult {
 	attemptedAt := n.currentTime().UTC()
 	if len(channels) == 0 {
 		return UptimeDeliveryResult{AttemptedAt: attemptedAt}
@@ -168,7 +174,7 @@ func (n *Notifier) DeliverUptime(ctx context.Context, channels []store.Notificat
 			defer waitGroup.Done()
 			results[index] = channelDeliveryResult{
 				channelType: channel.Type,
-				err:         n.deliverUptimeChannelWithRetry(ctx, channel, payload),
+				err:         n.deliverChannelWithRetry(ctx, channel, send),
 			}
 		}()
 	}
@@ -187,7 +193,7 @@ func (n *Notifier) DeliverUptime(ctx context.Context, channels []store.Notificat
 	}
 }
 
-func (n *Notifier) deliverUptimeChannelWithRetry(ctx context.Context, channel NotificationChannel, payload UptimePayload) error {
+func (n *Notifier) deliverChannelWithRetry(ctx context.Context, channel NotificationChannel, send func(context.Context, NotificationChannel) error) error {
 	delays := n.uptimeRetryDelays
 	if len(delays) == 0 {
 		delays = []time.Duration{0}
@@ -208,7 +214,7 @@ func (n *Notifier) deliverUptimeChannelWithRetry(ctx context.Context, channel No
 			}
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
-		lastErr = n.SendUptime(attemptCtx, channel, payload)
+		lastErr = send(attemptCtx, channel)
 		cancel()
 		if lastErr == nil {
 			return nil
