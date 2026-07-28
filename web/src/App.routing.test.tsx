@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, test, vi } from 'vitest'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import App from './App'
 
@@ -47,10 +47,17 @@ vi.mock('./api/client', () => ({
   getUptimeMonitors: vi.fn(async () => ({ monitors: [] })),
   getAutomationScripts: vi.fn(async () => ({ scripts: [] })),
   getScheduledTasks: vi.fn(async () => ({ tasks: [] })),
-  getAutomationRuns: vi.fn(async () => ({ runs: [], next_before_id: null }))
+  getAutomationRuns: vi.fn(async () => ({ runs: [], next_before_id: null })),
+  getApplicationServices: vi.fn(async () => []),
+  getApplicationService: vi.fn(),
+  createApplicationService: vi.fn(),
+  updateApplicationService: vi.fn(),
+  deleteApplicationService: vi.fn()
 }))
 
 describe('App routing', () => {
+  beforeEach(() => window.history.replaceState({}, '', '/'))
+
   test('uses /nodes/:id as the selected node path', async () => {
     window.history.pushState({}, '', '/nodes/node-1')
 
@@ -78,5 +85,25 @@ describe('App routing', () => {
     expect((await screen.findAllByRole('heading', { name: '任务中心', level: 1 })).length).toBeGreaterThan(0)
     expect(await screen.findByText('还没有计划任务')).toBeInTheDocument()
     await waitFor(() => expect(window.location.pathname).toBe('/tasks'))
+  })
+
+  test('renders the application service center directly at /services', async () => {
+    window.history.pushState({}, '', '/services')
+
+    render(<App />)
+
+    expect(await screen.findByText('还没有应用服务')).toBeInTheDocument()
+    expect((await screen.findAllByRole('heading', { name: '应用服务', level: 1 })).length).toBeGreaterThan(0)
+    await waitFor(() => expect(window.location.pathname).toBe('/services'))
+  })
+
+  test('places application services between hosts and task center', async () => {
+    render(<App />)
+    await screen.findAllByText('Oracle SG')
+
+    const labels = within(screen.getByRole('navigation', { name: '侧边导航' }))
+      .getAllByRole('button')
+      .map((button) => button.textContent?.trim())
+    expect(labels.slice(1, 4)).toEqual(['主机', '应用服务', '任务中心'])
   })
 })

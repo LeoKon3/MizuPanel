@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  轻量级自托管运维面板，用一个干净的控制台管理主机、Docker、Systemd、自动化任务、告警、服务拨测、操作审计和 Kubernetes 资源。
+  轻量级自托管运维面板，用一个干净的控制台管理应用服务、主机、Docker、Systemd、自动化任务、告警、服务拨测、操作审计和 Kubernetes 资源。
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.9-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.10-14B8A6">
 </p>
 
 <p align="center">
@@ -37,7 +37,7 @@
       <a href="assets/screenshots/host-detail.png"><img src="assets/screenshots/host-detail.png" alt="主机详情" width="100%" /></a>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/k8s-detail.png"><img src="assets/screenshots/k8s-detail.png" alt="Kubernetes 详情" width="100%" /></a>
+      <a href="assets/screenshots/services.png"><img src="assets/screenshots/services.png" alt="应用服务中心" width="100%" /></a>
     </td>
     <td width="33%">
       <a href="assets/screenshots/alerts.png"><img src="assets/screenshots/alerts.png" alt="告警中心" width="100%" /></a>
@@ -75,6 +75,9 @@
     <td width="33%"><strong>资源创建</strong><br /><sub>Deployment、Pod、Service、Ingress、ConfigMap、Secret、PVC、Job、CronJob。</sub></td>
   </tr>
   <tr>
+    <td colspan="3"><strong>应用服务中心</strong><br /><sub>把节点、Compose、Systemd、Kubernetes 工作负载、服务拨测、告警规则和计划任务聚合成业务服务，统一查看健康原因、部署位置与近期活动。</sub></td>
+  </tr>
+  <tr>
     <td colspan="3"><strong>计划任务与脚本库</strong><br /><sub>集中保存 Shell 脚本，按标准五段 Cron 和独立时区在一个或多个 Agent 上执行，并查看每个节点的状态、耗时与有限输出。</sub></td>
   </tr>
   <tr>
@@ -84,6 +87,12 @@
     <td colspan="3"><strong>操作审计</strong><br /><sub>记录敏感操作的时间、结果、发起者类型、目标和节点，并在审计日志页面提供筛选、增量分页与安全详情；不会记录请求正文、机密内容或终端命令与输出。</sub></td>
   </tr>
 </table>
+
+<strong>应用服务中心</strong>
+
+Dashboard 顶层的 **应用服务**（`/services`）是现有资源之上的逻辑运维视图。一个服务可以关联节点、Compose 项目、Systemd 服务、Kubernetes Deployment/StatefulSet/DaemonSet、服务拨测、告警规则和计划任务，并按异常、降级、健康、未知四种状态实时聚合可读原因、部署位置和近期活动。
+
+应用服务不会复制或接管原资源。详情页只提供到现有管理入口的深链；删除应用服务只删除逻辑服务和关联记录，不会停止、修改或删除任何原资源。远端 Agent 或 Kubernetes 查询失败时，其余资源仍会返回，失败范围显示为暂不可用。
 
 <strong>计划任务与脚本库</strong>
 

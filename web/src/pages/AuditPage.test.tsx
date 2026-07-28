@@ -138,6 +138,7 @@ describe('AuditPage', () => {
 
     const moduleSelect = screen.getByLabelText('模块')
     expect(within(moduleSelect).getByRole('option', { name: '任务中心' })).toHaveValue('automation')
+    expect(within(moduleSelect).getByRole('option', { name: '应用服务' })).toHaveValue('service')
     fireEvent.change(moduleSelect, { target: { value: 'automation' } })
     await waitFor(() => expect(api.getAuditEvents).toHaveBeenCalledWith(expect.objectContaining({ module: 'automation' }), expect.anything()))
   })

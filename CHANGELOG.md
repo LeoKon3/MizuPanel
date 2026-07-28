@@ -2,6 +2,28 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.10 - 2026-07-28
+
+### Added
+
+- Added the Application Service Center with logical service CRUD, seven resource association types, real-time health aggregation, readable degradation reasons, deployment summaries, and related alert, task, and audit activity.
+- Added the `/services` Dashboard list and detail routes with health filters, resource search, lazy remote resource selection, direct links into existing host and Kubernetes views, accessible dialogs, and non-blocking feedback.
+- Added request-scoped, context-aware Agent and Kubernetes queries so service health aggregation deduplicates remote scopes, limits concurrency, honors cancellation, and returns partial status instead of blocking the whole page.
+
+### Changed
+
+- Placed Application Services between Hosts and Task Center in the primary navigation and added safe query-based deep links for Compose, Systemd, and Kubernetes workloads.
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.10.
+
+### Fixed
+
+- Preserved the selected host-detail section when node data arrives or the selected node changes, while keeping Docker resource queries isolated from the previous node.
+
+### Security
+
+- Application services are non-owning logical views: deleting one removes only its association records and never deletes or mutates linked hosts, Compose projects, Systemd units, Kubernetes workloads, monitors, alert rules, or scheduled tasks.
+- Service audit records contain only bounded service identity and resource-count metadata; request bodies, remote diagnostics, configuration content, and secrets are excluded.
+
 ## v0.1.9 - 2026-07-26
 
 ### Added

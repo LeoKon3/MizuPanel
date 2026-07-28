@@ -50,6 +50,26 @@ type NodeDetailProps = {
 }
 
 type DetailSection = 'overview' | 'processes' | 'containers' | 'services' | 'files' | 'logs' | 'agent'
+
+type NodeDetailQuery = {
+  section: DetailSection
+  dockerView: 'containers' | 'compose' | 'resources'
+  search: string
+}
+
+function readNodeDetailQuery(): NodeDetailQuery {
+  if (typeof window === 'undefined') return { section: 'overview', dockerView: 'containers', search: '' }
+  const params = new URLSearchParams(window.location.search)
+  const requestedSection = params.get('section')
+  const section: DetailSection = requestedSection === 'processes' || requestedSection === 'containers' || requestedSection === 'services' || requestedSection === 'files' || requestedSection === 'logs' || requestedSection === 'agent'
+    ? requestedSection
+    : 'overview'
+  const requestedDockerView = params.get('docker')
+  const dockerView = section === 'containers' && (requestedDockerView === 'compose' || requestedDockerView === 'resources')
+    ? requestedDockerView
+    : 'containers'
+  return { section, dockerView, search: (params.get('q') || '').slice(0, 256) }
+}
 type ProcessSort = 'cpu' | 'memory' | 'pid' | 'name'
 type DockerFilter = 'all' | 'running' | 'stopped' | 'abnormal'
 type SSHProgressEventLog = SSHProgressEvent & { logs: string[] }
@@ -140,12 +160,14 @@ function mergeSSHProgressEvent(current: SSHProgressEventLog[], progress: SSHProg
 }
 
 export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, dockerCompose, dockerResources, systemdServices, monitoringLoading = false, range, onRangeChange, onLoadFiles, onReadFile, onWriteFile, onUploadFile, onDeletePath, onRebootNode, onSSHUninstall, onGetAgentStatus, onGetConnectionDiagnostics, onUpgradeAgent, onGetAgentUpgradeStatus, onGetLegacyAgentUpgradeCommand, onRestartAgent, onGetAgentLogs, onRefreshDocker, onRefreshDockerCompose, onDockerComposeAction, onDockerComposeDeployment, onRefreshDockerResources, onDockerResourceAction, onRefreshSystemdServices, onSystemdServiceAction, onNodeOrganizationChanged }: NodeDetailProps) {
-  const [activeSection, setActiveSection] = useState<DetailSection>('overview')
+  const [initialQuery] = useState(readNodeDetailQuery)
+  const [activeSection, setActiveSection] = useState<DetailSection>(initialQuery.section)
+  const detailSearch = initialQuery.section === 'services' ? initialQuery.search : ''
   const [processSort, setProcessSort] = useState<ProcessSort>('cpu')
   const [processSearch, setProcessSearch] = useState('')
   const [dockerFilter, setDockerFilter] = useState<DockerFilter>('all')
-  const [dockerSearch, setDockerSearch] = useState('')
-  const [dockerViewState, setDockerViewState] = useState<{ nodeID?: string, view: 'containers' | 'compose' | 'resources' }>({ nodeID: node?.id, view: 'containers' })
+  const [dockerSearch, setDockerSearch] = useState(initialQuery.section === 'containers' ? initialQuery.search : '')
+  const [dockerViewState, setDockerViewState] = useState<{ nodeID?: string, view: 'containers' | 'compose' | 'resources' }>({ nodeID: node?.id, view: initialQuery.dockerView })
   // Derive the view from the current node during render. This prevents an old
   // resource selection from issuing a request in the effect pass immediately
   // after a host switch.
@@ -1350,6 +1372,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
           loading={systemdLoading}
           online={online}
           actionLoading={systemdActionLoading}
+          initialSearch={detailSearch}
           onRefresh={() => {
             if (!node || !onRefreshSystemdServices) return
             setSystemdLoading(true)
@@ -2456,9 +2479,10 @@ function ContainerActionMenuItem({ icon, label, danger, disabled, prominent, onC
   )
 }
 
-function SystemdServicesPanel({ response, loading, online, actionLoading, onRefresh, onAction }: { response?: SystemdServiceListResponse; loading: boolean; online: boolean; actionLoading?: string; onRefresh: () => void; onAction: (serviceName: string, action: SystemdServiceAction) => void }) {
+function SystemdServicesPanel({ response, loading, online, actionLoading, initialSearch, onRefresh, onAction }: { response?: SystemdServiceListResponse; loading: boolean; online: boolean; actionLoading?: string; initialSearch: string; onRefresh: () => void; onAction: (serviceName: string, action: SystemdServiceAction) => void }) {
   const [filter, setFilter] = useState<'all' | 'active' | 'inactive' | 'failed'>('all')
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(initialSearch)
+  useEffect(() => setSearch(initialSearch), [initialSearch])
   const services = response?.services ?? []
   const keyword = search.trim().toLowerCase()
   const filteredServices = services.filter((service) => {

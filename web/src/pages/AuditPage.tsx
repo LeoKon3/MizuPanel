@@ -34,6 +34,7 @@ const moduleOptions = [
   ['alert', '告警'],
   ['uptime', '服务拨测'],
   ['automation', '任务中心'],
+  ['service', '应用服务'],
   ['terminal', '终端']
 ] as const
 

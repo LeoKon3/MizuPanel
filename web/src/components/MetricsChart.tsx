@@ -118,7 +118,11 @@ export function MetricsChart({ metrics, dataKey, series, summaryItems = [], titl
             {emptyText}
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer
+            width="100%"
+            height="100%"
+            initialDimension={{ width: 320, height: 160 }}
+          >
             <AreaChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
               <defs>
                 {chartSeries.map((item) => {

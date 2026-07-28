@@ -98,6 +98,7 @@ type Server struct {
 	terminalMu              sync.Mutex
 	auth                    *Authenticator
 	audit                   *serveraudit.Store
+	serviceCenter           ServiceCenter
 }
 
 type terminalToken struct {
@@ -203,6 +204,8 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 		case AutomationConfig:
 			server.automation = typed.Store
 			server.automationRunner = typed.Runner
+		case ServiceCenterConfig:
+			server.serviceCenter = typed.Facade
 		case AuthConfig:
 			server.auth = NewAuthenticator(typed)
 		case *Authenticator:
@@ -251,6 +254,10 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 		mux.HandleFunc("/api/automation/tasks/", server.requireAuth(server.handleAutomationTaskRoutes))
 		mux.HandleFunc("/api/automation/runs", server.requireAuth(server.handleAutomationRuns))
 		mux.HandleFunc("/api/automation/runs/", server.requireAuth(server.handleAutomationRunRoutes))
+	}
+	if server.serviceCenter != nil {
+		mux.HandleFunc("/api/services", server.requireAuth(server.handleServices))
+		mux.HandleFunc("/api/services/", server.requireAuth(server.handleServiceRoutes))
 	}
 	return mux
 }

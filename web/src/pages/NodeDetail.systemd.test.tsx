@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, test, vi } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { NodeDetail } from './NodeDetail'
 
@@ -41,6 +41,8 @@ function renderSystemdDetail(onAction = vi.fn(async (_nodeID: string, _serviceNa
 }
 
 describe('NodeDetail systemd service management', () => {
+  beforeEach(() => window.history.replaceState({}, '', '/'))
+
   test('lists services and opens logs or lifecycle actions through a service menu', async () => {
     const onAction = renderSystemdDetail()
 
@@ -80,5 +82,15 @@ describe('NodeDetail systemd service management', () => {
     fireEvent.click(screen.getByRole('button', { name: '系统服务' }))
     expect(screen.getByText('当前 Agent 不支持 systemd 服务管理')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: '搜索系统服务' })).not.toBeInTheDocument()
+  })
+
+  test('initializes the service section and safe search from a deep link', async () => {
+    window.history.replaceState({}, '', '/nodes/node-1?section=services&q=nginx.service')
+    renderSystemdDetail()
+
+    const panel = await screen.findByRole('region', { name: '系统服务' })
+    expect(within(panel).getByRole('textbox', { name: '搜索系统服务' })).toHaveValue('nginx.service')
+    expect(within(panel).getByText('nginx.service')).toBeInTheDocument()
+    expect(within(panel).queryByText('worker.service')).not.toBeInTheDocument()
   })
 })

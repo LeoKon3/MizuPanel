@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  A lightweight self-hosted operations panel for hosts, Docker, systemd, automation tasks, alerts, uptime monitoring, operational auditing, and Kubernetes resources.
+  A lightweight self-hosted operations panel for application services, hosts, Docker, systemd, automation tasks, alerts, uptime monitoring, operational auditing, and Kubernetes resources.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.9-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.10-14B8A6">
 </p>
 
 <p align="center">
@@ -37,7 +37,7 @@
       <a href="assets/screenshots/host-detail.png"><img src="assets/screenshots/host-detail.png" alt="Host detail" width="100%" /></a>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/k8s-detail.png"><img src="assets/screenshots/k8s-detail.png" alt="Kubernetes detail" width="100%" /></a>
+      <a href="assets/screenshots/services.png"><img src="assets/screenshots/services.png" alt="Application Service Center" width="100%" /></a>
     </td>
     <td width="33%">
       <a href="assets/screenshots/alerts.png"><img src="assets/screenshots/alerts.png" alt="Alerts" width="100%" /></a>
@@ -75,6 +75,9 @@
     <td width="33%"><strong>Resource Creation</strong><br /><sub>Deployment, Pod, Service, Ingress, ConfigMap, Secret, PVC, Job, and CronJob.</sub></td>
   </tr>
   <tr>
+    <td colspan="3"><strong>Application Service Center</strong><br /><sub>Group hosts, Compose, systemd, Kubernetes workloads, uptime monitors, alert rules, and scheduled tasks into business services with one health, location, and activity view.</sub></td>
+  </tr>
+  <tr>
     <td colspan="3"><strong>Scheduled Tasks And Script Library</strong><br /><sub>Store Shell scripts centrally, run them on one or more Agents with standard five-field Cron schedules and explicit time zones, and inspect per-node status, duration, and bounded output.</sub></td>
   </tr>
   <tr>
@@ -84,6 +87,12 @@
     <td colspan="3"><strong>Audit Trail</strong><br /><sub>Records the time, result, actor type, target, and node for sensitive operations, with filters, incremental pagination, and safe details in the Audit page; request bodies, secrets, terminal commands, and terminal output are not recorded.</sub></td>
   </tr>
 </table>
+
+<strong>Application Service Center</strong>
+
+The top-level **Application Services** page (`/services`) is a logical operations view over existing resources. A service can link hosts, Compose projects, systemd services, Kubernetes Deployments/StatefulSets/DaemonSets, uptime monitors, alert rules, and scheduled tasks, then aggregate readable reasons, deployment locations, and recent activity into unhealthy, degraded, healthy, or unknown status.
+
+Application services never copy or take ownership of the linked resources. The detail page only deep-links into their existing management surfaces, and deleting an application service removes only the logical service and its associations. If an Agent or Kubernetes query fails, other resource results still return while that scope is shown as temporarily unavailable.
 
 <strong>Scheduled Tasks And Script Library</strong>
 

@@ -25,6 +25,10 @@ type AgentHub interface {
 	SendToNodeWithTimeout(nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error)
 }
 
+type contextAgentHub interface {
+	SendToNodeWithContext(ctx context.Context, nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error)
+}
+
 // NewService 创建业务逻辑层
 func NewService(store *Store, hub AgentHub) *Service {
 	return &Service{
@@ -295,7 +299,7 @@ func (s *Service) resourceRequest(ctx context.Context, clusterID, namespace, msg
 	if s.debug {
 		log.Printf("[debug][server][k8s] resource start type=%s request_id=%s cluster_id=%s node_id=%s namespace=%s", msgType, requestID, clusterID, cluster.NodeID, namespace)
 	}
-	rawResp, err := s.hub.SendToNodeWithTimeout(cluster.NodeID, agentReq, timeout)
+	rawResp, err := s.sendToNode(ctx, cluster.NodeID, agentReq, timeout)
 	if err != nil {
 		if s.debug {
 			log.Printf("[debug][server][k8s] resource done type=%s request_id=%s cluster_id=%s node_id=%s namespace=%s elapsed=%s error=%v", msgType, requestID, clusterID, cluster.NodeID, namespace, time.Since(start), err)
@@ -306,6 +310,13 @@ func (s *Service) resourceRequest(ctx context.Context, clusterID, namespace, msg
 		log.Printf("[debug][server][k8s] resource response type=%s request_id=%s cluster_id=%s node_id=%s namespace=%s elapsed=%s", msgType, requestID, clusterID, cluster.NodeID, namespace, time.Since(start))
 	}
 	return rawResp, cluster, nil
+}
+
+func (s *Service) sendToNode(ctx context.Context, nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error) {
+	if hub, ok := s.hub.(contextAgentHub); ok {
+		return hub.SendToNodeWithContext(ctx, nodeID, message, timeout)
+	}
+	return s.hub.SendToNodeWithTimeout(nodeID, message, timeout)
 }
 
 func (s *Service) GetSummary(ctx context.Context, clusterID string) (*protocol.K8sResourceSummary, error) {

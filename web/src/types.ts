@@ -1067,3 +1067,101 @@ export type K8sPodLogsResponse = {
   success: boolean
   logs: string
 }
+
+export type ApplicationServiceHealth = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+export type ApplicationServiceResourceType = 'node' | 'compose_project' | 'systemd_service' | 'k8s_workload' | 'uptime_monitor' | 'alert_rule' | 'scheduled_task'
+
+export type ApplicationServiceResource = {
+  id?: string
+  service_id?: string
+  resource_type: ApplicationServiceResourceType
+  scope_id: string
+  resource_kind: string
+  namespace: string
+  resource_key: string
+  display_name: string
+  created_at?: string
+}
+
+export type ApplicationServiceResourceProjection = ApplicationServiceResource & {
+  id: string
+  health: ApplicationServiceHealth
+  state: 'available' | 'unavailable' | 'missing' | string
+  reason: string
+  meta: Record<string, unknown>
+}
+
+export type ApplicationServiceHealthReason = {
+  status: ApplicationServiceHealth
+  resource_id: string
+  resource_type: ApplicationServiceResourceType
+  resource_name: string
+  message: string
+}
+
+export type ApplicationServiceSummary = {
+  id: string
+  name: string
+  description: string
+  health: ApplicationServiceHealth
+  reasons: ApplicationServiceHealthReason[]
+  first_reason: string
+  reason_counts: Record<string, number>
+  resource_count: number
+  resource_type_counts: Record<string, number>
+  location_summary: string
+  resources: ApplicationServiceResourceProjection[]
+  created_at: string
+  updated_at: string
+}
+
+export type ApplicationServiceAlertActivity = {
+  id: number
+  rule_id: number
+  rule_name: string
+  node_id: string
+  node_name: string
+  metric_field: string
+  metric_value: number
+  triggered_at: string
+  resolved_at: string | null
+}
+
+export type ApplicationServiceTaskActivity = {
+  id: number
+  task_id: number | null
+  task_name: string
+  script_name: string
+  status: string
+  trigger: string
+  created_at: string
+  completed_at: string | null
+}
+
+export type ApplicationServiceAuditActivity = {
+  id: number
+  created_at: string
+  actor_type: string
+  actor_name: string
+  module: string
+  action: string
+  target_type: string
+  target_id: string
+  target_name: string
+  node_id: string
+  result: string
+  summary: string
+  metadata: Record<string, string>
+}
+
+export type ApplicationServiceDetail = ApplicationServiceSummary & {
+  recent_alerts: ApplicationServiceAlertActivity[]
+  recent_tasks: ApplicationServiceTaskActivity[]
+  recent_audit: ApplicationServiceAuditActivity[]
+}
+
+export type ApplicationServiceInput = {
+  name: string
+  description: string
+  resources: ApplicationServiceResource[]
+}

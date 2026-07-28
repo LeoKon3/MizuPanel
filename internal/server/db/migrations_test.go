@@ -646,3 +646,72 @@ func TestMySQLMigrationIncludesNodeOrganizationSchema(t *testing.T) {
 		t.Fatal("MySQL compatibility migration missing group_id")
 	}
 }
+
+func TestMigrateSQLiteCreatesReplaySafeApplicationServiceSchema(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	defer database.Close()
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("replay Migrate: %v", err)
+	}
+
+	for _, table := range []string{"application_services", "application_service_resources"} {
+		var name string
+		if err := database.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
+			t.Fatalf("missing table %s: %v", table, err)
+		}
+	}
+	var indexCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('idx_application_service_resources_service', 'idx_application_service_resources_lookup')`).Scan(&indexCount); err != nil {
+		t.Fatalf("query application service indexes: %v", err)
+	}
+	if indexCount != 2 {
+		t.Fatalf("application service index count = %d, want 2", indexCount)
+	}
+
+	const serviceID = "service-1"
+	if _, err := database.Exec(`INSERT INTO application_services (id, name, normalized_name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, serviceID, "Panel", "panel", "", "2026-07-28T00:00:00Z", "2026-07-28T00:00:00Z"); err != nil {
+		t.Fatalf("insert application service: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO application_service_resources (id, service_id, resource_type, scope_id, resource_kind, namespace, resource_key, display_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "resource-1", serviceID, "node", "", "", "", "node-1", "Node 1", "2026-07-28T00:00:00Z"); err != nil {
+		t.Fatalf("insert application service resource: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM application_services WHERE id = ?`, serviceID); err != nil {
+		t.Fatalf("delete application service: %v", err)
+	}
+	var resourceCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM application_service_resources WHERE service_id = ?`, serviceID).Scan(&resourceCount); err != nil {
+		t.Fatalf("count application service resources: %v", err)
+	}
+	if resourceCount != 0 {
+		t.Fatalf("application service resources after parent delete = %d, want 0", resourceCount)
+	}
+}
+
+func TestMySQLMigrationIncludesApplicationServiceSchema(t *testing.T) {
+	statements := strings.Join(mysqlMigrationStatements(), "\n")
+	for _, fragment := range []string{
+		"application_services",
+		"application_service_resources",
+		"uq_application_services_normalized_name",
+		"uq_application_service_resource_identity",
+		"idx_application_service_resources_service",
+		"idx_application_service_resources_lookup",
+		"id VARCHAR(36) PRIMARY KEY",
+		"service_id VARCHAR(36)",
+		"namespace VARCHAR(191)",
+		"display_name VARCHAR(256)",
+		"ON DELETE CASCADE",
+	} {
+		if !strings.Contains(statements, fragment) {
+			t.Fatalf("MySQL application service migration missing %q", fragment)
+		}
+	}
+}

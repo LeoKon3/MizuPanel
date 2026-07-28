@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeDockerResources, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, runNodeDockerComposeDeployment, runNodeDockerResourceAction, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
 import { checkUptimeMonitor, createUptimeMonitor, deleteUptimeMonitor, getUptimeIncidents, getUptimeMonitors, getUptimeResults, toggleUptimeMonitor, updateUptimeMonitor } from './client'
 import { createAutomationScript, createScheduledTask, deleteAutomationScript, deleteScheduledTask, getAutomationRun, getAutomationRuns, getAutomationScripts, getScheduledTasks, runAutomationScript, runScheduledTask, toggleScheduledTask, updateAutomationScript, updateScheduledTask } from './client'
+import { createApplicationService, deleteApplicationService, getApplicationService, getApplicationServices, updateApplicationService } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -471,6 +472,34 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(11, '/api/automation/tasks/9', { method: 'DELETE' })
     expect(fetchMock).toHaveBeenNthCalledWith(12, '/api/automation/runs?before_id=42&limit=25&status=failed&node_id=node%2F1')
     expect(fetchMock).toHaveBeenNthCalledWith(13, '/api/automation/runs/11')
+  })
+
+  test('manages application services through encoded typed endpoints', async () => {
+    const input = {
+      name: 'Panel',
+      description: 'Internal panel',
+      resources: [{ resource_type: 'node' as const, scope_id: '', resource_kind: '', namespace: '', resource_key: 'node-1', display_name: 'Node One' }]
+    }
+    const service = { id: 'service/1', ...input, health: 'healthy', resources: [] }
+    const controller = new AbortController()
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify([service])))
+      .mockResolvedValueOnce(new Response(JSON.stringify(service)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(service)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(service)))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+
+    await getApplicationServices(controller.signal)
+    await getApplicationService('service/1', controller.signal)
+    await createApplicationService(input)
+    await updateApplicationService('service/1', input)
+    await deleteApplicationService('service/1')
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/services', { signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/services/service%2F1', { signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/services', expect.objectContaining({ method: 'POST', body: JSON.stringify(input) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/services/service%2F1', expect.objectContaining({ method: 'PUT', body: JSON.stringify(input) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/services/service%2F1', { method: 'DELETE' })
   })
 
   test('marks unauthorized API responses', async () => {

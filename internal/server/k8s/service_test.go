@@ -25,7 +25,21 @@ func (h *recordingHub) SendToNodeWithTimeout(nodeID string, message interface{},
 	return h.resp, nil
 }
 
-func newTestService(t *testing.T, kubeconfigContent, kubeContext string, hub *recordingHub) *Service {
+type contextRecordingHub struct {
+	*recordingHub
+	contextCalled bool
+	contextValue  any
+}
+
+func (h *contextRecordingHub) SendToNodeWithContext(ctx context.Context, nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error) {
+	h.contextCalled = true
+	h.contextValue = ctx.Value(contextTestKey{})
+	return h.recordingHub.SendToNodeWithTimeout(nodeID, message, timeout)
+}
+
+type contextTestKey struct{}
+
+func newTestService(t *testing.T, kubeconfigContent, kubeContext string, hub AgentHub) *Service {
 	t.Helper()
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -55,6 +69,20 @@ func newTestService(t *testing.T, kubeconfigContent, kubeContext string, hub *re
 		t.Fatalf("create cluster: %v", err)
 	}
 	return NewService(store, hub)
+}
+
+func TestResourceRequestPrefersContextAwareAgentHub(t *testing.T) {
+	hub := &contextRecordingHub{recordingHub: &recordingHub{online: true, resp: json.RawMessage(`{"success":true,"deployments":[]}`)}}
+	service := newTestService(t, "apiVersion: v1\nkind: Config\n", "ctx-a", hub)
+	ctx := context.WithValue(t.Context(), contextTestKey{}, "request-context")
+
+	deployments, err := service.GetDeployments(ctx, "cluster-1", "default")
+	if err != nil {
+		t.Fatalf("get deployments: %v", err)
+	}
+	if !hub.contextCalled || hub.contextValue != "request-context" || deployments == nil {
+		t.Fatalf("context-aware send = called:%v value:%v deployments:%#v", hub.contextCalled, hub.contextValue, deployments)
+	}
 }
 
 func TestGetClusterWithNodeInfoReturnsAgentFields(t *testing.T) {

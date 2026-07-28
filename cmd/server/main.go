@@ -15,6 +15,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/server/config"
 	serverdb "github.com/mizupanel/mizupanel/internal/server/db"
 	"github.com/mizupanel/mizupanel/internal/server/retention"
+	"github.com/mizupanel/mizupanel/internal/server/servicecenter"
 	"github.com/mizupanel/mizupanel/internal/server/store"
 	serveruptime "github.com/mizupanel/mizupanel/internal/server/uptime"
 	"github.com/mizupanel/mizupanel/internal/version"
@@ -54,6 +55,7 @@ func main() {
 	alerts := store.NewAlertStore(database)
 	uptimeMonitors := store.NewUptimeStoreWithDialect(database, dialect)
 	tasks := store.NewTaskStoreWithDialect(database, dialect)
+	services := servicecenter.NewStore(database, dialect)
 	auditStore := serveraudit.NewStore(database, dialect)
 	cleaner := retention.NewDynamicCleaner(metrics, func() (time.Duration, error) {
 		return settings.MetricsRetention(context.Background(), cfg.MetricsRetention)
@@ -81,6 +83,7 @@ func main() {
 		Alerts:              alerts,
 		Uptime:              uptimeMonitors,
 		Tasks:               tasks,
+		Services:            services,
 		AgentToken:          cfg.AgentToken,
 		PublicURL:           cfg.PublicURL,
 		Interval:            5,

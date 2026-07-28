@@ -45,6 +45,23 @@ type K8sClusterDetailPageProps = {
 
 type DetailTab = 'overview' | 'namespaces' | 'nodes' | 'pods' | 'deployments' | 'statefulsets' | 'daemonsets' | 'services' | 'ingresses'
 
+function readK8sDetailQuery(): { tab: DetailTab; namespace: string; search: string } {
+  if (typeof window === 'undefined') return { tab: 'overview', namespace: '', search: '' }
+  const params = new URLSearchParams(window.location.search)
+  const aliases: Record<string, DetailTab> = {
+    deployment: 'deployments',
+    statefulset: 'statefulsets',
+    daemonset: 'daemonsets'
+  }
+  const requestedTab = params.get('tab') || ''
+  const tab = aliases[requestedTab] || DETAIL_TABS.find((item) => item.key === requestedTab)?.key || 'overview'
+  return {
+    tab,
+    namespace: (params.get('namespace') || '').slice(0, 255),
+    search: (params.get('q') || '').slice(0, 256)
+  }
+}
+
 const DETAIL_TABS: Array<{ key: DetailTab; label: string; shortLabel?: string }> = [
   { key: 'overview', label: '集群概览', shortLabel: 'Summary' },
   { key: 'namespaces', label: '命名空间', shortLabel: 'NS' },
@@ -73,6 +90,7 @@ function matchesSearch(values: Array<string | number | undefined>, search: strin
 }
 
 export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPageProps) {
+  const [initialQuery] = useState(readK8sDetailQuery)
   const [cluster, setCluster] = useState<K8sCluster>()
   const [summary, setSummary] = useState<K8sResourceSummary>()
   const [namespaces, setNamespaces] = useState<K8sNamespace[]>([])
@@ -83,9 +101,9 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
   const [daemonsets, setDaemonSets] = useState<K8sDaemonSet[]>([])
   const [services, setServices] = useState<K8sService[]>([])
   const [ingresses, setIngresses] = useState<K8sIngress[]>([])
-  const [activeTab, setActiveTab] = useState<DetailTab>('overview')
-  const [namespace, setNamespace] = useState<string>('')
-  const [resourceSearch, setResourceSearch] = useState('')
+  const [activeTab, setActiveTab] = useState<DetailTab>(initialQuery.tab)
+  const [namespace, setNamespace] = useState<string>(initialQuery.namespace)
+  const [resourceSearch, setResourceSearch] = useState(initialQuery.search)
   const [loading, setLoading] = useState(true)
   const [resourcesLoading, setResourcesLoading] = useState(false)
   const [namespacesLoading, setNamespacesLoading] = useState(false)

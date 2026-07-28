@@ -110,7 +110,18 @@ async function clickDetailTab(label: string) {
 describe('K8s filtering UX', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.history.replaceState({}, '', '/')
     mockDetailAPI()
+  })
+
+  test('initializes workload tab, namespace, and search from a service deep link', async () => {
+    window.history.replaceState({}, '', '/k8s/clusters/cluster-1?tab=deployment&namespace=payments&q=api-server')
+    render(<K8sClusterDetailPage clusterId="cluster-1" onBack={vi.fn()} />)
+
+    expect(await screen.findByText('api-server')).toBeInTheDocument()
+    expect(screen.queryByText('web-console')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/搜索 Deployment/)).toHaveValue('api-server')
+    await waitFor(() => expect(fetchK8sDeployments).toHaveBeenCalledWith('cluster-1', 'payments'))
   })
 
   test('Pod resource search does not match namespace text', async () => {

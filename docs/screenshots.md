@@ -21,6 +21,16 @@
 
 概览页展示节点状态、Kubernetes 集群状态、活跃告警、资源趋势、服务器状态和快捷操作。
 
+## 应用服务中心
+
+<p align="center">
+  <a href="../assets/screenshots/services.png">
+    <img src="../assets/screenshots/services.png" alt="应用服务中心" width="100%" />
+  </a>
+</p>
+
+应用服务中心把七类现有运维资源聚合为逻辑业务服务，统一展示健康、原因、部署位置、资源规模与近期活动，同时保留到原管理入口的深链。
+
 ## 主机与 Agent
 
 <table>

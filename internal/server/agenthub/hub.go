@@ -1334,7 +1334,7 @@ func (h *Handler) DockerComposeList(ctx context.Context, nodeID string) (protoco
 	if err != nil {
 		return protocol.DockerComposeListResponse{}, err
 	}
-	raw, err := h.SendToNodeWithTimeout(nodeID, protocol.DockerComposeListRequest{Type: protocol.MessageTypeDockerComposeListRequest, RequestID: requestID, NodeID: nodeID}, 60*time.Second)
+	raw, err := h.SendToNodeWithContext(ctx, nodeID, protocol.DockerComposeListRequest{Type: protocol.MessageTypeDockerComposeListRequest, RequestID: requestID, NodeID: nodeID}, 60*time.Second)
 	if err != nil {
 		return protocol.DockerComposeListResponse{}, err
 	}
@@ -1500,7 +1500,7 @@ func (h *Handler) SystemdServiceList(ctx context.Context, nodeID string) (protoc
 	if err != nil {
 		return protocol.SystemdServiceListResponse{}, err
 	}
-	raw, err := h.SendToNodeWithTimeout(nodeID, protocol.SystemdServiceListRequest{Type: protocol.MessageTypeSystemdServiceListRequest, RequestID: requestID, NodeID: nodeID}, 45*time.Second)
+	raw, err := h.SendToNodeWithContext(ctx, nodeID, protocol.SystemdServiceListRequest{Type: protocol.MessageTypeSystemdServiceListRequest, RequestID: requestID, NodeID: nodeID}, 45*time.Second)
 	if err != nil {
 		return protocol.SystemdServiceListResponse{}, err
 	}
@@ -1719,8 +1719,16 @@ func (h *Handler) ConnectionDiagnostics(ctx context.Context, nodeID string) (sto
 	return diagnostics, nil
 }
 
-// SendToNodeWithTimeout 发送消息到节点并等待响应
+// SendToNodeWithTimeout 发送消息到节点并等待响应。
 func (h *Handler) SendToNodeWithTimeout(nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error) {
+	return h.SendToNodeWithContext(context.Background(), nodeID, message, timeout)
+}
+
+// SendToNodeWithContext sends a request while respecting the caller's cancellation.
+func (h *Handler) SendToNodeWithContext(ctx context.Context, nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	agent := h.connection(nodeID)
 	if agent == nil {
 		return nil, errors.New("节点离线")
@@ -1769,14 +1777,26 @@ func (h *Handler) SendToNodeWithTimeout(nodeID string, message interface{}, time
 		return nil, err
 	}
 
-	// 等待响应
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	// 等待响应、连接断开、调用方取消或超时。
 	select {
 	case response := <-ch:
 		if h.options.Debug {
 			log.Printf("[debug][server][agenthub] response node_id=%s type=%s request_id=%s elapsed=%s success=true", nodeID, header.Type, header.RequestID, time.Since(start))
 		}
 		return response, nil
-	case <-time.After(timeout):
+	case <-agent.closed:
+		if h.options.Debug {
+			log.Printf("[debug][server][agenthub] disconnected node_id=%s type=%s request_id=%s elapsed=%s", nodeID, header.Type, header.RequestID, time.Since(start))
+		}
+		return nil, errors.New("节点连接已断开")
+	case <-ctx.Done():
+		if h.options.Debug {
+			log.Printf("[debug][server][agenthub] canceled node_id=%s type=%s request_id=%s elapsed=%s", nodeID, header.Type, header.RequestID, time.Since(start))
+		}
+		return nil, ctx.Err()
+	case <-timer.C:
 		if h.options.Debug {
 			log.Printf("[debug][server][agenthub] timeout node_id=%s type=%s request_id=%s elapsed=%s", nodeID, header.Type, header.RequestID, time.Since(start))
 		}

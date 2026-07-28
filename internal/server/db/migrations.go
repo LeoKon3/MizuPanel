@@ -361,6 +361,29 @@ func sqliteMigrationStatements() []string {
 				);`,
 		`CREATE INDEX IF NOT EXISTS idx_task_run_targets_run_id ON task_run_targets(run_id, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_task_run_targets_node_run ON task_run_targets(node_id, run_id DESC);`,
+		`CREATE TABLE IF NOT EXISTS application_services (
+					id TEXT PRIMARY KEY,
+					name TEXT NOT NULL,
+					normalized_name TEXT NOT NULL UNIQUE,
+					description TEXT NOT NULL DEFAULT '',
+					created_at DATETIME NOT NULL,
+					updated_at DATETIME NOT NULL
+				);`,
+		`CREATE TABLE IF NOT EXISTS application_service_resources (
+					id TEXT PRIMARY KEY,
+					service_id TEXT NOT NULL,
+					resource_type TEXT NOT NULL,
+					scope_id TEXT NOT NULL DEFAULT '',
+					resource_kind TEXT NOT NULL DEFAULT '',
+					namespace TEXT NOT NULL DEFAULT '',
+					resource_key TEXT NOT NULL,
+					display_name TEXT NOT NULL DEFAULT '',
+					created_at DATETIME NOT NULL,
+					UNIQUE (service_id, resource_type, scope_id, resource_kind, namespace, resource_key),
+					FOREIGN KEY (service_id) REFERENCES application_services(id) ON DELETE CASCADE
+				);`,
+		`CREATE INDEX IF NOT EXISTS idx_application_service_resources_service ON application_service_resources(service_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_application_service_resources_lookup ON application_service_resources(resource_type, scope_id, resource_key);`,
 	}
 }
 
@@ -710,6 +733,32 @@ func mysqlMigrationStatements() []string {
 					INDEX idx_task_run_targets_run_id (run_id, id),
 					INDEX idx_task_run_targets_node_run (node_id, run_id),
 					FOREIGN KEY (run_id) REFERENCES task_runs(id) ON DELETE CASCADE
+				);`,
+		`CREATE TABLE IF NOT EXISTS application_services (
+					id VARCHAR(36) PRIMARY KEY,
+					name VARCHAR(255) NOT NULL,
+					normalized_name VARCHAR(255) NOT NULL,
+					description TEXT NOT NULL,
+					created_at VARCHAR(64) NOT NULL,
+					updated_at VARCHAR(64) NOT NULL,
+					UNIQUE KEY uq_application_services_normalized_name (normalized_name)
+				);`,
+		// Keep the utf8mb4 composite identity index below InnoDB's
+		// 3072-byte key limit. Kubernetes namespaces are at most 63 bytes.
+		`CREATE TABLE IF NOT EXISTS application_service_resources (
+					id VARCHAR(191) PRIMARY KEY,
+					service_id VARCHAR(36) NOT NULL,
+					resource_type VARCHAR(32) NOT NULL,
+					scope_id VARCHAR(191) NOT NULL DEFAULT '',
+					resource_kind VARCHAR(32) NOT NULL DEFAULT '',
+					namespace VARCHAR(191) NOT NULL DEFAULT '',
+					resource_key VARCHAR(255) NOT NULL,
+					display_name VARCHAR(256) NOT NULL DEFAULT '',
+					created_at VARCHAR(64) NOT NULL,
+					UNIQUE KEY uq_application_service_resource_identity (service_id, resource_type, scope_id, resource_kind, namespace, resource_key),
+					INDEX idx_application_service_resources_service (service_id),
+					INDEX idx_application_service_resources_lookup (resource_type, scope_id, resource_key),
+					FOREIGN KEY (service_id) REFERENCES application_services(id) ON DELETE CASCADE
 				);`,
 	}
 }

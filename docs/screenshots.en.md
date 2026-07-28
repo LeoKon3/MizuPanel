@@ -21,6 +21,16 @@ These screenshots reflect the current interface. The README keeps only a compact
 
 The overview shows node status, Kubernetes cluster status, active alerts, resource trends, server status, and quick actions.
 
+## Application Service Center
+
+<p align="center">
+  <a href="../assets/screenshots/services.png">
+    <img src="../assets/screenshots/services.png" alt="Application Service Center" width="100%" />
+  </a>
+</p>
+
+The Application Service Center groups seven existing operations resource types into logical business services with combined health, reasons, deployment locations, resource scale, recent activity, and deep links back to each owning module.
+
 ## Hosts And Agents
 
 <table>

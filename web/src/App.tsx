@@ -20,6 +20,7 @@ import { K8sClusterDetailPage } from './pages/K8sClusterDetailPage'
 import { UptimePage } from './pages/UptimePage'
 import { AuditPage } from './pages/AuditPage'
 import { TasksPage } from './pages/TasksPage'
+import { ServicesPage } from './pages/ServicesPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
 import type { DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
@@ -47,12 +48,14 @@ type AppRoute =
   | { kind: 'uptime' }
   | { kind: 'audit' }
   | { kind: 'tasks' }
+  | { kind: 'services' }
+  | { kind: 'service-detail', serviceID: string }
   | { kind: 'logs' }
   | { kind: 'k8s-clusters' }
   | { kind: 'k8s-cluster-detail', clusterID: string }
   | { kind: 'dashboard' }
 
-type AppPage = 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s'
+type AppPage = 'overview' | 'hosts' | 'services' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s'
 type NavPage = Exclude<AppPage, 'history' | 'logs'>
 type ThemeMode = 'light' | 'dark'
 
@@ -63,6 +66,9 @@ function currentRoute(): AppRoute {
   if (execMatch) return { kind: 'container-exec', nodeID: decodeRouteNodeID(execMatch[1]) ?? execMatch[1], containerID: decodeRouteNodeID(execMatch[2]) ?? execMatch[2] }
   const detailMatch = window.location.pathname.match(/^\/nodes\/([^/]+)$/)
   if (detailMatch) return { kind: 'node-detail', nodeID: decodeRouteNodeID(detailMatch[1]) ?? detailMatch[1] }
+  const serviceDetailMatch = window.location.pathname.match(/^\/services\/([^/]+)$/)
+  if (serviceDetailMatch) return { kind: 'service-detail', serviceID: decodeRouteNodeID(serviceDetailMatch[1]) ?? serviceDetailMatch[1] }
+  if (window.location.pathname === '/services') return { kind: 'services' }
   const k8sClusterDetailMatch = window.location.pathname.match(/^\/k8s\/clusters\/([^/]+)$/)
   if (k8sClusterDetailMatch) return { kind: 'k8s-cluster-detail', clusterID: decodeRouteNodeID(k8sClusterDetailMatch[1]) ?? k8sClusterDetailMatch[1] }
   if (window.location.pathname === '/k8s/clusters') return { kind: 'k8s-clusters' }
@@ -75,6 +81,24 @@ function currentRoute(): AppRoute {
   if (window.location.pathname === '/overview') return { kind: 'overview' }
   if (window.location.pathname === '/logs') return { kind: 'logs' }
   return { kind: 'dashboard' }
+}
+
+function pageForRoute(route: AppRoute): AppPage {
+  switch (route.kind) {
+    case 'overview': return 'overview'
+    case 'history': return 'history'
+    case 'settings': return 'settings'
+    case 'alerts': return 'alerts'
+    case 'uptime': return 'uptime'
+    case 'audit': return 'audit'
+    case 'tasks': return 'tasks'
+    case 'services':
+    case 'service-detail': return 'services'
+    case 'logs': return 'logs'
+    case 'k8s-clusters':
+    case 'k8s-cluster-detail': return 'k8s'
+    default: return 'hosts'
+  }
 }
 
 type HostFilter = 'all' | 'online' | 'offline'
@@ -112,13 +136,15 @@ const pageCopy: Record<AppPage, { title: string, description: string }> = {
   uptime: { title: '服务拨测', description: '从 Server 网络持续检查 HTTP、HTTPS 和 TCP 服务。' },
   audit: { title: '审计日志', description: '追溯平台敏感操作的操作者、目标与结果。' },
   tasks: { title: '任务中心', description: '统一管理脚本、Cron 计划和多节点执行记录。' },
+  services: { title: '应用服务', description: '聚合运行资源、健康原因和近期运维活动。' },
   logs: { title: '日志', description: '日志接口接入前仅提供控制台空状态壳。' },
   k8s: { title: 'Kubernetes 集群', description: '管理通过 Agent 节点连接的 K8s 集群。' }
 }
 
-const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'k8s' }> = [
+const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts' | 'services' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'k8s' }> = [
   { page: 'overview', label: '概览', icon: 'overview' },
   { page: 'hosts', label: '主机', icon: 'hosts' },
+  { page: 'services', label: '应用服务', icon: 'services' },
   { page: 'tasks', label: '任务中心', icon: 'tasks' },
   { page: 'k8s', label: 'Kubernetes', icon: 'k8s' },
   { page: 'alerts', label: '告警', icon: 'alerts' },
@@ -130,7 +156,7 @@ const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts'
 export default function App() {
   const [routeVersion, setRouteVersion] = useState(0)
   const route = useMemo(() => currentRoute(), [routeVersion])
-  const [page, setPage] = useState<AppPage>(route.kind === 'history' ? 'history' : route.kind === 'settings' ? 'settings' : route.kind === 'alerts' ? 'alerts' : route.kind === 'uptime' ? 'uptime' : route.kind === 'audit' ? 'audit' : route.kind === 'tasks' ? 'tasks' : route.kind === 'logs' ? 'logs' : route.kind === 'overview' ? 'overview' : route.kind === 'k8s-clusters' || route.kind === 'k8s-cluster-detail' ? 'k8s' : 'hosts')
+  const [page, setPage] = useState<AppPage>(() => pageForRoute(route))
   const [theme, setTheme] = useState<ThemeMode>(() => storedTheme())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => storedSidebarCollapsed())
   const [authEnabled, setAuthEnabled] = useState(false)
@@ -193,6 +219,16 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem('mizupanel-sidebar-collapsed', sidebarCollapsed ? 'true' : 'false')
   }, [sidebarCollapsed])
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const nextRoute = currentRoute()
+      setPage(pageForRoute(nextRoute))
+      setRouteVersion((value) => value + 1)
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
@@ -640,6 +676,8 @@ export default function App() {
       ? '/overview'
       : nextPage === 'history'
       ? '/history'
+      : nextPage === 'services'
+        ? '/services'
       : nextPage === 'settings'
         ? '/settings'
         : nextPage === 'alerts'
@@ -658,6 +696,26 @@ export default function App() {
     if (window.location.pathname !== path) {
       window.history.pushState({}, '', path)
     }
+    setRouteVersion((value) => value + 1)
+  }
+
+  const openService = (serviceID: string) => {
+    setPage('services')
+    window.history.pushState({}, '', `/services/${encodeURIComponent(serviceID)}`)
+    setRouteVersion((value) => value + 1)
+  }
+
+  const backToServices = () => {
+    setPage('services')
+    window.history.pushState({}, '', '/services')
+    setRouteVersion((value) => value + 1)
+  }
+
+  const navigateWithinPanel = (path: string) => {
+    window.history.pushState({}, '', path)
+    const nextRoute = currentRoute()
+    setPage(pageForRoute(nextRoute))
+    setRouteVersion((value) => value + 1)
   }
 
   const openK8sClusterDetail = (clusterID: string) => {
@@ -1103,6 +1161,8 @@ export default function App() {
                 <AuditPage nodes={nodes} />
               ) : page === 'tasks' ? (
                 <TasksPage nodes={nodes} />
+              ) : page === 'services' ? (
+                <ServicesPage serviceID={route.kind === 'service-detail' ? route.serviceID : undefined} onOpenService={openService} onBack={backToServices} onNavigate={navigateWithinPanel} />
               ) : page === 'k8s' ? (
                 route.kind === 'k8s-cluster-detail' ? (
                   <K8sClusterDetailPage
@@ -1197,7 +1257,11 @@ function TopStatCard({ title, value, subtitle, tone, sparklineData }: { title: s
         </div>
         {hasSparkline && (
           <div className="h-9 w-24 shrink-0">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer
+              width="100%"
+              height="100%"
+              initialDimension={{ width: 96, height: 36 }}
+            >
               <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -1223,13 +1287,16 @@ function TopStatCard({ title, value, subtitle, tone, sparklineData }: { title: s
   )
 }
 
-function NavIcon({ name }: { name: 'overview' | 'hosts' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s' }) {
+function NavIcon({ name }: { name: 'overview' | 'hosts' | 'services' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s' }) {
   const common = "h-5 w-5"
   if (name === 'overview') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></svg>
   }
   if (name === 'hosts') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="6" rx="2" /><rect x="4" y="14" width="16" height="6" rx="2" /><path d="M7.5 7h.01M7.5 17h.01M11 7h6M11 17h6" /></svg>
+  }
+  if (name === 'services') {
+    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="5" width="7" height="6" rx="1.5" /><rect x="13.5" y="13" width="7" height="6" rx="1.5" /><path d="M10.5 8h3a3 3 0 0 1 3 3v2M7 11v5a3 3 0 0 0 3 3h3.5" /></svg>
   }
   if (name === 'k8s') {
     return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8.5 4.5v9L12 21l-8.5-4.5v-9L12 3z" /><path d="M12 8v8M8 10l8 4M8 14l8-4" /></svg>

@@ -21,6 +21,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/server/api"
 	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
+	"github.com/mizupanel/mizupanel/internal/server/servicecenter"
 	"github.com/mizupanel/mizupanel/internal/server/sshops"
 	"github.com/mizupanel/mizupanel/internal/server/store"
 	servertasks "github.com/mizupanel/mizupanel/internal/server/taskrunner"
@@ -49,6 +50,7 @@ type Dependencies struct {
 	Alerts                 *store.AlertStore
 	Uptime                 *store.UptimeStore
 	Tasks                  *store.TaskStore
+	Services               *servicecenter.Store
 	AgentToken             string
 	PublicURL              string
 	Interval               int
@@ -89,6 +91,10 @@ func NewHandler(deps Dependencies) http.Handler {
 	k8sStore := k8s.NewStore(deps.Nodes.DB())
 	k8sService := k8s.NewService(k8sStore, hub)
 	k8sService.SetDebug(deps.Debug)
+	serviceCenter := api.ServiceCenterConfig{}
+	if deps.Services != nil {
+		serviceCenter.Facade = servicecenter.NewFacade(deps.Services, hub, k8sService)
+	}
 
 	auth := api.NewAuthenticator(deps.AdminAuth)
 	var uptimeEngine *serveruptime.Engine
@@ -102,7 +108,7 @@ func NewHandler(deps Dependencies) http.Handler {
 			log.Printf("Warning: failed to recover interrupted automation runs: %v", err)
 		}
 	}
-	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, api.AutomationConfig{Store: deps.Tasks, Runner: taskEngine}, auth, deps.Audit)
+	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, api.AutomationConfig{Store: deps.Tasks, Runner: taskEngine}, serviceCenter, auth, deps.Audit)
 
 	// Start alerting engine if enabled
 	if deps.AlertingEnabled && deps.Alerts != nil {
@@ -141,6 +147,8 @@ func NewHandler(deps Dependencies) http.Handler {
 	mux.Handle("/api/k8s/", apiRouter)
 	mux.Handle("/api/audit/", apiRouter)
 	mux.Handle("/api/automation/", apiRouter)
+	mux.Handle("/api/services", apiRouter)
+	mux.Handle("/api/services/", apiRouter)
 	mux.HandleFunc("/api/nodes/", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		if handleSSHUninstallRoute(w, r, deps.Nodes, hub, sshJobs, sshRunner, deps.PublicURL, deps.SSHJobTimeout) {
 			return
