@@ -6,11 +6,18 @@ These screenshots reflect the current interface. The README keeps only a compact
 
 ## Overview
 
-<p align="center">
-  <a href="../assets/screenshots/dashboard.png">
-    <img src="../assets/screenshots/dashboard.png" alt="Overview page" width="100%" />
-  </a>
-</p>
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/dashboard.png"><img src="../assets/screenshots/dashboard.png" alt="Overview page" width="100%" /></a>
+      <br /><sub>Overview at a 1440px desktop viewport.</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/overview.png"><img src="../assets/screenshots/overview.png" alt="Overview at a 1280px desktop viewport" width="100%" /></a>
+      <br /><sub>Overview at a 1280px desktop viewport.</sub>
+    </td>
+  </tr>
+</table>
 
 The overview shows node status, Kubernetes cluster status, active alerts, resource trends, server status, and quick actions.
 
@@ -29,6 +36,16 @@ The overview shows node status, Kubernetes cluster status, active alerts, resour
   </tr>
 </table>
 
+## Task Center
+
+<p align="center">
+  <a href="../assets/screenshots/tasks.png">
+    <img src="../assets/screenshots/tasks.png" alt="Task Center" width="100%" />
+  </a>
+</p>
+
+The Task Center brings scheduled tasks, the script library, and run history together, with bounded Shell automation across one or more Agents.
+
 ## Kubernetes
 
 <table>
@@ -43,13 +60,9 @@ The overview shows node status, Kubernetes cluster status, active alerts, resour
     </td>
   </tr>
   <tr>
-    <td width="50%">
+    <td colspan="2">
       <a href="../assets/screenshots/k8s-create-resource.png"><img src="../assets/screenshots/k8s-create-resource.png" alt="Create Kubernetes resource" width="100%" /></a>
       <br /><sub>Create resources with YAML preview, Dry Run, and forms for multiple resource kinds.</sub>
-    </td>
-    <td width="50%">
-      <a href="../assets/screenshots/overview.png"><img src="../assets/screenshots/overview.png" alt="Compact overview" width="100%" /></a>
-      <br /><sub>Overview behavior in a compact viewport.</sub>
     </td>
   </tr>
 </table>
@@ -68,3 +81,23 @@ The overview shows node status, Kubernetes cluster status, active alerts, resour
     </td>
   </tr>
 </table>
+
+## Uptime Monitoring
+
+<p align="center">
+  <a href="../assets/screenshots/uptime.png">
+    <img src="../assets/screenshots/uptime.png" alt="Uptime monitoring" width="100%" />
+  </a>
+</p>
+
+The Server runs scheduled or manual HTTP, HTTPS, and TCP checks and presents status, latency, incidents, and certificate-expiry warnings.
+
+## Audit Trail
+
+<p align="center">
+  <a href="../assets/screenshots/audit.png">
+    <img src="../assets/screenshots/audit.png" alt="Audit Trail" width="100%" />
+  </a>
+</p>
+
+The Audit Trail traces sensitive operations by time, module, node, and result while excluding commands, file contents, credentials, and other secret material.

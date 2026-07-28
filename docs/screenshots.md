@@ -6,11 +6,18 @@
 
 ## 概览
 
-<p align="center">
-  <a href="../assets/screenshots/dashboard.png">
-    <img src="../assets/screenshots/dashboard.png" alt="概览页面" width="100%" />
-  </a>
-</p>
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/dashboard.png"><img src="../assets/screenshots/dashboard.png" alt="概览页面" width="100%" /></a>
+      <br /><sub>1440px 桌面视口下的概览页面。</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/overview.png"><img src="../assets/screenshots/overview.png" alt="1280px 桌面视口下的概览页面" width="100%" /></a>
+      <br /><sub>1280px 桌面视口下的概览页面。</sub>
+    </td>
+  </tr>
+</table>
 
 概览页展示节点状态、Kubernetes 集群状态、活跃告警、资源趋势、服务器状态和快捷操作。
 
@@ -29,6 +36,16 @@
   </tr>
 </table>
 
+## 任务中心
+
+<p align="center">
+  <a href="../assets/screenshots/tasks.png">
+    <img src="../assets/screenshots/tasks.png" alt="任务中心" width="100%" />
+  </a>
+</p>
+
+任务中心统一管理计划任务、脚本库和执行记录，支持在一个或多个 Agent 上执行受限 Shell 自动化。
+
 ## Kubernetes
 
 <table>
@@ -43,13 +60,9 @@
     </td>
   </tr>
   <tr>
-    <td width="50%">
+    <td colspan="2">
       <a href="../assets/screenshots/k8s-create-resource.png"><img src="../assets/screenshots/k8s-create-resource.png" alt="创建 Kubernetes 资源" width="100%" /></a>
       <br /><sub>创建资源，支持 YAML 预览、Dry Run 和多类资源表单。</sub>
-    </td>
-    <td width="50%">
-      <a href="../assets/screenshots/overview.png"><img src="../assets/screenshots/overview.png" alt="概览紧凑图" width="100%" /></a>
-      <br /><sub>紧凑视口下的概览表现。</sub>
     </td>
   </tr>
 </table>
@@ -68,3 +81,23 @@
     </td>
   </tr>
 </table>
+
+## 服务拨测
+
+<p align="center">
+  <a href="../assets/screenshots/uptime.png">
+    <img src="../assets/screenshots/uptime.png" alt="服务拨测" width="100%" />
+  </a>
+</p>
+
+服务拨测由 Server 定时或手动检查 HTTP、HTTPS 和 TCP 目标，展示状态、延迟、故障与证书预警。
+
+## 操作审计
+
+<p align="center">
+  <a href="../assets/screenshots/audit.png">
+    <img src="../assets/screenshots/audit.png" alt="操作审计" width="100%" />
+  </a>
+</p>
+
+审计日志按时间、模块、节点和结果追溯敏感操作，同时避免记录命令、文件内容与凭据等机密信息。

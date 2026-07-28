@@ -33,17 +33,25 @@
 
 <table>
   <tr>
-    <td width="25%">
+    <td width="33%">
       <a href="assets/screenshots/host-detail.png"><img src="assets/screenshots/host-detail.png" alt="主机详情" width="100%" /></a>
     </td>
-    <td width="25%">
+    <td width="33%">
       <a href="assets/screenshots/k8s-detail.png"><img src="assets/screenshots/k8s-detail.png" alt="Kubernetes 详情" width="100%" /></a>
     </td>
-    <td width="25%">
-      <a href="assets/screenshots/k8s-create-resource.png"><img src="assets/screenshots/k8s-create-resource.png" alt="创建 Kubernetes 资源" width="100%" /></a>
-    </td>
-    <td width="25%">
+    <td width="33%">
       <a href="assets/screenshots/alerts.png"><img src="assets/screenshots/alerts.png" alt="告警中心" width="100%" /></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="33%">
+      <a href="assets/screenshots/tasks.png"><img src="assets/screenshots/tasks.png" alt="任务中心" width="100%" /></a>
+    </td>
+    <td width="33%">
+      <a href="assets/screenshots/uptime.png"><img src="assets/screenshots/uptime.png" alt="服务拨测" width="100%" /></a>
+    </td>
+    <td width="33%">
+      <a href="assets/screenshots/audit.png"><img src="assets/screenshots/audit.png" alt="审计日志" width="100%" /></a>
     </td>
   </tr>
 </table>
