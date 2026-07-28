@@ -50,7 +50,7 @@ func NewHandler() *Handler {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, _, err := handler.runner(ctx, "systemctl", "show", "--property=Version", "--value")
+	_, _, err := handler.runner(ctx, "systemctl", "show", "--property=Version")
 	handler.supported = err == nil
 	return handler
 }

@@ -3,12 +3,89 @@ package systemd
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
 )
+
+func TestNewHandlerDetectsSystemdCompatibility(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd detection is only enabled on Linux")
+	}
+
+	tests := []struct {
+		name       string
+		script     string
+		want       bool
+		installBin bool
+	}{
+		{
+			name: "legacy systemd without value flag",
+			script: `#!/bin/sh
+for arg in "$@"; do
+	if [ "$arg" = "--value" ]; then
+		exit 1
+	fi
+done
+if [ "$1" = "show" ] && [ "$2" = "--property=Version" ]; then
+	exit 0
+fi
+exit 1
+`,
+			want:       true,
+			installBin: true,
+		},
+		{
+			name: "modern systemd",
+			script: `#!/bin/sh
+if [ "$1" = "show" ] && [ "$2" = "--property=Version" ]; then
+	exit 0
+fi
+exit 1
+`,
+			want:       true,
+			installBin: true,
+		},
+		{
+			name: "systemctl exists but manager is unavailable",
+			script: `#!/bin/sh
+if [ "$1" = "--version" ]; then
+	exit 0
+fi
+exit 1
+`,
+			want:       false,
+			installBin: true,
+		},
+		{
+			name:       "systemctl is unavailable",
+			want:       false,
+			installBin: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			if test.installBin {
+				path := filepath.Join(binDir, "systemctl")
+				if err := os.WriteFile(path, []byte(test.script), 0o755); err != nil {
+					t.Fatalf("write fake systemctl: %v", err)
+				}
+			}
+			t.Setenv("PATH", binDir)
+
+			if got := NewHandler().Supported(); got != test.want {
+				t.Fatalf("Supported() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
 
 func TestParseServices(t *testing.T) {
 	services := parseServices("nginx.service loaded active running A high performance web server\n● failed.service loaded failed failed Failed service\nmizupanel-agent.service loaded active running MizuPanel Agent\n", map[string]string{"nginx.service": "enabled", "failed.service": "disabled"})

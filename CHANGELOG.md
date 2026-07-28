@@ -2,6 +2,16 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.11 - 2026-07-29
+
+### Fixed
+
+- Fixed Agent systemd capability detection on legacy releases such as EL7/systemd 219 by avoiding the unsupported `systemctl --value` option while still verifying that the systemd manager is reachable.
+
+### Changed
+
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.11.
+
 ## v0.1.10 - 2026-07-28
 
 ### Added
