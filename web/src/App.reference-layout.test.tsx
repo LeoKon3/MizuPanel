@@ -345,7 +345,7 @@ describe('reference-style dashboard layout', () => {
     expect(screen.queryByLabelText('启用节点终端')).not.toBeInTheDocument()
     expect(screen.queryByText('Agent 运行模式')).not.toBeInTheDocument()
     expect(screen.getByText('默认以 root 运维模式安装，自动启用节点终端与 Docker 容器监控。')).toBeInTheDocument()
-    expect(screen.getByText('token 来源：点击添加主机时，Server 会自动生成一次性 install_token。')).toBeInTheDocument()
+    expect(screen.getByText('token 来源：点击添加主机时，Server 会自动生成短期引导 install_token。')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Windows' }))
 

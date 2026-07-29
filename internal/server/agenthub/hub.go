@@ -52,6 +52,7 @@ const (
 
 type installToken struct {
 	nodeID    string
+	nodeToken string
 	createdAt time.Time
 	expiresAt time.Time
 }
@@ -98,12 +99,18 @@ func (s *InstallAuthStore) ExchangeInstallToken(token string, nodeID string, sav
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.installTokens[token]
-	if !ok || entry.nodeID != "" {
+	if !ok {
 		return "", false
 	}
 	if time.Now().After(entry.expiresAt) {
 		delete(s.installTokens, token)
 		return "", false
+	}
+	if entry.nodeID != "" {
+		if entry.nodeID != nodeID || entry.nodeToken == "" {
+			return "", false
+		}
+		return entry.nodeToken, true
 	}
 	nodeToken, err := randomNodeToken()
 	if err != nil {
@@ -114,7 +121,9 @@ func (s *InstallAuthStore) ExchangeInstallToken(token string, nodeID string, sav
 			return "", false
 		}
 	}
-	delete(s.installTokens, token)
+	entry.nodeID = nodeID
+	entry.nodeToken = nodeToken
+	s.installTokens[token] = entry
 	s.nodeTokens[nodeID] = nodeToken
 	return nodeToken, true
 }
@@ -130,6 +139,29 @@ func (s *InstallAuthStore) RevokeNodeToken(nodeID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.nodeTokens, nodeID)
+	for token, entry := range s.installTokens {
+		if entry.nodeID == nodeID {
+			delete(s.installTokens, token)
+		}
+	}
+}
+
+// CompleteBootstrap removes temporary in-memory credentials after the
+// persistent node token has authenticated the bound node.
+func (s *InstallAuthStore) CompleteBootstrap(nodeID string, nodeToken string) {
+	if nodeID == "" || nodeToken == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if currentNodeToken, ok := s.nodeTokens[nodeID]; ok && currentNodeToken == nodeToken {
+		delete(s.nodeTokens, nodeID)
+	}
+	for token, entry := range s.installTokens {
+		if entry.nodeID == nodeID && entry.nodeToken == nodeToken {
+			delete(s.installTokens, token)
+		}
+	}
 }
 
 func (s *InstallAuthStore) InstallTokenCreatedAt(token string) (time.Time, bool) {
@@ -150,7 +182,9 @@ func (s *InstallAuthStore) MayAuthenticateInstallToken(token string) bool {
 			delete(s.installTokens, token)
 			return false
 		}
-		return installToken.nodeID == ""
+		// A bound token must reach the Hello message so ExchangeInstallToken can
+		// enforce that retries use the same node ID.
+		return true
 	}
 	return false
 }
@@ -427,6 +461,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.agentCredentialStillValid(r.Context(), nodeID, suppliedToken, nodeToken, usingAgentToken, usingPersistentNodeToken) {
 		_ = h.nodes.DeleteIfDeleted(context.WithoutCancel(r.Context()), nodeID)
 		return
+	}
+	if h.options.InstallAuth != nil && usingPersistentNodeToken {
+		h.options.InstallAuth.CompleteBootstrap(nodeID, nodeToken)
 	}
 	sessionID := h.startSession(nodeID)
 	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerComposeDeployment: hello.DockerComposeDeployment, supportsDockerResources: hello.DockerResources, supportsSystemdServices: hello.SystemdServices, supportsTaskRunner: hello.TaskRunner, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage), pendingRPCs: make(map[string]chan rpcDelivery), closed: make(chan struct{})}

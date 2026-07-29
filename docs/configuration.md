@@ -298,15 +298,31 @@ MIZUPANEL_AUDIT_RETENTION=90d
 MIZUPANEL_AUDIT_CLEANUP_INTERVAL=1h
 ```
 
-两个值都必须是 Go 时长格式的正数；配置无效时 Server 会拒绝启动。清理任务只删除超过保留期的事件，不会为清理本身再创建审计记录。
+两个值都必须是 Go 时长格式的正数；配置无效时 Server 会拒绝启动。定时保留策略清理只删除超过保留期的事件，并继续保持不审计自身。
 
 Dashboard 的 **审计日志** 页面使用只读接口 `GET /api/audit/events`。接口沿用管理员认证，支持 `before_id`、`limit`、`from`、`to`、`actor_type`、`actor_name`、`module`、`action`、`node_id`、`result` 和 `q` 参数；`limit` 最大为 100，分页使用返回的 `next_before_id`。
+
+管理员也可以通过 `POST /api/audit/events/cleanup` 执行受控清理。接口沿用管理员认证，并要求请求同源、`Content-Type: application/json`；正文最多 4 KiB，只能包含一个严格 JSON 对象，未知字段、尾随 JSON 和同时或都不提供清理条件都会被拒绝。请求形状必须二选一：
+
+```json
+{ "older_than_days": 90 }
+```
+
+或：
+
+```json
+{ "before": "2026-06-01T00:00:00Z" }
+```
+
+`older_than_days` 必须是 1 到 3650 的整数，`before` 必须是 RFC3339 时间。Server 将条件标准化为 UTC 截止时间，只永久删除 `created_at < cutoff` 的记录，并拒绝任何会触及最近 24 小时或未来记录的截止时间。成功响应为 `{"deleted_count":12,"cutoff":"2026-06-01T00:00:00Z"}`。
+
+该接口不提供全部删除、按 ID 删除或任意过滤条件删除。清理完成后会写入一条仍然保留的 `audit.cleanup` 事件，其中只包含标准化截止时间和删除数量，不保存请求正文、原始错误或其他秘密；后台定时保留策略清理仍不写审计事件。
 
 审计事件只保存有界的操作类别、发起者类型、来源 IP、显式目标、结果、耗时、稳定摘要和白名单元数据。不会保存密码、Cookie、Token、Webhook URL、Compose YAML 或 `.env`、文件内容、终端命令/输出、Kubernetes Secret、原始请求/响应正文或远程诊断。写入失败不会替换原操作响应；该功能提供运维追溯证据，不是合规级不可变账本，也不提供多用户/RBAC 归属、导出、签名或 WORM 存储。
 
 ## Agent 安装
 
-推荐从 Dashboard 点击 **添加服务器**，复制自动生成的 Linux 或 Windows 命令。Server 会为每次安装生成一次性 `install_token`，目标机器执行命令后会自动注册为节点。
+推荐从 Dashboard 点击 **添加服务器**，复制自动生成的 Linux 或 Windows 命令。Server 会为每次安装生成短期、仅用于首次引导的 `install_token`；当前有效期为 30 分钟，目标机器执行命令后会自动注册为节点。
 
 Linux 命令示例：
 
@@ -416,24 +432,28 @@ features:
 
 | Token | 生命周期 | 谁生成 | 存放位置 | 用途 |
 | --- | --- | --- | --- | --- |
-| `install_token` | 一次性 | Dashboard 创建安装命令时由 Server 生成 | 不持久化给 Agent | Agent 首次注册 |
-| `node_token` | 长期，每个节点独立 | Server 首次注册成功后换发 | Agent 本机配置文件；Server 端保存哈希 | Agent 重启和断线重连 |
+| `install_token` | 短期（当前 30 分钟），绑定单个节点 | Dashboard 创建安装命令时由 Server 生成 | Agent 配置中短暂保存，换发后由 `node_token` 替换 | 首次引导；持久 Token 确认前可供同一节点恢复重试 |
+| `node_token` | 长期，每个节点独立 | Server 在首次引导交换时生成 | Agent 本机配置文件；Server 端保存哈希 | Agent 注册完成后的重启和断线重连 |
 
 注册流程：
 
 ```text
-Dashboard 生成 install_token
+Dashboard 生成短期 install_token
         ↓
-Agent 首次注册
+Agent 使用 install_token 发起首次注册
         ↓
-Server 验证 install_token
+Server 验证令牌并绑定 node.id
         ↓
 Server 换发 node_token
         ↓
-Agent 后续使用 node_token 重连
+首次注册失败时，同一节点可在 TTL 内重试并取回同一个 node_token
+        ↓
+Agent 使用 node_token 重连
+        ↓
+node_token 成功认证后，临时引导令牌失效；后续继续使用 node_token
 ```
 
-`install_token` 不应作为持久凭据使用；`node_token` 在 Server 端只保存哈希，不保存明文。
+`install_token` 只能用于短期引导，不应作为持久凭据使用。它一旦绑定节点就拒绝其他节点复用，并在 TTL 到期时失效；`node_token` 在 Server 端只保存哈希，不保存明文。
 
 ## 调试日志
 

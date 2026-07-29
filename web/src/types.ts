@@ -732,6 +732,15 @@ export type AuditEventsResponse = {
   next_before_id: number | null
 }
 
+export type AuditCleanupRequest =
+  | { before: string, older_than_days?: never }
+  | { before?: never, older_than_days: number }
+
+export type AuditCleanupResponse = {
+  deleted_count: number
+  cutoff: string
+}
+
 export type AutomationNotificationPolicy = 'never' | 'failure' | 'always'
 export type AutomationRunTrigger = 'manual' | 'scheduled'
 export type AutomationRunStatus =

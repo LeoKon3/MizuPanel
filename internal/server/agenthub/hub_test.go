@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -37,6 +38,90 @@ func TestInstallAuthStoreGeneratesRandomNodeToken(t *testing.T) {
 	}
 }
 
+func TestInstallAuthStoreRetriesBoundInstallTokenForSameNode(t *testing.T) {
+	auth := NewInstallAuthStore()
+	auth.CreateInstallToken("install-token")
+	saveCalls := 0
+	saveToken := func(string) error {
+		saveCalls++
+		return nil
+	}
+
+	firstToken, ok := auth.ExchangeInstallToken("install-token", "node-1", saveToken)
+	if !ok {
+		t.Fatal("first ExchangeInstallToken returned false")
+	}
+	retryToken, ok := auth.ExchangeInstallToken("install-token", "node-1", saveToken)
+	if !ok {
+		t.Fatal("retry ExchangeInstallToken returned false")
+	}
+	if retryToken != firstToken {
+		t.Fatalf("retry token = %q, want original token %q", retryToken, firstToken)
+	}
+	if saveCalls != 1 {
+		t.Fatalf("save callback calls = %d, want 1", saveCalls)
+	}
+}
+
+func TestInstallAuthStoreLeavesInstallTokenRetryableWhenPersistenceFails(t *testing.T) {
+	auth := NewInstallAuthStore()
+	auth.CreateInstallToken("install-token")
+	wantErr := errors.New("persistence failed")
+	if _, ok := auth.ExchangeInstallToken("install-token", "node-1", func(string) error { return wantErr }); ok {
+		t.Fatal("ExchangeInstallToken succeeded after persistence failure")
+	}
+	if _, ok := auth.NodeToken("node-1"); ok {
+		t.Fatal("persistence failure created an in-memory node token")
+	}
+	if !auth.MayAuthenticateInstallToken("install-token") {
+		t.Fatal("persistence failure consumed the install token")
+	}
+	if _, ok := auth.ExchangeInstallToken("install-token", "node-1", nil); !ok {
+		t.Fatal("install token was not retryable after persistence recovered")
+	}
+}
+
+func TestInstallAuthStoreRejectsBoundInstallTokenForAnotherNode(t *testing.T) {
+	auth := NewInstallAuthStore()
+	auth.CreateInstallToken("install-token")
+	nodeToken, ok := auth.ExchangeInstallToken("install-token", "node-1", nil)
+	if !ok {
+		t.Fatal("first ExchangeInstallToken returned false")
+	}
+
+	if _, ok := auth.ExchangeInstallToken("install-token", "node-2", nil); ok {
+		t.Fatal("bound install token authenticated a different node")
+	}
+	if got, ok := auth.NodeToken("node-1"); !ok || got != nodeToken {
+		t.Fatalf("node-1 token = %q, %v; want %q, true", got, ok, nodeToken)
+	}
+	if _, ok := auth.NodeToken("node-2"); ok {
+		t.Fatal("cross-node retry created a node-2 token")
+	}
+}
+
+func TestInstallAuthStoreCompletesBootstrapOnlyForMatchingCredential(t *testing.T) {
+	auth := NewInstallAuthStore()
+	auth.CreateInstallToken("install-token")
+	nodeToken, ok := auth.ExchangeInstallToken("install-token", "node-1", nil)
+	if !ok {
+		t.Fatal("ExchangeInstallToken returned false")
+	}
+
+	auth.CompleteBootstrap("node-1", "wrong-token")
+	if !auth.MayAuthenticateInstallToken("install-token") || !auth.MayAuthenticateNodeToken(nodeToken) {
+		t.Fatal("mismatched credential removed bootstrap state")
+	}
+
+	auth.CompleteBootstrap("node-1", nodeToken)
+	if auth.MayAuthenticateInstallToken("install-token") {
+		t.Fatal("completed install token still authenticates")
+	}
+	if auth.MayAuthenticateNodeToken(nodeToken) {
+		t.Fatal("completed in-memory node token still authenticates")
+	}
+}
+
 func TestInstallAuthStoreRevokesNodeToken(t *testing.T) {
 	auth := NewInstallAuthStore()
 	auth.CreateInstallToken("install-token")
@@ -51,6 +136,9 @@ func TestInstallAuthStoreRevokesNodeToken(t *testing.T) {
 	auth.RevokeNodeToken("node-1")
 	if auth.MayAuthenticateNodeToken(nodeToken) {
 		t.Fatal("node token still authenticates after revoke")
+	}
+	if auth.MayAuthenticateInstallToken("install-token") {
+		t.Fatal("bound install token still authenticates after revoke")
 	}
 }
 
@@ -278,7 +366,8 @@ func TestAgentWebSocketExchangesInstallTokenForNodeToken(t *testing.T) {
 	}
 	auth := NewInstallAuthStore()
 	auth.CreateInstallToken("install-token")
-	handler := NewHandler(store.NewNodeStore(database), store.NewMetricStore(database), Options{InstallAuth: auth, Interval: 5})
+	tokens := store.NewAgentTokenStore(database)
+	handler := NewHandler(store.NewNodeStore(database), store.NewMetricStore(database), Options{InstallAuth: auth, AgentTokens: tokens, Interval: 5})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
@@ -306,7 +395,105 @@ func TestAgentWebSocketExchangesInstallTokenForNodeToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial node token websocket: %v", err)
 	}
+	if err := secondConn.WriteJSON(protocol.HelloMessage{Type: protocol.MessageTypeHello, NodeID: "node-1", Hostname: "oracle-sg"}); err != nil {
+		secondConn.Close()
+		t.Fatalf("write reconnect hello: %v", err)
+	}
+	var reconnectAck protocol.HelloAckMessage
+	if err := secondConn.ReadJSON(&reconnectAck); err != nil {
+		secondConn.Close()
+		t.Fatalf("read reconnect ack: %v", err)
+	}
 	secondConn.Close()
+	if reconnectAck.NodeToken != ack.NodeToken {
+		t.Fatalf("reconnect node token = %q, want %q", reconnectAck.NodeToken, ack.NodeToken)
+	}
+	if auth.MayAuthenticateNodeToken(ack.NodeToken) {
+		t.Fatal("persistent reconnect left an in-memory node-token fallback")
+	}
+
+	_, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("completed install token still authenticated")
+	}
+	if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("completed install token status = %#v, want 401", response)
+	}
+	if _, err := database.Exec(`DELETE FROM node_tokens WHERE node_id = ?`, "node-1"); err != nil {
+		t.Fatalf("revoke persisted node token: %v", err)
+	}
+	_, response, err = websocket.DefaultDialer.Dial(secondURL, secondHeader)
+	if err == nil {
+		t.Fatal("revoked persistent node token authenticated through install auth")
+	}
+	if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked persistent node token status = %#v, want 401", response)
+	}
+}
+
+func TestAgentWebSocketRetriesInstallTokenAfterFirstNodeUpsertFails(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER fail_first_node_upsert BEFORE INSERT ON nodes BEGIN SELECT RAISE(FAIL, 'forced node upsert failure'); END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	auth := NewInstallAuthStore()
+	auth.CreateInstallToken("install-token")
+	tokens := store.NewAgentTokenStore(database)
+	handler := NewHandler(store.NewNodeStore(database), store.NewMetricStore(database), Options{InstallAuth: auth, AgentTokens: tokens, Interval: 5})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=install-token"
+	firstConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial first websocket: %v", err)
+	}
+	if err := firstConn.WriteJSON(protocol.HelloMessage{Type: protocol.MessageTypeHello, NodeID: "node-1", Hostname: "oracle-sg"}); err != nil {
+		firstConn.Close()
+		t.Fatalf("write first hello: %v", err)
+	}
+	_ = firstConn.SetReadDeadline(time.Now().Add(time.Second))
+	var failedAck protocol.HelloAckMessage
+	if err := firstConn.ReadJSON(&failedAck); err == nil {
+		firstConn.Close()
+		t.Fatalf("first registration unexpectedly returned ack: %#v", failedAck)
+	}
+	firstConn.Close()
+
+	boundNodeToken, ok := auth.NodeToken("node-1")
+	if !ok || boundNodeToken == "" {
+		t.Fatal("failed registration did not retain its bound node token")
+	}
+	if _, err := database.Exec(`DROP TRIGGER fail_first_node_upsert`); err != nil {
+		t.Fatalf("drop failure trigger: %v", err)
+	}
+
+	retryConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial retry websocket: %v", err)
+	}
+	defer retryConn.Close()
+	if err := retryConn.WriteJSON(protocol.HelloMessage{Type: protocol.MessageTypeHello, NodeID: "node-1", Hostname: "oracle-sg"}); err != nil {
+		t.Fatalf("write retry hello: %v", err)
+	}
+	var retryAck protocol.HelloAckMessage
+	if err := retryConn.ReadJSON(&retryAck); err != nil {
+		t.Fatalf("read retry ack: %v", err)
+	}
+	if retryAck.NodeToken != boundNodeToken {
+		t.Fatalf("retry node token = %q, want retained token %q", retryAck.NodeToken, boundNodeToken)
+	}
+	if gotNodeID, ok, err := tokens.NodeIDForToken(t.Context(), retryAck.NodeToken); err != nil || !ok || gotNodeID != "node-1" {
+		t.Fatalf("persisted retry token lookup = %q, %v, %v; want node-1, true, nil", gotNodeID, ok, err)
+	}
 }
 
 func TestAgentWebSocketRejectsConfiguredAgentTokenInQuery(t *testing.T) {
@@ -406,6 +593,30 @@ func TestInstallAuthStoreRejectsExpiredInstallToken(t *testing.T) {
 	}
 	if _, ok := auth.ExchangeInstallToken("install-token", "node-1", nil); ok {
 		t.Fatal("ExchangeInstallToken accepted expired install token")
+	}
+}
+
+func TestInstallAuthStoreRejectsExpiredBoundInstallToken(t *testing.T) {
+	auth := NewInstallAuthStore()
+	auth.CreateInstallToken("install-token")
+	nodeToken, ok := auth.ExchangeInstallToken("install-token", "node-1", nil)
+	if !ok {
+		t.Fatal("first ExchangeInstallToken returned false")
+	}
+	auth.mu.Lock()
+	entry := auth.installTokens["install-token"]
+	entry.expiresAt = time.Now().Add(-time.Second)
+	auth.installTokens["install-token"] = entry
+	auth.mu.Unlock()
+
+	if auth.MayAuthenticateInstallToken("install-token") {
+		t.Fatal("expired bound install token authenticated")
+	}
+	if _, ok := auth.ExchangeInstallToken("install-token", "node-1", nil); ok {
+		t.Fatal("expired bound install token was exchanged")
+	}
+	if !auth.MayAuthenticateNodeToken(nodeToken) {
+		t.Fatal("bootstrap token expiry revoked the established node token")
 	}
 }
 

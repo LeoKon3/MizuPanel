@@ -329,7 +329,7 @@ func handleSSHInstall(w http.ResponseWriter, r *http.Request, nodes *store.NodeS
 	jobCtx, cancelJob := sshJobContext(r.Context(), jobTimeout)
 	jobID := jobs.Start(jobCtx, secrets, func(ctx context.Context, emit sshops.EmitFunc) error {
 		defer cancelJob()
-		emit(sshops.ProgressEvent{Step: "create_token", Label: "创建 install_token", Status: sshops.ProgressSuccess, Message: "一次性安装 token 已创建"})
+		emit(sshops.ProgressEvent{Step: "create_token", Label: "创建 install_token", Status: sshops.ProgressSuccess, Message: "短期引导 token 已创建"})
 		resolvedNodeID, err := runner.Install(ctx, installRequest, emit)
 		if err != nil {
 			return err

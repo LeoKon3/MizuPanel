@@ -2,6 +2,27 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.12 - 2026-07-29
+
+### Added
+
+- Added authenticated audit cleanup through `POST /api/audit/events/cleanup` and the Dashboard **清理日志** workflow, supporting either a retained-day count or an exact RFC3339 cutoff and returning the normalized cutoff plus deleted count.
+- Made the open Agent install dialog refresh the node list so newly registered nodes become visible automatically without closing the dialog or reloading the page.
+
+### Fixed
+
+- Made Agent bootstrap recoverable when the first same-node registration fails after install-token exchange: within the token TTL, retries for that node reuse the issued persistent `node_token` until it authenticates successfully.
+- Bound retryable `install_token` credentials to their original node, rejected cross-node or expired reuse, and removed the temporary bootstrap credential after the persistent `node_token` is confirmed.
+
+### Security
+
+- Manual audit cleanup requires admin authentication, same-origin `application/json`, and a single strict JSON body of at most 4 KiB containing either 1–3650 retained days or an RFC3339 cutoff. It protects the latest 24 hours, deletes only `created_at < cutoff`, and exposes no delete-all, per-ID, or arbitrary-filter deletion path.
+- Manual cleanup writes a surviving, secret-free audit event containing only the normalized cutoff and deleted count; scheduled retention cleanup remains unaudited.
+
+### Changed
+
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.12.
+
 ## v0.1.11 - 2026-07-29
 
 ### Fixed

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { RefreshCw, Search, ShieldCheck, X } from 'lucide-react'
+import { AlertTriangle, CalendarClock, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 
-import { getAuditEvents } from '../api/client'
-import type { AuditEvent, AuditEventsQuery, AuditResult, Node } from '../types'
+import { cleanupAuditEvents, getAuditEvents } from '../api/client'
+import { Toast } from '../components/Toast'
+import type { AuditCleanupRequest, AuditEvent, AuditEventsQuery, AuditResult, Node } from '../types'
 
 type AuditPageProps = {
   nodes: Node[]
@@ -35,6 +36,7 @@ const moduleOptions = [
   ['uptime', '服务拨测'],
   ['automation', '任务中心'],
   ['service', '应用服务'],
+  ['audit', '审计'],
   ['terminal', '终端']
 ] as const
 
@@ -65,10 +67,14 @@ export function AuditPage({ nodes }: AuditPageProps) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string>()
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent>()
+  const [cleanupOpen, setCleanupOpen] = useState(false)
+  const [cleanupLoading, setCleanupLoading] = useState(false)
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null)
   const requestSequence = useRef(0)
   const activeController = useRef<AbortController | null>(null)
   const rangeStart = useRef('')
   const detailTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const cleanupTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const nodeNames = useMemo(() => new Map(nodes.map((node) => [node.id, node.name || node.hostname || node.id])), [nodes])
   const hasActiveFilters = timeRange !== '24h' || module !== '' || nodeID !== '' || result !== '' || query.trim() !== ''
@@ -144,6 +150,23 @@ export function AuditPage({ nodes }: AuditPageProps) {
     setSelectedEvent(event)
   }
 
+  const handleCleanup = async (request: AuditCleanupRequest) => {
+    setCleanupLoading(true)
+    try {
+      const response = await cleanupAuditEvents(request)
+      setCleanupOpen(false)
+      setToast({
+        message: response.deleted_count > 0 ? `审计日志清理成功，共删除 ${response.deleted_count} 条` : '审计日志清理成功，未找到符合条件的记录',
+        type: 'success'
+      })
+      await loadEvents(true)
+    } catch (cleanupError: unknown) {
+      setToast({ message: `审计日志清理失败: ${cleanupError instanceof Error ? cleanupError.message : '网络错误'}`, type: 'error' })
+    } finally {
+      setCleanupLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -151,9 +174,14 @@ export function AuditPage({ nodes }: AuditPageProps) {
           <h1 className="text-2xl font-black text-foreground">审计日志</h1>
           <p className="mt-1 text-sm font-semibold text-muted-foreground">追溯敏感操作的发起者、目标与结果；日志不会记录命令、文件内容、凭据或原始请求响应。</p>
         </div>
-        <button type="button" onClick={() => void loadEvents(true)} disabled={loading} className="soft-button inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 border border-border bg-card px-4 text-sm font-black text-foreground hover:border-primary/40 focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50">
-          <RefreshCw size={16} aria-hidden="true" className={loading ? 'animate-spin' : ''} />刷新
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button ref={cleanupTriggerRef} type="button" onClick={() => setCleanupOpen(true)} className="soft-button inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 border border-danger/30 bg-danger/5 px-4 text-sm font-black text-danger hover:bg-danger/10 focus:outline-none focus:ring-4 focus:ring-danger/20">
+            <Trash2 size={16} aria-hidden="true" />清理日志
+          </button>
+          <button type="button" onClick={() => void loadEvents(true)} disabled={loading} className="soft-button inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 border border-border bg-card px-4 text-sm font-black text-foreground hover:border-primary/40 focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50">
+            <RefreshCw size={16} aria-hidden="true" className={loading ? 'animate-spin' : ''} />刷新
+          </button>
+        </div>
       </div>
 
       <section className="soft-panel p-4" aria-label="审计日志筛选">
@@ -258,6 +286,8 @@ export function AuditPage({ nodes }: AuditPageProps) {
       ) : null}
 
       {selectedEvent ? <AuditDetailDialog event={selectedEvent} nodeName={nodeLabel(selectedEvent.node_id, nodeNames)} returnFocusRef={detailTriggerRef} onClose={() => setSelectedEvent(undefined)} /> : null}
+      {cleanupOpen ? <AuditCleanupDialog loading={cleanupLoading} returnFocusRef={cleanupTriggerRef} onClose={() => { if (!cleanupLoading) setCleanupOpen(false) }} onConfirm={(request) => void handleCleanup(request)} /> : null}
+      {toast ? <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} /> : null}
     </div>
   )
 }
@@ -333,6 +363,115 @@ function AuditDetailDialog({ event, nodeName, returnFocusRef, onClose }: { event
   )
 }
 
+function AuditCleanupDialog({ loading, returnFocusRef, onClose, onConfirm }: { loading: boolean, returnFocusRef: React.RefObject<HTMLButtonElement | null>, onClose: () => void, onConfirm: (request: AuditCleanupRequest) => void }) {
+  const dialogRef = useRef<HTMLElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const [mode, setMode] = useState<'days' | 'before'>('days')
+  const [days, setDays] = useState('90')
+  const [before, setBefore] = useState(() => toLocalDateTimeInput(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)))
+  const parsedDays = Number(days)
+  const daysValid = /^\d+$/.test(days) && parsedDays >= 1 && parsedDays <= 3650
+  const beforeTime = new Date(before).getTime()
+  const beforeValid = before !== '' && !Number.isNaN(beforeTime) && beforeTime <= Date.now() - 24 * 60 * 60 * 1000
+  const valid = mode === 'days' ? daysValid : beforeValid
+  const cutoffCopy = mode === 'days'
+    ? (daysValid ? `${parsedDays} 天以前` : '所选天数以前')
+    : (beforeValid ? `${formatDate(new Date(beforeTime).toISOString())} 以前` : '所选时间以前')
+
+  useEffect(() => {
+    closeButtonRef.current?.focus()
+    return () => {
+      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus()
+    }
+  }, [returnFocusRef])
+
+  const handleKeyDown = (keyboardEvent: ReactKeyboardEvent<HTMLElement>) => {
+    if (keyboardEvent.key === 'Escape' && !loading) {
+      keyboardEvent.preventDefault()
+      onClose()
+      return
+    }
+    if (keyboardEvent.key !== 'Tab') return
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), select:not([disabled]), input:not([disabled])') || [])
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (keyboardEvent.shiftKey && document.activeElement === first) {
+      keyboardEvent.preventDefault()
+      last.focus()
+    } else if (!keyboardEvent.shiftKey && document.activeElement === last) {
+      keyboardEvent.preventDefault()
+      first.focus()
+    }
+  }
+
+  const submit = () => {
+    if (!valid || loading) return
+    if (mode === 'days') {
+      onConfirm({ older_than_days: parsedDays })
+      return
+    }
+    onConfirm({ before: new Date(beforeTime).toISOString() })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" onMouseDown={(mouseEvent) => { if (!loading && mouseEvent.target === mouseEvent.currentTarget) onClose() }}>
+      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="audit-cleanup-title" aria-describedby="audit-cleanup-description" tabIndex={-1} onKeyDown={handleKeyDown} className="soft-panel w-full max-w-xl overflow-hidden shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-border p-5 sm:p-6">
+          <div className="flex min-w-0 gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-danger/10 text-danger"><Trash2 size={19} aria-hidden="true" /></div>
+            <div>
+              <h2 id="audit-cleanup-title" className="text-xl font-black text-foreground">清理审计日志</h2>
+              <p id="audit-cleanup-description" className="mt-1 text-sm font-semibold leading-6 text-muted-foreground">按保留天数或指定截止时间批量删除旧记录。最近 24 小时始终受到保护。</p>
+            </div>
+          </div>
+          <button ref={closeButtonRef} type="button" aria-label="关闭清理审计日志" onClick={onClose} disabled={loading} className="soft-button flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center border border-border bg-card text-muted-foreground hover:text-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50"><X size={18} aria-hidden="true" /></button>
+        </div>
+
+        <div className="space-y-4 p-5 sm:p-6">
+          <FilterField label="清理方式">
+            <select aria-label="清理方式" value={mode} onChange={(event) => setMode(event.target.value as 'days' | 'before')} disabled={loading} className="soft-input min-h-11 w-full px-3 text-sm font-bold text-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:opacity-60">
+              <option value="days">保留最近若干天</option>
+              <option value="before">删除指定时间之前</option>
+            </select>
+          </FilterField>
+
+          {mode === 'days' ? (
+            <FilterField label="保留最近天数">
+              <div className="relative">
+                <CalendarClock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <input aria-label="保留最近天数" type="number" min={1} max={3650} step={1} value={days} onChange={(event) => setDays(event.target.value)} disabled={loading} className="soft-input min-h-11 w-full pl-10 pr-16 text-sm font-bold text-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:opacity-60" />
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-muted-foreground">天</span>
+              </div>
+              {!daysValid ? <span className="mt-1.5 block text-xs font-bold text-danger">请输入 1–3650 之间的整数。</span> : null}
+            </FilterField>
+          ) : (
+            <FilterField label="截止时间">
+              <input aria-label="截止时间" type="datetime-local" value={before} max={toLocalDateTimeInput(new Date(Date.now() - 24 * 60 * 60 * 1000))} onChange={(event) => setBefore(event.target.value)} disabled={loading} className="soft-input min-h-11 w-full px-3 text-sm font-bold text-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:opacity-60" />
+              {!beforeValid ? <span className="mt-1.5 block text-xs font-bold text-danger">截止时间必须早于当前时间至少 24 小时。</span> : null}
+            </FilterField>
+          )}
+
+          <div className="rounded-2xl border border-danger/25 bg-danger/5 p-4">
+            <div className="flex gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-danger" aria-hidden="true" />
+              <div>
+                <p className="text-sm font-black text-foreground">将永久删除 {cutoffCopy}的审计日志</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-muted-foreground">删除后无法恢复；本次清理操作本身会保留为新的审计事件。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/20 px-5 py-4 sm:px-6">
+          <button type="button" onClick={onClose} disabled={loading} className="soft-button min-h-10 cursor-pointer border border-border bg-card px-4 text-sm font-black text-muted-foreground hover:text-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50">取消</button>
+          <button type="button" onClick={submit} disabled={!valid || loading} className="soft-button inline-flex min-h-10 cursor-pointer items-center gap-2 bg-danger px-4 text-sm font-black text-white hover:bg-danger/90 focus:outline-none focus:ring-4 focus:ring-danger/20 disabled:cursor-not-allowed disabled:opacity-50"><Trash2 size={16} aria-hidden="true" />{loading ? '正在清理...' : '确认清理'}</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function DetailItem({ label, value, wide = false }: { label: string, value: string, wide?: boolean }) {
   return <div className={`min-w-0 rounded-2xl border border-border bg-muted/20 p-3 ${wide ? 'sm:col-span-2' : ''}`}><p className="text-[11px] font-black text-muted-foreground">{label}</p><p className="mt-1 break-all text-sm font-bold text-foreground">{value}</p></div>
 }
@@ -362,6 +501,11 @@ function formatDate(value: string) {
 function formatDuration(durationMS: number) {
   if (durationMS < 1000) return `${Math.max(0, durationMS)} ms`
   return `${(durationMS / 1000).toFixed(durationMS < 10_000 ? 2 : 1)} s`
+}
+
+function toLocalDateTimeInput(date: Date) {
+  const offset = date.getTimezoneOffset() * 60 * 1000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
 }
 
 function isAbortError(error: unknown) {

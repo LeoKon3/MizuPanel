@@ -21,7 +21,7 @@ tasks:
   cleanup_interval: "1h"
 
 security:
-  # Prefer Dashboard-generated one-time install tokens.
+  # Prefer Dashboard-generated short-lived, node-bound install tokens.
   # agent_token: "change-this-to-a-random-secret"
   admin:
     enabled: false

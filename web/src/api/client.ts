@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -64,8 +64,8 @@ export function logout(): Promise<void> {
   return requestVoid('/api/auth/logout', { method: 'POST' })
 }
 
-export function getNodes(): Promise<NodesResponse> {
-  return request<NodesResponse>('/api/nodes')
+export function getNodes(signal?: AbortSignal): Promise<NodesResponse> {
+  return request<NodesResponse>('/api/nodes', signal ? { signal } : undefined)
 }
 
 export function getNodeGroups(): Promise<NodeGroupsResponse> {
@@ -373,6 +373,14 @@ export function getAuditEvents(query: AuditEventsQuery = {}, signal?: AbortSigna
   }
   const suffix = params.size > 0 ? `?${params.toString()}` : ''
   return request<AuditEventsResponse>(`/api/audit/events${suffix}`, signal ? { signal } : undefined)
+}
+
+export function cleanupAuditEvents(cleanup: AuditCleanupRequest): Promise<AuditCleanupResponse> {
+  return request<AuditCleanupResponse>('/api/audit/events/cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cleanup)
+  })
 }
 
 export function getAutomationScripts(signal?: AbortSignal): Promise<AutomationScriptsResponse> {

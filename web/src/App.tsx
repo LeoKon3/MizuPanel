@@ -153,6 +153,30 @@ const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts'
   { page: 'settings', label: '系统设置', icon: 'settings' }
 ]
 
+const installNodeDiscoveryIntervalMs = 3_000
+const installNodeDiscoveryWindowMs = 2 * 60_000
+
+function installDiscoveryNodesChanged(current: Node[], next: Node[]) {
+  if (current.length !== next.length) return true
+  const currentByID = new Map(current.map((node) => [node.id, node]))
+  return next.some((node) => {
+    const previous = currentByID.get(node.id)
+    return !previous
+      || previous.name !== node.name
+      || previous.hostname !== node.hostname
+      || previous.ip !== node.ip
+      || previous.os !== node.os
+      || previous.arch !== node.arch
+      || previous.kernel !== node.kernel
+      || previous.agent_version !== node.agent_version
+      || previous.status !== node.status
+      || previous.terminal_enabled !== node.terminal_enabled
+      || previous.agent_mode !== node.agent_mode
+      || previous.agent_user !== node.agent_user
+      || previous.task_runner_supported !== node.task_runner_supported
+  })
+}
+
 export default function App() {
   const [routeVersion, setRouteVersion] = useState(0)
   const route = useMemo(() => currentRoute(), [routeVersion])
@@ -204,9 +228,12 @@ export default function App() {
   const installCommandCodeRef = useRef<HTMLElement>(null)
   const installCommandDialogRef = useRef<HTMLElement>(null)
   const installCommandRequestID = useRef(0)
+  const preserveEmptyInstallSelectionRef = useRef(false)
   const dockerComposeRequestID = useRef(0)
   const dockerResourcesRequestID = useRef(0)
+  const nodesRef = useRef<Node[]>([])
   const selectedNodeIDRef = useRef<string | undefined>(undefined)
+  nodesRef.current = nodes
   selectedNodeIDRef.current = selectedNodeID
 
   useEffect(() => {
@@ -540,10 +567,59 @@ export default function App() {
   }, [route, selectedDockerSnapshot])
 
   useEffect(() => {
+    if (preserveEmptyInstallSelectionRef.current) {
+      preserveEmptyInstallSelectionRef.current = false
+      return
+    }
     if (page === 'hosts' && filteredNodes.length > 0 && !visibleSelectedNode) {
       setSelectedNodeID(filteredNodes[0].id)
     }
   }, [filteredNodes, page, visibleSelectedNode])
+
+  useEffect(() => {
+    if (!installCommandOpen) return
+
+    let active = true
+    let timeoutID: number | undefined
+    let activeRequest: AbortController | undefined
+    const expiresAt = Date.now() + installNodeDiscoveryWindowMs
+
+    const scheduleRefresh = () => {
+      if (!active || Date.now() + installNodeDiscoveryIntervalMs >= expiresAt) return
+      timeoutID = window.setTimeout(() => {
+        void refreshNodes()
+      }, installNodeDiscoveryIntervalMs)
+    }
+
+    const refreshNodes = async () => {
+      if (!active || Date.now() >= expiresAt) return
+      const controller = new AbortController()
+      activeRequest = controller
+      try {
+        const response = await getNodes(controller.signal)
+        if (!active || Date.now() >= expiresAt) return
+        if (installDiscoveryNodesChanged(nodesRef.current, response.nodes)) {
+          if (!selectedNodeIDRef.current && currentRoute().kind === 'dashboard') {
+            preserveEmptyInstallSelectionRef.current = true
+          }
+          nodesRef.current = response.nodes
+          setNodes(response.nodes)
+        }
+      } catch {
+        // Installation discovery is best-effort and must not replace visible errors.
+      } finally {
+        if (activeRequest === controller) activeRequest = undefined
+      }
+      scheduleRefresh()
+    }
+
+    scheduleRefresh()
+    return () => {
+      active = false
+      if (timeoutID !== undefined) window.clearTimeout(timeoutID)
+      activeRequest?.abort()
+    }
+  }, [installCommandOpen])
 
   useEffect(() => {
     if (installCommandOpen) {
@@ -877,7 +953,7 @@ export default function App() {
                   <li className="flex items-start gap-3 rounded-2xl bg-surface/70 px-3 py-2">
                     <span className="mt-0.5 h-3 w-3 rounded-full bg-success" />
                     <span className="min-w-0">
-                      <span className="block text-xs font-black text-foreground">已生成一次性 install_token</span>
+                      <span className="block text-xs font-black text-foreground">已生成短期引导 install_token</span>
                       <span className="block text-xs font-bold text-muted-foreground">{installToken || '等待生成'}</span>
                     </span>
                   </li>
@@ -965,7 +1041,7 @@ export default function App() {
                 </div>
               ) : null}
               <div className="border-t border-border bg-amber-50 px-4 py-3 text-xs font-bold leading-5 text-warning">
-                token 来源：点击添加主机时，Server 会自动生成一次性 install_token。
+                token 来源：点击添加主机时，Server 会自动生成短期引导 install_token。
               </div>
       </div>
       </section>

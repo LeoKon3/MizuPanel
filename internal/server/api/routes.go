@@ -246,6 +246,7 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 	}
 	if server.audit != nil {
 		mux.HandleFunc("/api/audit/events", server.requireAuth(server.handleAuditEvents))
+		mux.HandleFunc("/api/audit/events/cleanup", server.requireAuth(server.handleAuditCleanup))
 	}
 	if server.automation != nil {
 		mux.HandleFunc("/api/automation/scripts", server.requireAuth(server.handleAutomationScripts))

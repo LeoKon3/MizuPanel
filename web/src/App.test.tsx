@@ -169,7 +169,7 @@ describe('App', () => {
     expect(await screen.findByRole('dialog', { name: '添加主机' })).toBeInTheDocument()
 
     await waitFor(() => expect(createInstallCommand).toHaveBeenCalledWith('linux'))
-    expect(await screen.findByText('已生成一次性 install_token')).toBeInTheDocument()
+    expect(await screen.findByText('已生成短期引导 install_token')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Linux' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.queryByRole('button', { name: 'SSH 自动安装' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('SSH Host')).not.toBeInTheDocument()
@@ -181,7 +181,7 @@ describe('App', () => {
     expect(screen.getByText('默认以 root 运维模式安装，自动启用节点终端与 Docker 容器监控。')).toBeInTheDocument()
     expect(screen.getByLabelText('选择 Agent 安装系统')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '复制安装命令' })).toBeInTheDocument()
-    expect(screen.getByText('token 来源：点击添加主机时，Server 会自动生成一次性 install_token。')).toBeInTheDocument()
+    expect(screen.getByText('token 来源：点击添加主机时，Server 会自动生成短期引导 install_token。')).toBeInTheDocument()
   })
 
   test('opens the add host dialog from overview quick actions', async () => {
@@ -250,7 +250,7 @@ describe('App', () => {
     fireEvent.click(await screen.findByRole('button', { name: '添加主机' }))
 
     await waitFor(() => expect(createInstallCommand).toHaveBeenCalled())
-    expect(await screen.findByText('已生成一次性 install_token')).toBeInTheDocument()
+    expect(await screen.findByText('已生成短期引导 install_token')).toBeInTheDocument()
     expect(screen.getByText('等待在目标机器执行命令')).toBeInTheDocument()
     expect(screen.getByText('等待 Agent 首次注册')).toBeInTheDocument()
     expect(screen.getByText(/超时未连接时，请检查 server_url、防火墙或 Agent 日志/)).toBeInTheDocument()

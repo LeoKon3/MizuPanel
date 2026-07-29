@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.11-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.12-14B8A6">
 </p>
 
 <p align="center">
@@ -113,6 +113,8 @@ Docker deployments can override these values with `MIZUPANEL_TASK_RETENTION` and
 <strong>Audit Trail</strong>
 
 The top-level **Audit Trail** page (`/audit`) follows the existing admin-auth configuration and provides time, module, node, result, and keyword filters. Its read-only Dashboard API is `GET /api/audit/events`, with cursor pagination and filters for time, actor, module, action, node, result, and safe target/summary keywords.
+
+The **Cleanup Logs** action can retain the latest N days or permanently delete matching old rows before an exact cutoff. It always protects the latest 24 hours, and a successful cleanup leaves a safe audit event containing only the normalized cutoff and deleted count.
 
 Events are retained for 90 days by default and expired rows are cleaned hourly:
 

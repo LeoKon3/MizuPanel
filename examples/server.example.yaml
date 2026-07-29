@@ -29,7 +29,7 @@ tasks:
 
 security:
   # agent_token is optional and should only be set if you need a long-lived bootstrap token.
-  # Prefer the Dashboard-generated one-time install token flow for adding hosts.
+  # Prefer the Dashboard-generated short-lived, node-bound install token flow for adding hosts.
   # agent_token: "change-this-to-a-random-secret" # Optional long-lived Agent bootstrap token; avoid exposing it in browsers or public docs.
   admin:
     enabled: false # Set to true before exposing MizuPanel beyond localhost.

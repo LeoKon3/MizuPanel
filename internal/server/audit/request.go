@@ -299,7 +299,7 @@ func summaryForStatus(status int, result string) string {
 		return "completed"
 	}
 	switch status {
-	case http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusRequestEntityTooLarge:
+	case http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusRequestEntityTooLarge, http.StatusUnsupportedMediaType:
 		return "invalid_request"
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return "authentication_failed"

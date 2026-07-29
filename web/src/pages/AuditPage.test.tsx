@@ -6,7 +6,8 @@ import * as api from '../api/client'
 import type { AuditEvent, AuditEventsResponse, Node } from '../types'
 
 vi.mock('../api/client', () => ({
-  getAuditEvents: vi.fn()
+  getAuditEvents: vi.fn(),
+  cleanupAuditEvents: vi.fn()
 }))
 
 const node: Node = {
@@ -54,6 +55,7 @@ function deferred<Value>() {
 describe('AuditPage', () => {
   beforeEach(() => {
     vi.mocked(api.getAuditEvents).mockResolvedValue({ events: [], next_before_id: null })
+    vi.mocked(api.cleanupAuditEvents).mockResolvedValue({ deleted_count: 0, cutoff: '2026-04-27T00:00:00Z' })
   })
 
   afterEach(() => {
@@ -185,5 +187,64 @@ describe('AuditPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('审计日志加载失败: 连接失败')
     expect(screen.queryByText('暂无审计记录')).not.toBeInTheDocument()
+  })
+
+  test('cleans old audit events through an accessible confirmation dialog and refreshes locally', async () => {
+    vi.mocked(api.cleanupAuditEvents).mockResolvedValue({ deleted_count: 27, cutoff: '2026-04-30T00:00:00Z' })
+    const nativeConfirm = vi.spyOn(window, 'confirm')
+    render(<AuditPage nodes={[node]} />)
+    await screen.findByText('暂无审计记录')
+
+    const trigger = screen.getByRole('button', { name: '清理日志' })
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: '清理审计日志' })
+    const closeButton = within(dialog).getByRole('button', { name: '关闭清理审计日志' })
+    await waitFor(() => expect(closeButton).toHaveFocus())
+    expect(within(dialog).getByLabelText('保留最近天数')).toHaveValue(90)
+    expect(within(dialog).getByText(/最近 24 小时始终受到保护。/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/本次清理操作本身会保留为新的审计事件。/)).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认清理' }))
+    await waitFor(() => expect(api.cleanupAuditEvents).toHaveBeenCalledWith({ older_than_days: 90 }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('审计日志清理成功，共删除 27 条')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '清理审计日志' })).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+    expect(api.getAuditEvents).toHaveBeenCalledTimes(2)
+    expect(nativeConfirm).not.toHaveBeenCalled()
+    nativeConfirm.mockRestore()
+  })
+
+  test('cleans audit events before an exact local cutoff', async () => {
+    const localCutoff = '2026-04-01T08:30'
+    render(<AuditPage nodes={[node]} />)
+    await screen.findByText('暂无审计记录')
+
+    fireEvent.click(screen.getByRole('button', { name: '清理日志' }))
+    const dialog = screen.getByRole('dialog', { name: '清理审计日志' })
+    fireEvent.change(within(dialog).getByLabelText('清理方式'), { target: { value: 'before' } })
+    fireEvent.change(within(dialog).getByLabelText('截止时间'), { target: { value: localCutoff } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认清理' }))
+
+    await waitFor(() => expect(api.cleanupAuditEvents).toHaveBeenCalledWith({ before: new Date(localCutoff).toISOString() }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('审计日志清理成功，未找到符合条件的记录')
+  })
+
+  test('validates cleanup bounds and keeps the dialog open when cleanup fails', async () => {
+    vi.mocked(api.cleanupAuditEvents).mockRejectedValueOnce(new Error('服务器拒绝请求'))
+    render(<AuditPage nodes={[node]} />)
+    await screen.findByText('暂无审计记录')
+
+    fireEvent.click(screen.getByRole('button', { name: '清理日志' }))
+    const dialog = screen.getByRole('dialog', { name: '清理审计日志' })
+    const days = within(dialog).getByLabelText('保留最近天数')
+    const confirm = within(dialog).getByRole('button', { name: '确认清理' })
+    fireEvent.change(days, { target: { value: '0' } })
+    expect(confirm).toBeDisabled()
+    expect(within(dialog).getByText('请输入 1–3650 之间的整数。')).toBeInTheDocument()
+
+    fireEvent.change(days, { target: { value: '30' } })
+    fireEvent.click(confirm)
+    expect(await screen.findByRole('alert')).toHaveTextContent('审计日志清理失败: 服务器拒绝请求')
+    expect(screen.getByRole('dialog', { name: '清理审计日志' })).toBeInTheDocument()
   })
 })

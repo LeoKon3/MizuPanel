@@ -215,6 +215,163 @@ func TestAuditAPIRejectsInvalidFiltersAndHidesStorageErrors(t *testing.T) {
 	}
 }
 
+func TestAuditCleanupDeletesOnlyEventsBeforeExplicitCutoffAndAuditsItself(t *testing.T) {
+	handler, auditStore, _ := testAuditRouter(t, AuthConfig{})
+	now := time.Now().UTC()
+	cutoff := now.Add(-48 * time.Hour).Truncate(time.Second)
+	old := seedAuditEvent(t, auditStore, "cleanup-old", "docker", serveraudit.ResultSuccess, cutoff.Add(-time.Minute))
+	boundary := seedAuditEvent(t, auditStore, "cleanup-boundary", "docker", serveraudit.ResultSuccess, cutoff)
+	recent := seedAuditEvent(t, auditStore, "cleanup-recent", "docker", serveraudit.ResultSuccess, cutoff.Add(time.Minute))
+
+	recorder := auditRequest(t, handler, nil, http.MethodPost, "/api/audit/events/cleanup", map[string]any{
+		"before": cutoff.Format(time.RFC3339),
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("cleanup status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response auditCleanupResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode cleanup response: %v", err)
+	}
+	if response.DeletedCount != 1 || !response.Cutoff.Equal(cutoff) {
+		t.Fatalf("cleanup response=%+v", response)
+	}
+
+	page, err := auditStore.List(t.Context(), serveraudit.Filter{Limit: 20})
+	if err != nil {
+		t.Fatalf("list events after cleanup: %v", err)
+	}
+	byRequestID := make(map[string]serveraudit.Event, len(page.Events))
+	var cleanupEvent *serveraudit.Event
+	for index := range page.Events {
+		event := page.Events[index]
+		byRequestID[event.RequestID] = event
+		if event.Module == "audit" && event.Action == "cleanup" {
+			cleanupEvent = &event
+		}
+	}
+	if _, exists := byRequestID[old.RequestID]; exists {
+		t.Fatalf("old event %d still exists", old.ID)
+	}
+	if _, exists := byRequestID[boundary.RequestID]; !exists {
+		t.Fatalf("boundary event %d was deleted", boundary.ID)
+	}
+	if _, exists := byRequestID[recent.RequestID]; !exists {
+		t.Fatalf("recent event %d was deleted", recent.ID)
+	}
+	if cleanupEvent == nil || cleanupEvent.Result != serveraudit.ResultSuccess {
+		t.Fatalf("cleanup audit event=%+v", cleanupEvent)
+	}
+	if cleanupEvent.Metadata["cutoff"] != cutoff.Format(time.RFC3339) || cleanupEvent.Metadata["deleted_count"] != "1" {
+		t.Fatalf("cleanup metadata=%+v", cleanupEvent.Metadata)
+	}
+	encoded, err := json.Marshal(cleanupEvent)
+	if err != nil {
+		t.Fatalf("encode cleanup event: %v", err)
+	}
+	if strings.Contains(string(encoded), `"before"`) || strings.Contains(string(encoded), "cleanup-old") {
+		t.Fatalf("cleanup event leaked request content: %s", encoded)
+	}
+}
+
+func TestAuditCleanupSupportsOlderThanDaysAndZeroDeletion(t *testing.T) {
+	handler, auditStore, _ := testAuditRouter(t, AuthConfig{})
+	seedAuditEvent(t, auditStore, "cleanup-recent-only", "docker", serveraudit.ResultSuccess, time.Now().UTC().Add(-12*time.Hour))
+
+	recorder := auditRequest(t, handler, nil, http.MethodPost, "/api/audit/events/cleanup", map[string]any{
+		"older_than_days": 7,
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("cleanup status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response auditCleanupResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode cleanup response: %v", err)
+	}
+	if response.DeletedCount != 0 {
+		t.Fatalf("deleted count=%d", response.DeletedCount)
+	}
+	wantCutoff := time.Now().UTC().Add(-7 * 24 * time.Hour)
+	if delta := response.Cutoff.Sub(wantCutoff); delta < -2*time.Second || delta > 2*time.Second {
+		t.Fatalf("cutoff=%s want near %s", response.Cutoff, wantCutoff)
+	}
+}
+
+func TestAuditCleanupGuardsAndValidation(t *testing.T) {
+	handler, _, _ := testAuditRouter(t, AuthConfig{})
+	validBefore := time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339)
+
+	method := httptest.NewRecorder()
+	handler.ServeHTTP(method, httptest.NewRequest(http.MethodGet, "/api/audit/events/cleanup", nil))
+	if method.Code != http.StatusMethodNotAllowed || method.Header().Get("Allow") != "POST" {
+		t.Fatalf("method status=%d allow=%q", method.Code, method.Header().Get("Allow"))
+	}
+
+	tests := []struct {
+		name        string
+		body        string
+		origin      string
+		contentType string
+		wantStatus  int
+	}{
+		{name: "missing origin", body: `{"before":"` + validBefore + `"}`, contentType: "application/json", wantStatus: http.StatusForbidden},
+		{name: "wrong content type", body: `{"before":"` + validBefore + `"}`, origin: "http://panel.example", contentType: "text/plain", wantStatus: http.StatusUnsupportedMediaType},
+		{name: "empty object", body: `{}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "both modes", body: `{"before":"` + validBefore + `","older_than_days":30}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "blank before with days", body: `{"before":"","older_than_days":30}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "null before with days", body: `{"before":null,"older_than_days":30}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "zero days", body: `{"older_than_days":0}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "fractional days", body: `{"older_than_days":1.5}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "too many days", body: `{"older_than_days":3651}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "invalid before", body: `{"before":"tomorrow"}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "future before", body: `{"before":"` + time.Now().UTC().Add(time.Hour).Format(time.RFC3339) + `"}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "recent before", body: `{"before":"` + time.Now().UTC().Add(-time.Hour).Format(time.RFC3339) + `"}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "unknown field", body: `{"before":"` + validBefore + `","secret":"do-not-store"}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "trailing object", body: `{"before":"` + validBefore + `"}{}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "oversized", body: `{"before":"` + strings.Repeat("x", maxAuditCleanupBodyBytes+1) + `"}`, origin: "http://panel.example", contentType: "application/json", wantStatus: http.StatusRequestEntityTooLarge},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/audit/events/cleanup", strings.NewReader(test.body))
+			request.Host = "panel.example"
+			if test.origin != "" {
+				request.Header.Set("Origin", test.origin)
+			}
+			if test.contentType != "" {
+				request.Header.Set("Content-Type", test.contentType)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", recorder.Code, test.wantStatus, recorder.Body.String())
+			}
+			if strings.Contains(recorder.Body.String(), "do-not-store") || strings.Contains(strings.ToLower(recorder.Body.String()), "sql") {
+				t.Fatalf("unsafe error response: %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuditCleanupRequiresAuthenticationAndHidesStorageErrors(t *testing.T) {
+	authenticatedHandler, _, _ := testAuditRouter(t, AuthConfig{Enabled: true, Username: "admin", Password: "secret", SessionTTL: time.Hour})
+	unauthenticated := auditRequest(t, authenticatedHandler, nil, http.MethodPost, "/api/audit/events/cleanup", map[string]any{"older_than_days": 30})
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status=%d body=%s", unauthenticated.Code, unauthenticated.Body.String())
+	}
+
+	handler, _, database := testAuditRouter(t, AuthConfig{})
+	if err := database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+	recorder := auditRequest(t, handler, nil, http.MethodPost, "/api/audit/events/cleanup", map[string]any{"older_than_days": 30})
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("storage failure status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(strings.ToLower(recorder.Body.String()), "sql") || strings.Contains(recorder.Body.String(), "database is closed") {
+		t.Fatalf("storage error leaked details: %s", recorder.Body.String())
+	}
+}
+
 func TestAuditAuthenticationActors(t *testing.T) {
 	handler, auditStore, _ := testAuditRouter(t, AuthConfig{Enabled: true, Username: "admin", Password: "secret", SessionTTL: time.Hour})
 	failedLogin := auditRequest(t, handler, nil, http.MethodPost, "/api/auth/login", map[string]any{"username": "attempted-user", "password": "wrong"})

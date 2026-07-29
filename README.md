@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.11-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.12-14B8A6">
 </p>
 
 <p align="center">
@@ -113,6 +113,8 @@ Docker 部署可使用 `MIZUPANEL_TASK_RETENTION` 和 `MIZUPANEL_TASK_CLEANUP_IN
 <strong>操作审计</strong>
 
 Dashboard 顶层的 **审计日志**（`/audit`）沿用现有管理员认证配置，提供时间、模块、节点、结果和关键词筛选。供 Dashboard 使用的只读接口是 `GET /api/audit/events`；它支持游标分页以及时间、发起者、模块、操作、节点、结果和安全目标/摘要关键词过滤。
+
+页面中的 **清理日志** 支持保留最近 N 天，或永久删除精确截止时间之前的匹配旧记录。清理始终保护最近 24 小时；成功后会保留一条安全的清理审计事件，只记录标准化截止时间和删除数量。
 
 默认保留 90 天，每小时清理一次过期记录：
 
