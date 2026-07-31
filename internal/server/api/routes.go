@@ -21,6 +21,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/protocol"
 	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
+	"github.com/mizupanel/mizupanel/internal/server/logbuffer"
 	"github.com/mizupanel/mizupanel/internal/server/store"
 	"github.com/mizupanel/mizupanel/internal/version"
 )
@@ -56,7 +57,7 @@ type NodeOperations interface {
 	DockerResourceList(ctx context.Context, nodeID string) (protocol.DockerResourceListResponse, error)
 	DockerResourceAction(ctx context.Context, nodeID string, resourceType string, resourceID string, action string) (protocol.DockerResourceActionResponse, error)
 	SystemdServiceList(ctx context.Context, nodeID string) (protocol.SystemdServiceListResponse, error)
-	SystemdServiceAction(ctx context.Context, nodeID string, serviceName string, action string) (protocol.SystemdServiceActionResponse, error)
+	SystemdServiceAction(ctx context.Context, nodeID string, serviceName string, action string, lines int) (protocol.SystemdServiceActionResponse, error)
 }
 
 type NodeDisconnecter interface {
@@ -99,6 +100,7 @@ type Server struct {
 	auth                    *Authenticator
 	audit                   *serveraudit.Store
 	serviceCenter           ServiceCenter
+	serverLogs              *logbuffer.Buffer
 }
 
 type terminalToken struct {
@@ -212,6 +214,8 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 			server.auth = typed
 		case *serveraudit.Store:
 			server.audit = typed
+		case *logbuffer.Buffer:
+			server.serverLogs = typed
 		case NodeOperations:
 			server.agentOps = typed
 		case TaskRunnerCapabilityProvider:
@@ -223,6 +227,7 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 	mux.HandleFunc("/api/auth/login", server.handleAuthLogin)
 	mux.HandleFunc("/api/auth/logout", server.handleAuthLogout)
 	mux.HandleFunc("/api/system/about", server.requireAuth(server.handleSystemAbout))
+	mux.HandleFunc("/api/system/logs", server.requireAuth(server.handleSystemLogs))
 	mux.HandleFunc("/api/settings", server.requireAuth(server.handleSettings))
 	mux.HandleFunc("/api/node-groups", server.requireAuth(server.handleNodeGroups))
 	mux.HandleFunc("/api/node-groups/", server.requireAuth(server.handleNodeGroup))
@@ -1685,6 +1690,7 @@ func (s *Server) handleNodeSystemdServiceAction(w http.ResponseWriter, r *http.R
 	var request struct {
 		ServiceName string `json:"service_name"`
 		Action      string `json:"action"`
+		Lines       int    `json:"lines,omitempty"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid systemd service action request")
@@ -1705,7 +1711,7 @@ func (s *Server) handleNodeSystemdServiceAction(w http.ResponseWriter, r *http.R
 		serveraudit.SetAction(r, request.Action)
 	}
 	setAuditTarget(r, "service", request.ServiceName, request.ServiceName)
-	response, err := s.agentOps.SystemdServiceAction(r.Context(), nodeID, request.ServiceName, request.Action)
+	response, err := s.agentOps.SystemdServiceAction(r.Context(), nodeID, request.ServiceName, request.Action, request.Lines)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

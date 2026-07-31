@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/config"
 	serverdb "github.com/mizupanel/mizupanel/internal/server/db"
+	"github.com/mizupanel/mizupanel/internal/server/logbuffer"
 	"github.com/mizupanel/mizupanel/internal/server/retention"
 	"github.com/mizupanel/mizupanel/internal/server/servicecenter"
 	"github.com/mizupanel/mizupanel/internal/server/store"
@@ -29,6 +31,8 @@ func main() {
 	if handled {
 		return
 	}
+	serverLogs := logbuffer.New(logbuffer.DefaultMaxEntries, logbuffer.DefaultMaxBytes)
+	log.SetOutput(io.MultiWriter(os.Stderr, serverLogs))
 
 	configPath := flag.String("config", "", "path to server config file")
 	flag.Parse()
@@ -97,6 +101,7 @@ func main() {
 		Debug:               cfg.Debug,
 		AdminAuth:           appAuthConfig(cfg.AdminAuth),
 		Audit:               auditStore,
+		ServerLogs:          serverLogs,
 	})
 	log.Printf("MizuPanel server listening on %s", cfg.Listen)
 	log.Fatal(http.ListenAndServe(cfg.Listen, handler))

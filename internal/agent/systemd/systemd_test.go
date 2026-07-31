@@ -178,3 +178,36 @@ func TestServiceLogsUseFixedArgumentsAndRedactSensitiveValues(t *testing.T) {
 		t.Fatalf("logs args = %q, want %q", got, want)
 	}
 }
+
+func TestServiceLogsClampRequestedLines(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines int
+		want  string
+	}{
+		{name: "minimum", lines: 1, want: "20"},
+		{name: "maximum", lines: 5000, want: "2000"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls [][]string
+			handler := &Handler{supported: true, active: make(map[string]bool)}
+			handler.runner = func(_ context.Context, name string, args ...string) (string, string, error) {
+				calls = append(calls, append([]string{name}, args...))
+				if len(calls) == 1 {
+					return "nginx.service loaded active running Nginx\\n", "", nil
+				}
+				return "line\\n", "", nil
+			}
+
+			response := handler.HandleAction(context.Background(), protocol.SystemdServiceActionRequest{ServiceName: "nginx.service", Action: "logs", Lines: test.lines})
+			if !response.Success {
+				t.Fatalf("response = %#v", response)
+			}
+			if got, want := calls[2], []string{"journalctl", "--unit", "nginx.service", "--no-pager", "--output=short-iso", "--lines", test.want}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("logs args = %#v, want %#v", got, want)
+			}
+		})
+	}
+}

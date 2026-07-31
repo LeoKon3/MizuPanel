@@ -21,6 +21,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/server/api"
 	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
+	"github.com/mizupanel/mizupanel/internal/server/logbuffer"
 	"github.com/mizupanel/mizupanel/internal/server/servicecenter"
 	"github.com/mizupanel/mizupanel/internal/server/sshops"
 	"github.com/mizupanel/mizupanel/internal/server/store"
@@ -70,6 +71,7 @@ type Dependencies struct {
 	SSHInstallPollInterval time.Duration
 	AdminAuth              api.AuthConfig
 	Audit                  *serveraudit.Store
+	ServerLogs             *logbuffer.Buffer
 }
 
 func NewHandler(deps Dependencies) http.Handler {
@@ -108,7 +110,7 @@ func NewHandler(deps Dependencies) http.Handler {
 			log.Printf("Warning: failed to recover interrupted automation runs: %v", err)
 		}
 	}
-	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, api.AutomationConfig{Store: deps.Tasks, Runner: taskEngine}, serviceCenter, auth, deps.Audit)
+	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, api.AutomationConfig{Store: deps.Tasks, Runner: taskEngine}, serviceCenter, auth, deps.Audit, deps.ServerLogs)
 
 	// Start alerting engine if enabled
 	if deps.AlertingEnabled && deps.Alerts != nil {

@@ -53,8 +53,8 @@ async function requestVoid(path: string, init?: RequestInit): Promise<void> {
   }
 }
 
-export function fetchK8sClusters(): Promise<K8sClustersResponse> {
-  return request<K8sClustersResponse>('/api/k8s/clusters')
+export function fetchK8sClusters(signal?: AbortSignal): Promise<K8sClustersResponse> {
+  return request<K8sClustersResponse>('/api/k8s/clusters', signal ? { signal } : undefined)
 }
 
 export function connectK8sCluster(req: ConnectK8sClusterRequest): Promise<ConnectK8sClusterResponse> {
@@ -81,8 +81,8 @@ export function fetchK8sSummary(clusterID: string): Promise<K8sSummaryResponse> 
   return request<K8sSummaryResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/summary`)
 }
 
-export function fetchK8sNamespaces(clusterID: string): Promise<K8sNamespacesResponse> {
-  return request<K8sNamespacesResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/namespaces`)
+export function fetchK8sNamespaces(clusterID: string, signal?: AbortSignal): Promise<K8sNamespacesResponse> {
+  return request<K8sNamespacesResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/namespaces`, signal ? { signal } : undefined)
 }
 
 export function fetchK8sNodes(clusterID: string): Promise<K8sNodesResponse> {
@@ -109,8 +109,8 @@ export function fetchK8sIngresses(clusterID: string, namespace?: string): Promis
   return request<K8sIngressesResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/ingresses${namespaceQuery(namespace)}`)
 }
 
-export function fetchK8sPods(clusterID: string, namespace?: string): Promise<K8sPodsResponse> {
-  return request<K8sPodsResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/pods${namespaceQuery(namespace)}`)
+export function fetchK8sPods(clusterID: string, namespace?: string, signal?: AbortSignal): Promise<K8sPodsResponse> {
+  return request<K8sPodsResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/pods${namespaceQuery(namespace)}`, signal ? { signal } : undefined)
 }
 
 export function fetchK8sDiagnostics(
@@ -161,7 +161,8 @@ export function fetchK8sPodLogs(
   podName: string,
   container?: string,
   follow = false,
-  tailLines = 100
+  tailLines = 100,
+  signal?: AbortSignal
 ): Promise<K8sPodLogsResponse> {
   const params = new URLSearchParams()
   if (container) params.set('container', container)
@@ -170,6 +171,7 @@ export function fetchK8sPodLogs(
 
   const queryString = params.toString()
   return request<K8sPodLogsResponse>(
-    `/api/k8s/clusters/${encodeURIComponent(clusterID)}/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/logs?${queryString}`
+    `/api/k8s/clusters/${encodeURIComponent(clusterID)}/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/logs?${queryString}`,
+    signal ? { signal } : undefined
   )
 }

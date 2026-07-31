@@ -27,6 +27,17 @@ export type SystemAboutResponse = {
   github_url: string
 }
 
+export type SystemLogsResponse = {
+  content: string
+  lines: number
+  returned_lines: number
+  collected_at: string
+  started_at: string
+  truncated: boolean
+}
+
+export type LogSource = 'docker' | 'systemd' | 'kubernetes' | 'agent' | 'server' | 'file'
+
 export type Metric = {
   id: number
   node_id: string

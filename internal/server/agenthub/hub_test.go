@@ -797,7 +797,7 @@ func TestSystemdServiceActionRejectsAgentWithoutCapability(t *testing.T) {
 		"node-1": {nodeID: "node-1", supportsSystemdServices: false},
 	}}
 
-	response, err := handler.SystemdServiceAction(t.Context(), "node-1", "nginx.service", "restart")
+	response, err := handler.SystemdServiceAction(t.Context(), "node-1", "nginx.service", "restart", 0)
 	if err != nil {
 		t.Fatalf("SystemdServiceAction returned error: %v", err)
 	}

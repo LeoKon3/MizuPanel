@@ -2,6 +2,23 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.13 - 2026-07-29
+
+### Added
+
+- Added the `/logs` Unified Log Center for one-target, on-demand troubleshooting across Docker containers, Systemd services, Kubernetes Pods, Agent services, the current Server process, and host log files. It includes target-aware selection, bounded tail lines, in-browser keyword filtering, refresh, copy, and local download controls.
+- Added optional Systemd log line limits (20–2,000) while retaining the legacy 200-line behavior for missing values and older Agents.
+- Added a bounded in-memory Server log buffer and authenticated `GET /api/system/logs`; it retains recent current-process stderr output without introducing a database, file store, or centralized log index.
+
+### Security
+
+- Removed file-tail diagnostic logs that could include raw requests or log bodies. Browsed log content is not persisted to SQLite, audit details, or routine Server diagnostics.
+
+### Changed
+
+- Docker container and host-file logs retain their existing WebSocket follow behavior; Systemd, Agent, Kubernetes, and Server sources are explicit manual snapshots with cancellation and stale-response isolation.
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.13.
+
 ## v0.1.12 - 2026-07-29
 
 ### Added

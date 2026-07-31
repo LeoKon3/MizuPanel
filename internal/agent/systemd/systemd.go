@@ -133,7 +133,7 @@ func (h *Handler) HandleAction(ctx context.Context, req protocol.SystemdServiceA
 	}
 
 	if response.Action == "logs" {
-		stdout, stderr, runErr := h.runner(ctx, "journalctl", "--unit", response.ServiceName, "--no-pager", "--output=short-iso", "--lines", fmt.Sprintf("%d", logLineLimit))
+		stdout, stderr, runErr := h.runner(ctx, "journalctl", "--unit", response.ServiceName, "--no-pager", "--output=short-iso", "--lines", fmt.Sprintf("%d", clampLogLines(req.Lines)))
 		response.Output = boundedOutput(sanitizeLogOutput(stdout), sanitizeLogOutput(stderr))
 		if runErr != nil {
 			response.Error = commandError("读取 systemd 服务日志失败", stderr, runErr).Error()
@@ -151,6 +151,19 @@ func (h *Handler) HandleAction(ctx context.Context, req protocol.SystemdServiceA
 	}
 	response.Success = true
 	return response
+}
+
+func clampLogLines(lines int) int {
+	if lines == 0 {
+		return logLineLimit
+	}
+	if lines < 20 {
+		return 20
+	}
+	if lines > 2000 {
+		return 2000
+	}
+	return lines
 }
 
 func (h *Handler) list(ctx context.Context) ([]protocol.SystemdService, error) {

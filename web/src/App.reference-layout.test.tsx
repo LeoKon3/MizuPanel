@@ -257,15 +257,16 @@ describe('reference-style dashboard layout', () => {
     expect(screen.queryByRole('button', { name: '切换到深色主题' })).not.toBeInTheDocument()
   })
 
-  test('keeps the legacy logs route as a direct empty-state shell', async () => {
+  test('renders the unified log workspace on the logs route', async () => {
     window.history.pushState({}, '', '/logs')
 
     render(<App />)
 
-    expect(await screen.findByRole('heading', { name: '日志' })).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('搜索日志...')).toBeInTheDocument()
-    expect(screen.getByText('等待日志接口接入')).toBeInTheDocument()
-    expect(screen.queryByText(/ERROR|WARNING|SUCCESS|INFO/)).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '统一日志中心' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Docker 容器/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Server 自身/ })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('在当前结果中搜索关键词')).toBeInTheDocument()
+    expect(screen.queryByText('等待日志接口接入')).not.toBeInTheDocument()
   })
 
   test('keeps host search state while navigating the sidebar', async () => {

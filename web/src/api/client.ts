@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, SystemLogsResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -174,8 +174,8 @@ export function getNodeProcesses(nodeID: string): Promise<ProcessSnapshotRespons
   return request<ProcessSnapshotResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/processes`)
 }
 
-export function getNodeDocker(nodeID: string): Promise<DockerSnapshotResponse> {
-  return request<DockerSnapshotResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker`)
+export function getNodeDocker(nodeID: string, signal?: AbortSignal): Promise<DockerSnapshotResponse> {
+  return request<DockerSnapshotResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker`, signal ? { signal } : undefined)
 }
 
 export function getNodeDockerCompose(nodeID: string): Promise<DockerComposeListResponse> {
@@ -210,15 +210,16 @@ export function runNodeDockerResourceAction(nodeID: string, resourceType: Docker
   })
 }
 
-export function getNodeSystemdServices(nodeID: string): Promise<SystemdServiceListResponse> {
-  return request<SystemdServiceListResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/services/systemd`)
+export function getNodeSystemdServices(nodeID: string, signal?: AbortSignal): Promise<SystemdServiceListResponse> {
+  return request<SystemdServiceListResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/services/systemd`, signal ? { signal } : undefined)
 }
 
-export function runNodeSystemdServiceAction(nodeID: string, serviceName: string, action: SystemdServiceAction): Promise<SystemdServiceActionResponse> {
+export function runNodeSystemdServiceAction(nodeID: string, serviceName: string, action: SystemdServiceAction, lines?: number, signal?: AbortSignal): Promise<SystemdServiceActionResponse> {
   return request<SystemdServiceActionResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/services/systemd/action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ service_name: serviceName, action })
+    body: JSON.stringify({ service_name: serviceName, action, lines }),
+    signal
   })
 }
 
@@ -278,8 +279,12 @@ export function getAgentUpgradeStatus(nodeID: string): Promise<{ node_id: string
   return request(`/api/nodes/${encodeURIComponent(nodeID)}/agent/upgrade/status`)
 }
 
-export function getAgentLogs(nodeID: string, lines = 100): Promise<AgentLogsResponse> {
-  return request<AgentLogsResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/agent/logs?lines=${encodeURIComponent(lines.toString())}`)
+export function getAgentLogs(nodeID: string, lines = 100, signal?: AbortSignal): Promise<AgentLogsResponse> {
+  return request<AgentLogsResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/agent/logs?lines=${encodeURIComponent(lines.toString())}`, signal ? { signal } : undefined)
+}
+
+export function getSystemLogs(lines = 200, signal?: AbortSignal): Promise<SystemLogsResponse> {
+  return request<SystemLogsResponse>(`/api/system/logs?lines=${encodeURIComponent(lines.toString())}`, signal ? { signal } : undefined)
 }
 
 export function createTerminalSession(nodeID: string): Promise<SessionTokenResponse> {

@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.12-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.13-14B8A6">
 </p>
 
 <p align="center">
@@ -86,6 +86,9 @@
   <tr>
     <td colspan="3"><strong>Audit Trail</strong><br /><sub>Records the time, result, actor type, target, and node for sensitive operations, with filters, incremental pagination, and safe details in the Audit page; request bodies, secrets, terminal commands, and terminal output are not recorded.</sub></td>
   </tr>
+  <tr>
+    <td colspan="3"><strong>Unified Log Center</strong><br /><sub>Query Docker containers, Systemd services, Kubernetes Pods, Agents, the Server, and host log files from one desktop workspace; search, copy, download, and follow Docker/file output in real time.</sub></td>
+  </tr>
 </table>
 
 <strong>Application Service Center</strong>
@@ -125,6 +128,12 @@ audit:
 ```
 
 Docker deployments can override these values with `MIZUPANEL_AUDIT_RETENTION` and `MIZUPANEL_AUDIT_CLEANUP_INTERVAL`. Audit persistence is best-effort after an operation and does not replace that operation's response if writing the event fails. This is operational evidence, not a compliance-grade immutable ledger, and it does not provide multi-user/RBAC attribution, export, or terminal command capture. See the [configuration docs](docs/configuration.en.md) for the full configuration, API parameters, and data boundary.
+
+<strong>Unified Log Center</strong>
+
+The top-level **Log Center** (`/logs`) brings the existing on-demand log entries into one single-target workspace: Docker containers, Systemd services, Kubernetes Pods, Agents, the Server process, and host log files. Every source can be refreshed manually; Docker and file logs retain their existing WebSocket follow behavior. Keyword filtering only applies to the currently loaded browser result, which can also be copied or downloaded locally.
+
+Log content is read on demand: it is not written to SQLite, centrally collected, or indexed, and opening logs does not add their contents to audit details. Server logs are limited to the current process's in-memory buffer (about 10,000 records / 2 MiB) and disappear on restart. Systemd, Agent, Kubernetes, and Server logs are bounded snapshots rather than simulated live streams.
 
 <strong>Run From Release Package</strong>
 

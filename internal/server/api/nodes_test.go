@@ -504,6 +504,7 @@ type fakeNodeOperations struct {
 	systemdNodeID           string
 	systemdServiceName      string
 	systemdAction           string
+	systemdLines            int
 }
 
 func (f *fakeNodeOperations) ConnectionDiagnostics(context.Context, string) (store.ConnectionDiagnostics, error) {
@@ -655,10 +656,11 @@ func (f *fakeNodeOperations) SystemdServiceList(ctx context.Context, nodeID stri
 	return protocol.SystemdServiceListResponse{Type: protocol.MessageTypeSystemdServiceListResponse, Success: true, Supported: true, Services: []protocol.SystemdService{{Name: "nginx.service", ActiveState: "active"}}}, nil
 }
 
-func (f *fakeNodeOperations) SystemdServiceAction(ctx context.Context, nodeID string, serviceName string, action string) (protocol.SystemdServiceActionResponse, error) {
+func (f *fakeNodeOperations) SystemdServiceAction(ctx context.Context, nodeID string, serviceName string, action string, lines int) (protocol.SystemdServiceActionResponse, error) {
 	f.systemdNodeID = nodeID
 	f.systemdServiceName = serviceName
 	f.systemdAction = action
+	f.systemdLines = lines
 	return protocol.SystemdServiceActionResponse{Type: protocol.MessageTypeSystemdServiceActionResponse, Success: true, ServiceName: serviceName, Action: action}, nil
 }
 
@@ -781,12 +783,12 @@ func TestNodeSystemdServiceRoutes(t *testing.T) {
 		t.Fatalf("list status = %d, node = %q, body = %s", listResponse.Code, ops.systemdNodeID, listResponse.Body.String())
 	}
 
-	actionRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/services/systemd/action", strings.NewReader(`{"service_name":"nginx.service","action":"restart"}`))
+	actionRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/services/systemd/action", strings.NewReader(`{"service_name":"nginx.service","action":"logs","lines":360}`))
 	actionRequest.Header.Set("Content-Type", "application/json")
 	actionResponse := httptest.NewRecorder()
 	mux.ServeHTTP(actionResponse, actionRequest)
-	if actionResponse.Code != http.StatusOK || ops.systemdServiceName != "nginx.service" || ops.systemdAction != "restart" {
-		t.Fatalf("action status = %d, service = %q, action = %q, body = %s", actionResponse.Code, ops.systemdServiceName, ops.systemdAction, actionResponse.Body.String())
+	if actionResponse.Code != http.StatusOK || ops.systemdServiceName != "nginx.service" || ops.systemdAction != "logs" || ops.systemdLines != 360 {
+		t.Fatalf("action status = %d, service = %q, action = %q, lines = %d, body = %s", actionResponse.Code, ops.systemdServiceName, ops.systemdAction, ops.systemdLines, actionResponse.Body.String())
 	}
 }
 

@@ -1548,7 +1548,7 @@ func (h *Handler) SystemdServiceList(ctx context.Context, nodeID string) (protoc
 	return response, nil
 }
 
-func (h *Handler) SystemdServiceAction(ctx context.Context, nodeID string, serviceName string, action string) (protocol.SystemdServiceActionResponse, error) {
+func (h *Handler) SystemdServiceAction(ctx context.Context, nodeID string, serviceName string, action string, lines int) (protocol.SystemdServiceActionResponse, error) {
 	agent := h.connection(nodeID)
 	if agent == nil {
 		return protocol.SystemdServiceActionResponse{Type: protocol.MessageTypeSystemdServiceActionResponse, ServiceName: serviceName, Action: action, Error: "节点离线"}, nil
@@ -1560,7 +1560,7 @@ func (h *Handler) SystemdServiceAction(ctx context.Context, nodeID string, servi
 	if err != nil {
 		return protocol.SystemdServiceActionResponse{}, err
 	}
-	raw, err := h.SendToNodeWithTimeout(nodeID, protocol.SystemdServiceActionRequest{Type: protocol.MessageTypeSystemdServiceActionRequest, RequestID: requestID, NodeID: nodeID, ServiceName: serviceName, Action: action}, 90*time.Second)
+	raw, err := h.SendToNodeWithTimeout(nodeID, protocol.SystemdServiceActionRequest{Type: protocol.MessageTypeSystemdServiceActionRequest, RequestID: requestID, NodeID: nodeID, ServiceName: serviceName, Action: action, Lines: lines}, 90*time.Second)
 	if err != nil {
 		return protocol.SystemdServiceActionResponse{}, err
 	}
@@ -1855,7 +1855,7 @@ func (h *Handler) AttachLogTail(ctx context.Context, nodeID string, browser *web
 	if err != nil {
 		return err
 	}
-	log.Printf("[LogTail] Created session %s for node %s", sessionID, nodeID)
+	log.Printf("[LogTail] Created log-tail session for node %s", nodeID)
 
 	// Read initial request from browser
 	var request protocol.LogTailRequest
@@ -1863,14 +1863,14 @@ func (h *Handler) AttachLogTail(ctx context.Context, nodeID string, browser *web
 		log.Printf("[LogTail] Failed to read browser request: %v", err)
 		return err
 	}
-	log.Printf("[LogTail] Received request from browser: path=%s lines=%d", request.Path, request.Lines)
+	log.Printf("[LogTail] Received log-tail request for node %s", nodeID)
 
 	request.Type = protocol.MessageTypeLogTailRequest
 	request.SessionID = sessionID
 	request.NodeID = nodeID
 
 	// Send request to agent
-	log.Printf("[LogTail] Sending request to agent: %+v", request)
+	log.Printf("[LogTail] Sending log-tail request to agent for node %s", nodeID)
 	if err := agent.writeJSON(request); err != nil {
 		log.Printf("[LogTail] Failed to send to agent: %v", err)
 		return err
@@ -1908,7 +1908,6 @@ func (h *Handler) AttachLogTail(ctx context.Context, nodeID string, browser *web
 				if !ok {
 					return
 				}
-				log.Printf("[LogTail] Forwarding message from agent to browser: %s", string(msg))
 				if err := browser.WriteMessage(websocket.TextMessage, msg); err != nil {
 					log.Printf("[LogTail] Failed to write to browser: %v", err)
 					errCh <- err

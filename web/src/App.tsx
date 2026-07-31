@@ -21,6 +21,7 @@ import { UptimePage } from './pages/UptimePage'
 import { AuditPage } from './pages/AuditPage'
 import { TasksPage } from './pages/TasksPage'
 import { ServicesPage } from './pages/ServicesPage'
+import { LogsPage } from './pages/LogsPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
 import type { DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
@@ -1264,24 +1265,7 @@ export default function App() {
                   </>
                 )
               ) : page === 'logs' ? (
-                <section className="soft-panel p-5">
-                  <div className="flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <h2 className="text-xl font-black text-foreground">日志控制台</h2>
-                      <p className="mt-1 text-sm font-semibold text-muted-foreground">保留日志控制台结构，等待后端日志接口接入。</p>
-                    </div>
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                      <input aria-label="搜索日志" placeholder="搜索日志..." className="soft-input min-h-10 px-4 text-sm font-semibold placeholder:text-muted-foreground" />
-                      <select aria-label="日志级别" className="soft-input min-h-10 px-3 text-sm font-black">
-                        <option>全部级别</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="soft-empty-state mt-5 px-6 py-16 text-center">
-                    <p className="text-2xl font-black text-foreground">等待日志接口接入</p>
-                    <p className="mx-auto mt-3 max-w-xl text-sm font-semibold leading-6 text-muted-foreground">当前不请求新接口、不展示模拟日志；接入真实日志 API 后这里会显示可搜索、可筛选的节点日志。</p>
-                  </div>
-                </section>
+                <LogsPage nodes={nodes} />
               ) : hostContent}
             </div>
           </div>

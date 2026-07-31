@@ -871,6 +871,7 @@ type SystemdServiceActionRequest struct {
 	NodeID      string `json:"node_id,omitempty"`
 	ServiceName string `json:"service_name"`
 	Action      string `json:"action"`
+	Lines       int    `json:"lines,omitempty"`
 }
 
 type SystemdServiceActionResponse struct {

@@ -12,6 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	serverdb "github.com/mizupanel/mizupanel/internal/server/db"
+	"github.com/mizupanel/mizupanel/internal/server/logbuffer"
 	"github.com/mizupanel/mizupanel/internal/server/store"
 )
 
@@ -28,7 +29,7 @@ func testSettingsStore(t *testing.T) *store.SettingsStore {
 	return store.NewSettingsStore(database)
 }
 
-func testSettingsRouter(t *testing.T, defaultRetention time.Duration) (*http.ServeMux, *store.SettingsStore) {
+func testSettingsRouter(t *testing.T, defaultRetention time.Duration, extras ...any) (*http.ServeMux, *store.SettingsStore) {
 	t.Helper()
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -41,7 +42,62 @@ func testSettingsRouter(t *testing.T, defaultRetention time.Duration) (*http.Ser
 	nodes := store.NewNodeStore(database)
 	metrics := store.NewMetricStore(database)
 	settings := store.NewSettingsStore(database)
-	return NewRouter(nodes, metrics, SettingsConfig{Store: settings, DefaultMetricsRetention: defaultRetention}), settings
+	dependencies := []any{SettingsConfig{Store: settings, DefaultMetricsRetention: defaultRetention}}
+	dependencies = append(dependencies, extras...)
+	return NewRouter(nodes, metrics, dependencies...), settings
+}
+
+func TestSystemLogsAPIReturnsBoundedCurrentProcessLogs(t *testing.T) {
+	buffer := logbuffer.New(10, 1024)
+	_, _ = buffer.Write([]byte("first\nsecond\nthird\n"))
+	mux, _ := testSettingsRouter(t, 6*time.Hour, buffer)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/system/logs?lines=2", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Content       string    `json:"content"`
+		Lines         int       `json:"lines"`
+		ReturnedLines int       `json:"returned_lines"`
+		CollectedAt   time.Time `json:"collected_at"`
+		StartedAt     time.Time `json:"started_at"`
+		Truncated     bool      `json:"truncated"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode logs response: %v", err)
+	}
+	if response.Content != "first\nsecond\nthird\n" || response.Lines != 20 || response.ReturnedLines != 3 {
+		t.Fatalf("response = %#v", response)
+	}
+	if response.CollectedAt.IsZero() || response.StartedAt.IsZero() {
+		t.Fatalf("timestamps = %#v", response)
+	}
+}
+
+func TestSystemLogsAPIRejectsInvalidRequestsAndUnavailableSource(t *testing.T) {
+	mux, _ := testSettingsRouter(t, 6*time.Hour)
+
+	unavailable := httptest.NewRecorder()
+	mux.ServeHTTP(unavailable, httptest.NewRequest(http.MethodGet, "/api/system/logs", nil))
+	if unavailable.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable status = %d", unavailable.Code)
+	}
+
+	buffer := logbuffer.New(10, 1024)
+	mux, _ = testSettingsRouter(t, 6*time.Hour, buffer)
+	invalid := httptest.NewRecorder()
+	mux.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/system/logs?lines=wat", nil))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status = %d", invalid.Code)
+	}
+
+	method := httptest.NewRecorder()
+	mux.ServeHTTP(method, httptest.NewRequest(http.MethodPost, "/api/system/logs", nil))
+	if method.Code != http.StatusMethodNotAllowed || method.Header().Get("Allow") != http.MethodGet {
+		t.Fatalf("method status/allow = %d/%q", method.Code, method.Header().Get("Allow"))
+	}
 }
 
 func TestSettingsAPIReadsAndUpdatesMetricsRetention(t *testing.T) {

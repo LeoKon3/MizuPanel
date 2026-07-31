@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.12-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.13-14B8A6">
 </p>
 
 <p align="center">
@@ -86,6 +86,9 @@
   <tr>
     <td colspan="3"><strong>操作审计</strong><br /><sub>记录敏感操作的时间、结果、发起者类型、目标和节点，并在审计日志页面提供筛选、增量分页与安全详情；不会记录请求正文、机密内容或终端命令与输出。</sub></td>
   </tr>
+  <tr>
+    <td colspan="3"><strong>统一日志中心</strong><br /><sub>从一个桌面工作区按需查询 Docker 容器、Systemd 服务、Kubernetes Pod、Agent、Server 和主机日志文件；支持搜索、复制、下载，Docker 与文件日志可实时跟随。</sub></td>
+  </tr>
 </table>
 
 <strong>应用服务中心</strong>
@@ -125,6 +128,12 @@ audit:
 ```
 
 Docker 部署可使用 `MIZUPANEL_AUDIT_RETENTION` 和 `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` 覆盖这两个值。审计写入是操作完成后的尽力记录，不会把写入失败变成原操作失败。它是运维证据，不是合规级不可变账本，也不提供多用户/RBAC 归属、导出或终端命令捕获。完整配置、API 参数和数据边界见 [配置部署文档](docs/configuration.md)。
+
+<strong>统一日志中心</strong>
+
+Dashboard 顶层的 **日志中心**（`/logs`）以一次一个具体目标的方式聚合现有日志入口：Docker 容器、Systemd 服务、Kubernetes Pod、Agent 自身、Server 自身和主机日志文件。所有来源均可手动刷新，Docker 与文件日志可复用既有 WebSocket 链路实时跟随；关键词只筛选浏览器当前已加载的结果，页面也提供复制与本地下载。
+
+日志按需读取，不写入 SQLite、不建立集中日志索引，也不会因浏览日志写入审计详情。Server 自身日志只来自当前进程的有界内存缓冲（约 10,000 条/2 MiB），重启后自然清空；Systemd、Agent、Kubernetes 与 Server 仅提供受行数上限约束的快照查询。
 
 <strong>Release 包部署运行</strong>
 
