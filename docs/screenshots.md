@@ -111,3 +111,21 @@
 </p>
 
 审计日志按时间、模块、节点和结果追溯敏感操作，同时避免记录命令、文件内容与凭据等机密信息。
+
+## AI 自然语言运维
+
+<p align="center">
+  <a href="../assets/screenshots/ai-drawer.png">
+    <img src="../assets/screenshots/ai-drawer.png" alt="AI 运维助手抽屉" width="100%" />
+  </a>
+</p>
+
+顶部栏的 AI 运维助手可打开覆盖式右侧抽屉，支持键盘调整宽度、切换 Provider 和新建会话；查询自动执行，变更操作需人工确认。
+
+<p align="center">
+  <a href="../assets/screenshots/ai-provider-settings.png">
+    <img src="../assets/screenshots/ai-provider-settings.png" alt="AI 模型配置" width="100%" />
+  </a>
+</p>
+
+系统设置中的 AI 模型配置支持保存多个 OpenAI Chat Completions 兼容 Provider，API Key 加密保存且不回显。

@@ -27,6 +27,7 @@ type Config struct {
 	PublicURL        string
 	EnableTerminal   bool
 	Debug            bool
+	AIKeyFile        string
 	AdminAuth        AdminAuthConfig
 	Alerting         AlertingConfig
 }
@@ -78,6 +79,7 @@ type fileConfig struct {
 	} `yaml:"tasks"`
 	Security struct {
 		AgentToken string `yaml:"agent_token"`
+		AIKeyFile  string `yaml:"ai_key_file"`
 		Admin      struct {
 			Enabled    bool   `yaml:"enabled"`
 			Username   string `yaml:"username"`
@@ -136,6 +138,7 @@ func Load(path string) (Config, error) {
 		TaskRetention:    30 * 24 * time.Hour,
 		TaskCleanup:      time.Hour,
 		AgentToken:       os.Getenv("MIZUPANEL_AGENT_TOKEN"),
+		AIKeyFile:        "./data/ai.key",
 		AdminAuth: AdminAuthConfig{
 			Username:   "admin",
 			SessionTTL: 24 * time.Hour,
@@ -275,6 +278,9 @@ func applyFileConfig(cfg *Config, file fileConfig) error {
 	if file.Security.AgentToken != "" {
 		cfg.AgentToken = file.Security.AgentToken
 	}
+	if file.Security.AIKeyFile != "" {
+		cfg.AIKeyFile = file.Security.AIKeyFile
+	}
 	cfg.AdminAuth.Enabled = file.Security.Admin.Enabled
 	if file.Security.Admin.Username != "" {
 		cfg.AdminAuth.Username = file.Security.Admin.Username
@@ -312,6 +318,9 @@ func applyFileConfig(cfg *Config, file fileConfig) error {
 }
 
 func applyEnvironmentConfig(cfg *Config) error {
+	if value, ok := os.LookupEnv("MIZUPANEL_AI_KEY_FILE"); ok {
+		cfg.AIKeyFile = strings.TrimSpace(value)
+	}
 	if value, ok := os.LookupEnv("MIZUPANEL_DEBUG"); ok {
 		debug, err := strconv.ParseBool(value)
 		if err != nil {
@@ -385,6 +394,9 @@ func applyEnvironmentConfig(cfg *Config) error {
 }
 
 func validateConfig(cfg *Config) error {
+	if strings.TrimSpace(cfg.AIKeyFile) == "" {
+		return fmt.Errorf("security.ai_key_file is required")
+	}
 	if cfg.AdminAuth.Username == "" {
 		cfg.AdminAuth.Username = "admin"
 	}

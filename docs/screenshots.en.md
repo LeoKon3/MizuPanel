@@ -111,3 +111,21 @@ The Server runs scheduled or manual HTTP, HTTPS, and TCP checks and presents sta
 </p>
 
 The Audit Trail traces sensitive operations by time, module, node, and result while excluding commands, file contents, credentials, and other secret material.
+
+## AI Natural-Language Operations
+
+<p align="center">
+  <a href="../assets/screenshots/ai-drawer.png">
+    <img src="../assets/screenshots/ai-drawer.png" alt="AI operations assistant drawer" width="100%" />
+  </a>
+</p>
+
+The top-bar AI assistant opens as an overlay drawer with keyboard-resizable width, Provider switching, and new-conversation support. Read-only tools run automatically; state-changing operations require explicit confirmation.
+
+<p align="center">
+  <a href="../assets/screenshots/ai-provider-settings.png">
+    <img src="../assets/screenshots/ai-provider-settings.png" alt="AI Provider settings" width="100%" />
+  </a>
+</p>
+
+System Settings includes an AI Model Configuration section for managing multiple OpenAI Chat Completions compatible providers. API keys are encrypted and never echoed back.

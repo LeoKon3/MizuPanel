@@ -363,15 +363,17 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 			response.Type = protocol.MessageTypeFileDeleteResponse
 			response.RequestID = request.RequestID
 			_ = writer.writeJSON(response)
-		case protocol.MessageTypeRebootRequest:
-			var request protocol.RebootRequest
-			if err := json.Unmarshal(raw, &request); err != nil {
-				continue
-			}
-			response := reboot.Run(context.Background(), reboot.CurrentOS(), nil)
-			response.Type = protocol.MessageTypeRebootResponse
-			response.RequestID = request.RequestID
-			_ = writer.writeJSON(response)
+	case protocol.MessageTypeRebootRequest:
+		var request protocol.RebootRequest
+		if err := json.Unmarshal(raw, &request); err != nil {
+			continue
+		}
+		// Acknowledge acceptance before the reboot takes effect so the Server
+		// does not time out and misreport a successful reboot as a failure.
+		response := reboot.Accept(reboot.CurrentOS(), nil, 2*time.Second, nil)
+		response.Type = protocol.MessageTypeRebootResponse
+		response.RequestID = request.RequestID
+		_ = writer.writeJSON(response)
 		case protocol.MessageTypeAgentStatusRequest:
 			if c.agentManagementHandler == nil {
 				continue

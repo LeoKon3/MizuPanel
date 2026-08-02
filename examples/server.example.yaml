@@ -28,6 +28,7 @@ tasks:
   cleanup_interval: "1h" # How often expired task runs and bounded output are removed.
 
 security:
+  ai_key_file: "./data/ai.key" # AES-256-GCM master key for encrypted AI Provider credentials; back it up with the database.
   # agent_token is optional and should only be set if you need a long-lived bootstrap token.
   # Prefer the Dashboard-generated short-lived, node-bound install token flow for adding hosts.
   # agent_token: "change-this-to-a-random-secret" # Optional long-lived Agent bootstrap token; avoid exposing it in browsers or public docs.

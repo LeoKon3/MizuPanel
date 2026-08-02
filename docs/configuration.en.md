@@ -2,11 +2,11 @@
 
 [Back to README](../README.en.md) · [中文](configuration.md)
 
-This page keeps the detailed setup notes out of the README: Docker, release packages, `server.yaml`, Agent installation, authentication, alerting, scheduled tasks, operational auditing, and token behavior.
+This page keeps the detailed setup notes out of the README: Docker, release packages, `server.yaml`, Agent installation, authentication, AI Providers, alerting, scheduled tasks, operational auditing, and token behavior.
 
 ## Docker
 
-The default `docker-compose.yml` uses SQLite and persists data to `./data/mizupanel.db`.
+The default `docker-compose.yml` uses SQLite and persists data to `./data/mizupanel.db`. After an AI Provider is configured, the same directory also contains the encryption master key at `./data/ai.key`.
 
 ```bash
 docker compose up -d
@@ -24,7 +24,7 @@ Useful environment variables:
 | --- | --- | --- |
 | `MIZUPANEL_BIND_ADDR` | `127.0.0.1` | Docker port bind address |
 | `MIZUPANEL_PORT` | `8080` | Host port |
-| `MIZUPANEL_DATA_DIR` | `./data` | SQLite data directory |
+| `MIZUPANEL_DATA_DIR` | `./data` | SQLite database and AI master-key directory |
 | `MIZUPANEL_CONTAINER_NAME` | `mizupanel` | Container name |
 | `MIZUPANEL_AUDIT_RETENTION` | `90d` | Audit-event retention |
 | `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` | `1h` | Expired-event cleanup interval |
@@ -37,6 +37,8 @@ Useful commands:
 docker compose logs -f
 docker compose down
 ```
+
+When backing up or migrating a SQLite deployment, preserve `mizupanel.db` and `ai.key` together. The database contains encrypted Provider credentials, but only the original `ai.key` can decrypt them. Never print the key, paste it into documentation, or publish it separately.
 
 ## Docker With MySQL
 
@@ -66,6 +68,8 @@ MySQL data is stored in the Docker volume:
 ```text
 mizupanel_mizupanel-mysql-data
 ```
+
+The AI master key is not stored in MySQL. The MizuPanel container still mounts `${MIZUPANEL_DATA_DIR:-./data}` at `/app/data`, so a MySQL backup must also preserve `ai.key` from that host data directory.
 
 Stop while keeping data:
 
@@ -147,6 +151,7 @@ tasks:
   cleanup_interval: "1h"
 
 security:
+  ai_key_file: "./data/ai.key"
   admin:
     enabled: false
     username: "admin"
@@ -172,6 +177,7 @@ Important fields:
 | `audit.cleanup_interval` | Expired audit-event cleanup interval; must be a positive duration |
 | `tasks.retention` | Script and scheduled-task run-history retention; must be a positive duration |
 | `tasks.cleanup_interval` | Expired task-run cleanup interval; must be a positive duration |
+| `security.ai_key_file` | Master-key path for encrypted AI Provider credentials; back it up with the database |
 | `security.admin.enabled` | Enables Dashboard admin login |
 | `alerting.enabled` | Enables alert engine |
 | `alerting.check_interval` | Alert rule check interval |
@@ -206,6 +212,25 @@ MIZUPANEL_SESSION_TTL=24h
 ```
 
 When enabled, node management, system settings, Agent installation, automation tasks, alerts, and Kubernetes APIs require login. Agent WebSocket connections are not affected by Dashboard sessions.
+
+## AI Providers And Local Data
+
+The **AI Model Configuration** section in System Settings can store multiple OpenAI Chat Completions compatible Providers. Each profile has a name, Base URL, Model, and optional API Key. A Provider can only become the default or be used for operations after both chat and function-tool capability checks pass. The Base URL should include the compatible API root, for example:
+
+```text
+http://model.internal:8000/v1
+```
+
+The Server sends non-streaming requests to `/chat/completions` under the normalized URL. An empty API Key omits Bearer authentication for trusted unauthenticated services on a private network. Saved keys are never echoed: leaving the edit field empty preserves the current key, while replacement and explicit clearing are separate actions.
+
+```yaml
+security:
+  ai_key_file: "./data/ai.key"
+```
+
+`MIZUPANEL_AI_KEY_FILE` can override the path. When a Provider is first saved, the Server creates a 32-byte master key with `0600` permissions. If encrypted credentials already exist and the key is missing, damaged, or replaced, the Server refuses decryption instead of silently creating a new key over the problem.
+
+Conversations, ordinary user/assistant messages, model snapshots, turn status, and normalized tool records live in the existing database. System prompts, raw model requests/responses, hidden reasoning, raw tool output, log content, and script bodies are not persisted as conversation history. Model calls are a data-egress boundary, so configure only a trusted internal or third-party model service.
 
 ## Alerting
 

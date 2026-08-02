@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, SystemLogsResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AIConversation, AIConversationState, AIProvider, AIProviderInput, AISendResult, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, SystemLogsResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -519,4 +519,135 @@ export function updateApplicationService(id: string, input: ApplicationServiceIn
 
 export function deleteApplicationService(id: string): Promise<void> {
   return requestVoid(`/api/services/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function getAIProviders(signal?: AbortSignal): Promise<{ providers: AIProvider[] }> {
+  return request('/api/ai/providers', signal ? { signal } : undefined)
+}
+
+export function createAIProvider(input: AIProviderInput): Promise<AIProvider> {
+  return request('/api/ai/providers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  })
+}
+
+export function updateAIProvider(id: string, input: AIProviderInput): Promise<AIProvider> {
+  return request(`/api/ai/providers/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  })
+}
+
+export function deleteAIProvider(id: string): Promise<void> {
+  return requestVoid(`/api/ai/providers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function testAIProvider(id: string, signal?: AbortSignal): Promise<AIProvider> {
+  return request(`/api/ai/providers/${encodeURIComponent(id)}/test`, { method: 'POST', signal })
+}
+
+export function setDefaultAIProvider(id: string): Promise<AIProvider> {
+  return request(`/api/ai/providers/${encodeURIComponent(id)}/default`, { method: 'POST' })
+}
+
+export function getAIConversations(limit = 50, signal?: AbortSignal): Promise<{ conversations: AIConversation[] }> {
+  return request(`/api/ai/conversations?limit=${encodeURIComponent(String(limit))}`, signal ? { signal } : undefined)
+}
+
+export function createAIConversation(title = ''): Promise<AIConversation> {
+  return request('/api/ai/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title })
+  })
+}
+
+export function renameAIConversation(id: string, title: string): Promise<AIConversation> {
+  return request(`/api/ai/conversations/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title })
+  })
+}
+
+export function deleteAIConversation(id: string): Promise<void> {
+  return requestVoid(`/api/ai/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function getAIConversation(id: string, limit = 50, signal?: AbortSignal): Promise<AIConversationState> {
+  return request(`/api/ai/conversations/${encodeURIComponent(id)}?limit=${encodeURIComponent(String(limit))}`, signal ? { signal } : undefined)
+}
+
+export function sendAIMessage(id: string, providerID: string, content: string, signal?: AbortSignal): Promise<AISendResult> {
+  return request(`/api/ai/conversations/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider_id: providerID, content }),
+    signal
+  })
+}
+
+export async function sendAIMessageStream(
+  id: string, providerID: string, content: string,
+  signal: AbortSignal | undefined,
+  onProgress: (event: { phase: string; tool_name?: string; target_name?: string }) => void
+): Promise<AISendResult> {
+  const response = await fetch(`/api/ai/conversations/${encodeURIComponent(id)}/messages/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider_id: providerID, content }),
+    signal
+  })
+  if (!response.ok) throw new APIError(response.status, await errorMessage(response))
+  if (!response.body) throw new APIError(0, '流式响应不可用')
+  // Parse SSE: split blocks on blank lines, read `event:` and `data:` lines.
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: AISendResult | undefined
+  let error: string | undefined
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const block of events) {
+      const trimmed = block.trim()
+      if (!trimmed) continue
+      const lines = trimmed.split('\n')
+      let eventType = ''
+      let data = ''
+      for (const line of lines) {
+        if (line.startsWith('event: ')) eventType = line.slice(7)
+        else if (line.startsWith('data: ')) data = line.slice(6)
+      }
+      if (eventType === 'status' && data) onProgress(JSON.parse(data))
+      else if (eventType === 'result' && data) result = JSON.parse(data) as AISendResult
+      else if (eventType === 'error' && data) error = (JSON.parse(data) as { error: string }).error
+    }
+  }
+  if (error) throw new APIError(0, error)
+  if (!result) throw new APIError(0, '流式响应未返回结果')
+  return result
+}
+
+export function confirmAIToolCall(id: string): Promise<AISendResult> {
+  return request(`/api/ai/tool-calls/${encodeURIComponent(id)}/confirm`, { method: 'POST' })
+}
+
+export function rejectAIToolCall(id: string): Promise<AISendResult> {
+  return request(`/api/ai/tool-calls/${encodeURIComponent(id)}/reject`, { method: 'POST' })
+}
+
+export async function listAIProviderModels(baseURL: string, apiKey: string, providerID?: string): Promise<string[]> {
+  const response = await request<{ models: string[] }>('/api/ai/providers/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider_id: providerID || '', base_url: baseURL, api_key: apiKey })
+  })
+  return response.models
 }

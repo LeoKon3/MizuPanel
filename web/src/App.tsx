@@ -4,6 +4,8 @@ import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 
 import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAgentUpgradeStatus, getAuthSession, getConnectionDiagnostics, getNodeDocker, getNodeDockerCompose, getNodeDockerResources, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodeSystemdServices, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, runNodeDockerComposeAction, runNodeDockerComposeDeployment, runNodeDockerResourceAction, runNodeSystemdServiceAction, setUnauthorizedHandler, startSSHUninstall, updateSettings, upgradeAgent, uploadNodeFile, writeNodeFile } from './api/client'
 import { BrandLogo } from './components/BrandLogo'
+import { AIAssistantDrawer, AITopbarButton, AIWorkspacePage } from './components/ai/AIAssistant'
+import { useAIAssistantState } from './components/ai/useAIAssistantState'
 import { HostBatchTable } from './components/HostBatchTable'
 import { MetricCard } from './components/MetricCard'
 import { NodeOrganizationControls, type HostGroupFilter, type HostTagFilter, type HostViewMode } from './components/NodeOrganizationControls'
@@ -52,12 +54,13 @@ type AppRoute =
   | { kind: 'services' }
   | { kind: 'service-detail', serviceID: string }
   | { kind: 'logs' }
+  | { kind: 'ai' }
   | { kind: 'k8s-clusters' }
   | { kind: 'k8s-cluster-detail', clusterID: string }
   | { kind: 'dashboard' }
 
-type AppPage = 'overview' | 'hosts' | 'services' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s'
-type NavPage = Exclude<AppPage, 'history' | 'logs'>
+type AppPage = 'overview' | 'hosts' | 'services' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s' | 'ai'
+type NavPage = Exclude<AppPage, 'history' | 'logs' | 'ai'>
 type ThemeMode = 'light' | 'dark'
 
 function currentRoute(): AppRoute {
@@ -81,6 +84,7 @@ function currentRoute(): AppRoute {
   if (window.location.pathname === '/tasks') return { kind: 'tasks' }
   if (window.location.pathname === '/overview') return { kind: 'overview' }
   if (window.location.pathname === '/logs') return { kind: 'logs' }
+  if (window.location.pathname === '/ai') return { kind: 'ai' }
   return { kind: 'dashboard' }
 }
 
@@ -96,6 +100,7 @@ function pageForRoute(route: AppRoute): AppPage {
     case 'services':
     case 'service-detail': return 'services'
     case 'logs': return 'logs'
+    case 'ai': return 'ai'
     case 'k8s-clusters':
     case 'k8s-cluster-detail': return 'k8s'
     default: return 'hosts'
@@ -139,6 +144,7 @@ const pageCopy: Record<AppPage, { title: string, description: string }> = {
   tasks: { title: '任务中心', description: '统一管理脚本、Cron 计划和多节点执行记录。' },
   services: { title: '应用服务', description: '聚合运行资源、健康原因和近期运维活动。' },
   logs: { title: '日志', description: '日志接口接入前仅提供控制台空状态壳。' },
+  ai: { title: 'AI 运维', description: '通过受控工具查询状态并确认运维操作。' },
   k8s: { title: 'Kubernetes 集群', description: '管理通过 Agent 节点连接的 K8s 集群。' }
 }
 
@@ -184,6 +190,7 @@ export default function App() {
   const [page, setPage] = useState<AppPage>(() => pageForRoute(route))
   const [theme, setTheme] = useState<ThemeMode>(() => storedTheme())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => storedSidebarCollapsed())
+  const aiAssistant = useAIAssistantState()
   const [authEnabled, setAuthEnabled] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
   const [currentUsername, setCurrentUsername] = useState('')
@@ -247,6 +254,11 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem('mizupanel-sidebar-collapsed', sidebarCollapsed ? 'true' : 'false')
   }, [sidebarCollapsed])
+
+  useEffect(() => {
+    if (page !== 'ai' || (authEnabled && !authenticated)) return
+    void aiAssistant.ensureLoaded()
+  }, [aiAssistant.ensureLoaded, authEnabled, authenticated, page])
 
   useEffect(() => {
     const handlePopState = () => {
@@ -753,6 +765,8 @@ export default function App() {
       ? '/overview'
       : nextPage === 'history'
       ? '/history'
+      : nextPage === 'ai'
+        ? '/ai'
       : nextPage === 'services'
         ? '/services'
       : nextPage === 'settings'
@@ -793,6 +807,17 @@ export default function App() {
     const nextRoute = currentRoute()
     setPage(pageForRoute(nextRoute))
     setRouteVersion((value) => value + 1)
+  }
+
+  const openAIWorkspace = () => {
+    aiAssistant.closeDrawer()
+    openPage('ai')
+    void aiAssistant.ensureLoaded()
+  }
+
+  const openAISettings = () => {
+    aiAssistant.closeDrawer()
+    openPage('settings')
   }
 
   const openK8sClusterDetail = (clusterID: string) => {
@@ -1188,6 +1213,7 @@ export default function App() {
             <div className="flex justify-end">
               <h1 className="sr-only">{contentCopy.title}</h1>
               <div className="flex flex-wrap items-center gap-2">
+                <AITopbarButton onClick={aiAssistant.openDrawer} open={aiAssistant.drawerOpen} />
                 {authenticated && currentUsername ? (
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-black text-foreground">{currentUsername}</span>
@@ -1226,6 +1252,8 @@ export default function App() {
 
               {page === 'overview' ? (
                 <OverviewPage nodes={nodes} onlineNodes={onlineNodes} onAddServer={showInstallCommand} />
+              ) : page === 'ai' ? (
+                <AIWorkspacePage assistant={aiAssistant} onOpenSettings={openAISettings} />
               ) : page === 'history' ? (
                 <HistoryPage nodes={nodes} selectedNodeID={selectedNodeID} metrics={metrics} range={range} settings={settings} onSelectNode={setSelectedNodeID} onRangeChange={setRange} />
               ) : page === 'settings' ? (
@@ -1271,6 +1299,7 @@ export default function App() {
           </div>
         </section>
       </div>
+      <AIAssistantDrawer assistant={aiAssistant} onOpenWorkspace={openAIWorkspace} onOpenSettings={openAISettings} />
     </main>
   )
 }

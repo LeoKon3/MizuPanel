@@ -2,11 +2,11 @@
 
 [返回 README](../README.md) · [English](configuration.en.md)
 
-这份文档收纳 README 中不适合展开太长的细节：Docker、Release 包、`server.yaml`、Agent 安装、认证、告警、计划任务、操作审计和 Token 模型。
+这份文档收纳 README 中不适合展开太长的细节：Docker、Release 包、`server.yaml`、Agent 安装、认证、AI Provider、告警、计划任务、操作审计和 Token 模型。
 
 ## Docker 部署
 
-默认 `docker-compose.yml` 使用 SQLite，并把数据库持久化到 `./data/mizupanel.db`。
+默认 `docker-compose.yml` 使用 SQLite，并把数据库持久化到 `./data/mizupanel.db`。配置 AI Provider 后，同一目录还会保存加密主密钥 `./data/ai.key`。
 
 ```bash
 docker compose up -d
@@ -24,7 +24,7 @@ MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d
 | --- | --- | --- |
 | `MIZUPANEL_BIND_ADDR` | `127.0.0.1` | Docker 端口绑定地址 |
 | `MIZUPANEL_PORT` | `8080` | 宿主机端口 |
-| `MIZUPANEL_DATA_DIR` | `./data` | SQLite 数据目录 |
+| `MIZUPANEL_DATA_DIR` | `./data` | SQLite 数据库和 AI 主密钥目录 |
 | `MIZUPANEL_CONTAINER_NAME` | `mizupanel` | 容器名称 |
 | `MIZUPANEL_AUDIT_RETENTION` | `90d` | 审计事件保留时间 |
 | `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` | `1h` | 审计过期清理间隔 |
@@ -37,6 +37,8 @@ MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d
 docker compose logs -f
 docker compose down
 ```
+
+备份或迁移 SQLite 部署时，必须把 `mizupanel.db` 和 `ai.key` 一起保存。数据库包含加密后的 Provider 凭据，但只有原 `ai.key` 可以解密；不要输出、复制到文档或单独公开该密钥内容。
 
 ## Docker 使用 MySQL
 
@@ -66,6 +68,8 @@ MySQL 数据保存在 Docker volume：
 ```text
 mizupanel_mizupanel-mysql-data
 ```
+
+AI 主密钥不存储在 MySQL 中。MizuPanel 容器仍将 `${MIZUPANEL_DATA_DIR:-./data}` 挂载到 `/app/data`，因此备份 MySQL 时也必须同时备份宿主机数据目录中的 `ai.key`。
 
 停止但保留数据：
 
@@ -172,6 +176,7 @@ tasks:
   cleanup_interval: "1h"
 
 security:
+  ai_key_file: "./data/ai.key"
   admin:
     enabled: false
     username: "admin"
@@ -197,6 +202,7 @@ alerting:
 | `audit.cleanup_interval` | 审计过期清理间隔，必须为正数时长 |
 | `tasks.retention` | 脚本和计划任务执行历史保留时间，必须为正数时长 |
 | `tasks.cleanup_interval` | 任务历史过期清理间隔，必须为正数时长 |
+| `security.ai_key_file` | AI Provider 凭据加密主密钥路径；必须与数据库一起备份 |
 | `security.admin.enabled` | 是否启用 Dashboard 管理员登录 |
 | `alerting.enabled` | 是否启用告警引擎 |
 | `alerting.check_interval` | 告警规则检查间隔 |
@@ -231,6 +237,25 @@ MIZUPANEL_SESSION_TTL=24h
 ```
 
 启用后，节点管理、系统设置、Agent 安装、计划任务、告警和 Kubernetes API 都需要登录。Agent WebSocket 连接不受 Dashboard 登录态影响。
+
+## AI Provider 与本地数据
+
+系统设置中的 **AI 模型配置** 支持保存多个 OpenAI Chat Completions 兼容 Provider。每条配置包含名称、Base URL、Model 和可选 API Key；只有聊天与 function tool calling 两项能力检测都通过后，才能设为默认或用于运维会话。Base URL 应包含兼容服务的 API 根路径，例如：
+
+```text
+http://model.internal:8000/v1
+```
+
+Server 会向规范化地址下的 `/chat/completions` 发起非流式请求。API Key 为空时不会发送 Bearer 凭据，适用于可信内网的无鉴权服务。保存后的 Key 不会回显；编辑时留空表示保留，勾选清除与输入替换值是两个独立操作。
+
+```yaml
+security:
+  ai_key_file: "./data/ai.key"
+```
+
+也可通过 `MIZUPANEL_AI_KEY_FILE` 覆盖路径。首次需要保存 Provider 时，Server 会创建权限为 `0600` 的 32 字节主密钥；如果数据库已有加密凭据而密钥缺失、损坏或被替换，Server 会拒绝解密，不会静默生成新密钥覆盖问题。
+
+会话、普通用户/助手消息、模型快照、轮次状态和规范化工具记录保存在现有数据库中。System prompt、原始模型请求/响应、隐藏推理、原始工具输出、日志正文和脚本正文不会作为会话历史持久化。模型调用是数据出站边界：只应配置你信任的内网或第三方模型服务。
 
 ## 告警配置
 

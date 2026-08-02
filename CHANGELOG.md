@@ -2,6 +2,24 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.14 - 2026-08-01
+
+### Added
+
+- Added a persistent AI natural-language operations assistant with a global resizable drawer, a full `/ai` workspace, local conversation history, Provider/model switching, request cancellation, and explicit pending-operation cards.
+- Added OpenAI Chat Completions compatible Provider management with chat/tool capability probes, default selection, optional authentication, and encrypted API Key storage backed by a local AES-256-GCM master key.
+- Added a fixed 13-tool operations registry for bounded node, incident, alert, service, uptime, metric, and log queries plus confirmation-gated host reboot, Agent upgrade, Docker, Compose, Systemd, and saved-script operations.
+
+### Security
+
+- Models cannot invoke arbitrary Shell, files, resource deletion, or Kubernetes writes. Every state-changing tool is validated against current targets and Agent capabilities, atomically claimed, explicitly confirmed by an authenticated administrator, and audited with allowlisted metadata.
+- Provider credentials, prompts, ordinary message content, raw model responses, raw tool output, logs, scripts, and upstream response bodies are excluded from audit details and Server diagnostics. Provider read APIs expose only whether an API Key exists.
+
+### Changed
+
+- Added `security.ai_key_file` and `MIZUPANEL_AI_KEY_FILE`; Docker deployments persist `/app/data/ai.key`, including MySQL deployments, and documentation now requires backing up the database and AI key file together.
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.14.
+
 ## v0.1.13 - 2026-07-29
 
 ### Added

@@ -715,3 +715,118 @@ func TestMySQLMigrationIncludesApplicationServiceSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	defer database.Close()
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("replay Migrate: %v", err)
+	}
+	for _, table := range []string{"ai_providers", "ai_conversations", "ai_turns", "ai_messages", "ai_tool_calls"} {
+		var name string
+		if err := database.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
+			t.Fatalf("missing AI table %s: %v", table, err)
+		}
+	}
+	var indexCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (
+		'uq_ai_providers_default', 'idx_ai_conversations_updated',
+		'idx_ai_turns_conversation_created', 'uq_ai_turns_active',
+		'idx_ai_messages_conversation_created', 'idx_ai_tool_calls_turn_created'
+	)`).Scan(&indexCount); err != nil {
+		t.Fatalf("query AI indexes: %v", err)
+	}
+	if indexCount != 6 {
+		t.Fatalf("AI index count = %d, want 6", indexCount)
+	}
+
+	now := "2026-07-31T12:00:00Z"
+	if _, err := database.Exec(`INSERT INTO ai_providers
+		(id, name, normalized_name, protocol, base_url, model, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "provider-1", "Primary", "primary",
+		"openai_chat_completions", "https://model.test/v1", "model-a", now, now); err != nil {
+		t.Fatalf("insert AI provider: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO ai_conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`, "conversation-1", "Test", now, now); err != nil {
+		t.Fatalf("insert AI conversation: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO ai_turns
+		(id, conversation_id, provider_id, provider_name, protocol, model, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "turn-1", "conversation-1", "provider-1", "Primary",
+		"openai_chat_completions", "model-a", "awaiting_confirmation", now, now); err != nil {
+		t.Fatalf("insert AI turn: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO ai_turns
+		(id, conversation_id, provider_id, provider_name, protocol, model, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "turn-duplicate", "conversation-1", "provider-1", "Primary",
+		"openai_chat_completions", "model-a", "running", now, now); err == nil {
+		t.Fatal("AI schema accepted two active turns for one conversation")
+	}
+	if _, err := database.Exec(`INSERT INTO ai_messages
+		(id, conversation_id, turn_id, role, content, provider_name, model, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "message-1", "conversation-1", "turn-1", "user", "hello", "Primary", "model-a", now); err != nil {
+		t.Fatalf("insert AI message: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO ai_tool_calls
+		(id, turn_id, provider_call_id, tool_name, risk, status, arguments_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "tool-1", "turn-1", "call-1", "reboot_node", "confirm", "pending", `{}`, now, now); err != nil {
+		t.Fatalf("insert AI tool call: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM ai_providers WHERE id = ?`, "provider-1"); err != nil {
+		t.Fatalf("delete provider with historical snapshot: %v", err)
+	}
+	var historicalTurns int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM ai_turns WHERE provider_id = 'provider-1'`).Scan(&historicalTurns); err != nil {
+		t.Fatalf("count historical turns: %v", err)
+	}
+	if historicalTurns != 1 {
+		t.Fatalf("historical turns after provider delete = %d, want 1", historicalTurns)
+	}
+	if _, err := database.Exec(`DELETE FROM ai_conversations WHERE id = ?`, "conversation-1"); err != nil {
+		t.Fatalf("delete AI conversation: %v", err)
+	}
+	for _, table := range []string{"ai_turns", "ai_messages", "ai_tool_calls"} {
+		var count int
+		if err := database.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s after cascade: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows after conversation cascade = %d, want 0", table, count)
+		}
+	}
+}
+
+func TestMySQLMigrationIncludesAISchemaAndSafeWidths(t *testing.T) {
+	statements := strings.Join(mysqlMigrationStatements(), "\n")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS ai_providers",
+		"base_url VARCHAR(2048) NOT NULL",
+		"api_key_ciphertext LONGTEXT NOT NULL",
+		"UNIQUE KEY uq_ai_providers_normalized_name (normalized_name)",
+		"ALTER TABLE ai_providers ADD COLUMN default_marker VARCHAR(1) NULL",
+		"CREATE UNIQUE INDEX uq_ai_providers_default ON ai_providers(default_marker)",
+		"CREATE TABLE IF NOT EXISTS ai_conversations",
+		"CREATE TABLE IF NOT EXISTS ai_turns",
+		"active_marker VARCHAR(1) NULL",
+		"UNIQUE KEY uq_ai_turns_active (conversation_id, active_marker)",
+		"CREATE TABLE IF NOT EXISTS ai_messages",
+		"content LONGTEXT NOT NULL",
+		"CREATE TABLE IF NOT EXISTS ai_tool_calls",
+		"arguments_json LONGTEXT NOT NULL",
+		"target_id VARCHAR(1024) NOT NULL DEFAULT ''",
+		"FOREIGN KEY (conversation_id) REFERENCES ai_conversations(id) ON DELETE CASCADE",
+		"FOREIGN KEY (turn_id) REFERENCES ai_turns(id) ON DELETE CASCADE",
+	} {
+		if !strings.Contains(statements, fragment) {
+			t.Errorf("MySQL AI migration missing %q", fragment)
+		}
+	}
+}

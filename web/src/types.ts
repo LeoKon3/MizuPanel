@@ -1185,3 +1185,89 @@ export type ApplicationServiceInput = {
   description: string
   resources: ApplicationServiceResource[]
 }
+
+export type AIProtocol = 'openai_chat_completions'
+
+export type AIProvider = {
+  id: string
+  name: string
+  protocol: AIProtocol
+  base_url: string
+  model: string
+  has_api_key: boolean
+  is_default: boolean
+  chat_capable: boolean
+  tools_capable: boolean
+  probe_status: 'unknown' | 'success' | 'failure'
+  probed_at: string | null
+  probe_error: string
+  created_at: string
+  updated_at: string
+}
+
+export type AIProviderInput = {
+  name: string
+  protocol: AIProtocol
+  base_url: string
+  model: string
+  api_key?: string
+  clear_api_key?: boolean
+}
+
+export type AIConversation = {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export type AIMessage = {
+  id: string
+  conversation_id: string
+  turn_id: string
+  role: 'user' | 'assistant'
+  content: string
+  provider_name: string
+  model: string
+  created_at: string
+}
+
+export type AITurn = {
+  id: string
+  conversation_id: string
+  provider_id: string
+  provider_name: string
+  protocol: AIProtocol
+  model: string
+  status: 'running' | 'awaiting_confirmation' | 'completed' | 'failed' | 'interrupted'
+  error_code: string
+  created_at: string
+  updated_at: string
+}
+
+export type AIToolCall = {
+  id: string
+  turn_id: string
+  tool_name: string
+  risk: 'read' | 'confirm'
+  status: 'running' | 'success' | 'failure' | 'pending' | 'rejected' | 'interrupted'
+  target_type: string
+  target_id: string
+  target_name: string
+  node_id: string
+  result_summary: string
+  created_at: string
+  updated_at: string
+}
+
+export type AIConversationState = {
+  conversation: AIConversation
+  messages: AIMessage[]
+  tool_calls: AIToolCall[]
+}
+
+export type AISendResult = {
+  turn: AITurn
+  message?: AIMessage
+  tool_call?: AIToolCall
+}

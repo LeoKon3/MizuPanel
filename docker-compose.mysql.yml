@@ -35,6 +35,7 @@ services:
       MIZUPANEL_TASK_CLEANUP_INTERVAL: ${MIZUPANEL_TASK_CLEANUP_INTERVAL:-1h}
     volumes:
       - ./docker/server.mysql.yaml:/app/server.yaml:ro
+      - ${MIZUPANEL_DATA_DIR:-./data}:/app/data
 
 volumes:
   mizupanel-mysql-data:

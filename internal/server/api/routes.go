@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
+	serverai "github.com/mizupanel/mizupanel/internal/server/ai"
 	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
 	"github.com/mizupanel/mizupanel/internal/server/logbuffer"
@@ -101,6 +102,7 @@ type Server struct {
 	audit                   *serveraudit.Store
 	serviceCenter           ServiceCenter
 	serverLogs              *logbuffer.Buffer
+	ai                      *serverai.Service
 }
 
 type terminalToken struct {
@@ -216,6 +218,8 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 			server.audit = typed
 		case *logbuffer.Buffer:
 			server.serverLogs = typed
+		case AIConfig:
+			server.ai = typed.Service
 		case NodeOperations:
 			server.agentOps = typed
 		case TaskRunnerCapabilityProvider:
@@ -264,6 +268,13 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 	if server.serviceCenter != nil {
 		mux.HandleFunc("/api/services", server.requireAuth(server.handleServices))
 		mux.HandleFunc("/api/services/", server.requireAuth(server.handleServiceRoutes))
+	}
+	if server.ai != nil {
+		mux.HandleFunc("/api/ai/providers", server.requireAuth(server.handleAIProviders))
+		mux.HandleFunc("/api/ai/providers/", server.requireAuth(server.handleAIProviders))
+		mux.HandleFunc("/api/ai/conversations", server.requireAuth(server.handleAIConversations))
+		mux.HandleFunc("/api/ai/conversations/", server.requireAuth(server.handleAIConversations))
+		mux.HandleFunc("/api/ai/tool-calls/", server.requireAuth(server.handleAIToolCalls))
 	}
 	return mux
 }

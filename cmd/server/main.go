@@ -60,6 +60,7 @@ func main() {
 	uptimeMonitors := store.NewUptimeStoreWithDialect(database, dialect)
 	tasks := store.NewTaskStoreWithDialect(database, dialect)
 	services := servicecenter.NewStore(database, dialect)
+	aiStore := store.NewAIStore(database, dialect)
 	auditStore := serveraudit.NewStore(database, dialect)
 	cleaner := retention.NewDynamicCleaner(metrics, func() (time.Duration, error) {
 		return settings.MetricsRetention(context.Background(), cfg.MetricsRetention)
@@ -88,6 +89,8 @@ func main() {
 		Uptime:              uptimeMonitors,
 		Tasks:               tasks,
 		Services:            services,
+		AI:                  aiStore,
+		AIKeyFile:           cfg.AIKeyFile,
 		AgentToken:          cfg.AgentToken,
 		PublicURL:           cfg.PublicURL,
 		Interval:            5,

@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  轻量级自托管运维面板，用一个干净的控制台管理应用服务、主机、Docker、Systemd、自动化任务、告警、服务拨测、操作审计和 Kubernetes 资源。
+  轻量级自托管运维面板，用一个干净的控制台管理应用服务、主机、Docker、Systemd、自动化任务、告警、服务拨测、操作审计和 Kubernetes 资源，并通过 AI 助手进行自然语言运维。
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.13-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.14-14B8A6">
 </p>
 
 <p align="center">
@@ -89,6 +89,9 @@
   <tr>
     <td colspan="3"><strong>统一日志中心</strong><br /><sub>从一个桌面工作区按需查询 Docker 容器、Systemd 服务、Kubernetes Pod、Agent、Server 和主机日志文件；支持搜索、复制、下载，Docker 与文件日志可实时跟随。</sub></td>
   </tr>
+  <tr>
+    <td colspan="3"><strong>AI 自然语言运维</strong><br /><sub>在全局抽屉或完整工作台中查询故障、告警、节点、服务、拨测、指标和有界日志；切换 OpenAI Chat Completions 兼容模型，所有状态变更都必须人工确认。</sub></td>
+  </tr>
 </table>
 
 <strong>应用服务中心</strong>
@@ -134,6 +137,14 @@ Docker 部署可使用 `MIZUPANEL_AUDIT_RETENTION` 和 `MIZUPANEL_AUDIT_CLEANUP_
 Dashboard 顶层的 **日志中心**（`/logs`）以一次一个具体目标的方式聚合现有日志入口：Docker 容器、Systemd 服务、Kubernetes Pod、Agent 自身、Server 自身和主机日志文件。所有来源均可手动刷新，Docker 与文件日志可复用既有 WebSocket 链路实时跟随；关键词只筛选浏览器当前已加载的结果，页面也提供复制与本地下载。
 
 日志按需读取，不写入 SQLite、不建立集中日志索引，也不会因浏览日志写入审计详情。Server 自身日志只来自当前进程的有界内存缓冲（约 10,000 条/2 MiB），重启后自然清空；Systemd、Agent、Kubernetes 与 Server 仅提供受行数上限约束的快照查询。
+
+<strong>AI 自然语言运维助手</strong>
+
+顶部栏的 **AI 运维助手** 可打开覆盖式右侧抽屉，也可展开到 `/ai` 完整工作台。会话和普通消息持久化在 MizuPanel 的 SQLite/MySQL 中；页面切换或关闭抽屉不会丢失当前会话。首版支持多个 OpenAI Chat Completions 兼容 Provider，可在系统设置中保存 Base URL、Model 和可选 API Key，完成聊天与工具能力检测后切换使用。
+
+AI 只能调用 Server 内置的固定运维工具。故障、告警、节点、服务、拨测、指标和有界日志查询可自动执行；主机重启、Agent 升级、Docker/Compose/Systemd 状态变更和已有脚本执行必须先展示目标与影响，再由管理员在自定义确认窗口中批准。任意 Shell、文件写删、资源删除和 Kubernetes 写操作不在工具范围内。
+
+Provider API Key 由 Server 使用 `data/ai.key` 加密后保存，读取接口不会返回明文或密文。备份或迁移时必须同时保留数据库和 `ai.key`；丢失该文件后已有 Provider 凭据无法解密。模型提示词、原始响应、工具原始输出和日志内容不会作为会话历史持久化。完整配置与数据边界见 [配置部署文档](docs/configuration.md)。
 
 <strong>Release 包部署运行</strong>
 

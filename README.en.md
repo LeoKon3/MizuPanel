@@ -5,7 +5,7 @@
 <h1 align="center">MizuPanel</h1>
 
 <p align="center">
-  A lightweight self-hosted operations panel for application services, hosts, Docker, systemd, automation tasks, alerts, uptime monitoring, operational auditing, and Kubernetes resources.
+  A lightweight self-hosted operations panel for application services, hosts, Docker, systemd, automation tasks, alerts, uptime monitoring, operational auditing, and Kubernetes resources, with an AI assistant for natural-language operations.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.13-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.14-14B8A6">
 </p>
 
 <p align="center">
@@ -89,6 +89,9 @@
   <tr>
     <td colspan="3"><strong>Unified Log Center</strong><br /><sub>Query Docker containers, Systemd services, Kubernetes Pods, Agents, the Server, and host log files from one desktop workspace; search, copy, download, and follow Docker/file output in real time.</sub></td>
   </tr>
+  <tr>
+    <td colspan="3"><strong>AI Natural-Language Operations</strong><br /><sub>Query incidents, alerts, nodes, services, uptime, metrics, and bounded logs from a global drawer or full workspace; switch OpenAI Chat Completions compatible models while requiring explicit confirmation for every state change.</sub></td>
+  </tr>
 </table>
 
 <strong>Application Service Center</strong>
@@ -134,6 +137,14 @@ Docker deployments can override these values with `MIZUPANEL_AUDIT_RETENTION` an
 The top-level **Log Center** (`/logs`) brings the existing on-demand log entries into one single-target workspace: Docker containers, Systemd services, Kubernetes Pods, Agents, the Server process, and host log files. Every source can be refreshed manually; Docker and file logs retain their existing WebSocket follow behavior. Keyword filtering only applies to the currently loaded browser result, which can also be copied or downloaded locally.
 
 Log content is read on demand: it is not written to SQLite, centrally collected, or indexed, and opening logs does not add their contents to audit details. Server logs are limited to the current process's in-memory buffer (about 10,000 records / 2 MiB) and disappear on restart. Systemd, Agent, Kubernetes, and Server logs are bounded snapshots rather than simulated live streams.
+
+<strong>AI Natural-Language Operations Assistant</strong>
+
+The top-bar **AI Operations Assistant** opens as an overlay drawer and can expand into the full `/ai` workspace. Conversations and ordinary messages are persisted in MizuPanel's SQLite/MySQL database, so navigation and closing the drawer do not discard the active conversation. The first release supports multiple OpenAI Chat Completions compatible Providers with configurable Base URL, Model, and optional API Key, plus separate chat and function-tool capability checks.
+
+The model can only select from a fixed Server-owned operations registry. Incident, alert, node, service, uptime, metric, and bounded-log queries may run automatically. Host reboot, Agent upgrade, Docker/Compose/Systemd state changes, and existing saved-script runs must display their target and impact and receive explicit administrator confirmation. Arbitrary Shell, file writes/deletes, resource deletion, and Kubernetes writes are not expressible through the registry.
+
+Provider API Keys are encrypted by the Server using `data/ai.key`; read APIs return neither plaintext nor ciphertext. Backups and migrations must preserve the database and `ai.key` together, because existing Provider credentials cannot be decrypted if the key file is lost. System prompts, raw model responses, raw tool output, and log content are not persisted as conversation history. See the [configuration docs](docs/configuration.en.md) for the complete setup and data boundary.
 
 <strong>Run From Release Package</strong>
 

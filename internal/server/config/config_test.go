@@ -47,8 +47,36 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AgentToken != "" {
 		t.Fatalf("AgentToken = %q, want empty default", cfg.AgentToken)
 	}
+	if cfg.AIKeyFile != "./data/ai.key" {
+		t.Fatalf("AIKeyFile = %q, want ./data/ai.key", cfg.AIKeyFile)
+	}
 	if cfg.EnableTerminal {
 		t.Fatal("EnableTerminal = true, want false default")
+	}
+}
+
+func TestLoadAIKeyFileConfigAndEnvironmentOverride(t *testing.T) {
+	t.Setenv("MIZUPANEL_AI_KEY_FILE", "/run/secrets/mizupanel-ai.key")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.yaml")
+	content := []byte("security:\n  ai_key_file: ./data/file-ai.key\n")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AIKeyFile != "/run/secrets/mizupanel-ai.key" {
+		t.Fatalf("AIKeyFile = %q, want environment override", cfg.AIKeyFile)
+	}
+}
+
+func TestLoadRejectsEmptyAIKeyFileEnvironmentOverride(t *testing.T) {
+	t.Setenv("MIZUPANEL_AI_KEY_FILE", "  ")
+	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "security.ai_key_file") {
+		t.Fatalf("Load error = %v, want security.ai_key_file validation error", err)
 	}
 }
 

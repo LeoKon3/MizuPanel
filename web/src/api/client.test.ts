@@ -4,6 +4,7 @@ import { createContainerExecSession, createInstallCommand, createNodeGroup, crea
 import { checkUptimeMonitor, createUptimeMonitor, deleteUptimeMonitor, getUptimeIncidents, getUptimeMonitors, getUptimeResults, toggleUptimeMonitor, updateUptimeMonitor } from './client'
 import { createAutomationScript, createScheduledTask, deleteAutomationScript, deleteScheduledTask, getAutomationRun, getAutomationRuns, getAutomationScripts, getScheduledTasks, runAutomationScript, runScheduledTask, toggleScheduledTask, updateAutomationScript, updateScheduledTask } from './client'
 import { createApplicationService, deleteApplicationService, getApplicationService, getApplicationServices, updateApplicationService } from './client'
+import { confirmAIToolCall, createAIConversation, createAIProvider, deleteAIConversation, deleteAIProvider, getAIConversation, getAIConversations, getAIProviders, listAIProviderModels, rejectAIToolCall, renameAIConversation, sendAIMessage, sendAIMessageStream, setDefaultAIProvider, testAIProvider, updateAIProvider } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -502,6 +503,62 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/services/service%2F1', { method: 'DELETE' })
   })
 
+  test('manages AI providers and conversations through bounded typed endpoints', async () => {
+    const providerInput = {
+      name: 'Internal model',
+      protocol: 'openai_chat_completions' as const,
+      base_url: 'http://model.internal/v1',
+      model: 'ops-model',
+      api_key: 'temporary-secret'
+    }
+    const controller = new AbortController()
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ providers: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'provider/1' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'provider/1' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'provider/1' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'provider/1' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ conversations: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'conversation/1' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'conversation/1' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ conversation: { id: 'conversation/1' }, messages: [], tool_calls: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ turn: { id: 'turn-1' } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ turn: { id: 'turn-1' } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ turn: { id: 'turn-1' } })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+
+    await getAIProviders(controller.signal)
+    await createAIProvider(providerInput)
+    await updateAIProvider('provider/1', { ...providerInput, api_key: undefined })
+    await testAIProvider('provider/1', controller.signal)
+    await setDefaultAIProvider('provider/1')
+    await deleteAIProvider('provider/1')
+    await getAIConversations(25, controller.signal)
+    await createAIConversation('Production checks')
+    await renameAIConversation('conversation/1', 'Renamed checks')
+    await getAIConversation('conversation/1', 100, controller.signal)
+    await sendAIMessage('conversation/1', 'provider/1', 'Check active alerts', controller.signal)
+    await confirmAIToolCall('tool/1')
+    await rejectAIToolCall('tool/1')
+    await deleteAIConversation('conversation/1')
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/ai/providers', { signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/ai/providers', expect.objectContaining({ method: 'POST', body: JSON.stringify(providerInput) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/ai/providers/provider%2F1', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ ...providerInput, api_key: undefined }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/ai/providers/provider%2F1/test', { method: 'POST', signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/ai/providers/provider%2F1/default', { method: 'POST' })
+    expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/ai/providers/provider%2F1', { method: 'DELETE' })
+    expect(fetchMock).toHaveBeenNthCalledWith(7, '/api/ai/conversations?limit=25', { signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/ai/conversations', expect.objectContaining({ method: 'POST', body: JSON.stringify({ title: 'Production checks' }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(9, '/api/ai/conversations/conversation%2F1', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ title: 'Renamed checks' }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(10, '/api/ai/conversations/conversation%2F1?limit=100', { signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(11, '/api/ai/conversations/conversation%2F1/messages', expect.objectContaining({ method: 'POST', body: JSON.stringify({ provider_id: 'provider/1', content: 'Check active alerts' }), signal: controller.signal }))
+    expect(fetchMock).toHaveBeenNthCalledWith(12, '/api/ai/tool-calls/tool%2F1/confirm', { method: 'POST' })
+    expect(fetchMock).toHaveBeenNthCalledWith(13, '/api/ai/tool-calls/tool%2F1/reject', { method: 'POST' })
+    expect(fetchMock).toHaveBeenNthCalledWith(14, '/api/ai/conversations/conversation%2F1', { method: 'DELETE' })
+  })
+
   test('marks unauthorized API responses', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('unauthorized', { status: 401 }))
 
@@ -518,5 +575,67 @@ describe('api client', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('bad', { status: 500 }))
 
     await expect(getNodes()).rejects.toThrow('Request failed')
+  })
+
+
+  function sseResponse(chunks: string[]): Response {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+        controller.close()
+      }
+    })
+    return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } })
+  }
+
+  test('sendAIMessageStream parses status events and returns the result', async () => {
+    const events = [
+      'event: status\ndata: {"phase":"model"}\n\n',
+      'event: status\ndata: {"phase":"tool","tool_name":"reboot_node","target_name":"node-1"}\n\n',
+      'event: result\ndata: {"turn":{"id":"turn-1"}}\n\n'
+    ]
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse(events))
+    const onProgress = vi.fn()
+    const result = await sendAIMessageStream('conv/1', 'provider/1', 'reboot', undefined, onProgress)
+    expect(result.turn.id).toBe('turn-1')
+    expect(onProgress).toHaveBeenCalledTimes(2)
+    expect(onProgress).toHaveBeenNthCalledWith(1, { phase: 'model' })
+    expect(onProgress).toHaveBeenNthCalledWith(2, { phase: 'tool', tool_name: 'reboot_node', target_name: 'node-1' })
+    expect(fetch).toHaveBeenCalledWith('/api/ai/conversations/conv%2F1/messages/stream', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ provider_id: 'provider/1', content: 'reboot' })
+    }))
+  })
+
+  test('sendAIMessageStream throws on error events', async () => {
+    const events = ['event: error\ndata: {"error":"provider unavailable"}\n\n']
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse(events))
+    await expect(sendAIMessageStream('conv/1', 'provider/1', 'hi', undefined, () => {}))
+      .rejects.toThrow('provider unavailable')
+  })
+
+  test('sendAIMessageStream throws when no result event is returned', async () => {
+    const events = ['event: status\ndata: {"phase":"model"}\n\n']
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse(events))
+    await expect(sendAIMessageStream('conv/1', 'provider/1', 'hi', undefined, () => {}))
+      .rejects.toThrow('流式响应未返回结果')
+  })
+
+  test('sendAIMessageStream throws on non-ok response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }))
+    await expect(sendAIMessageStream('conv/1', 'provider/1', 'hi', undefined, () => {}))
+      .rejects.toThrow('forbidden')
+  })
+
+  test('lists provider models using the entered Base URL and API key', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ models: ['model-a', 'model-b'] })))
+
+    await expect(listAIProviderModels('https://model.test/v1', 'key-marker', 'provider-1')).resolves.toEqual(['model-a', 'model-b'])
+    expect(fetchMock).toHaveBeenCalledWith('/api/ai/providers/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider_id: 'provider-1', base_url: 'https://model.test/v1', api_key: 'key-marker' })
+    })
   })
 })
