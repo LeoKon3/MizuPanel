@@ -120,7 +120,7 @@
   </a>
 </p>
 
-顶部栏的 AI 运维助手可打开覆盖式右侧抽屉，支持键盘调整宽度、切换 Provider 和新建会话；查询自动执行，变更操作需人工确认。
+顶部栏的 AI 运维助手可打开覆盖式右侧抽屉，支持键盘调整宽度、按 Provider 分组切换会话模型和新建会话；查询自动执行，变更操作需人工确认。
 
 <p align="center">
   <a href="../assets/screenshots/ai-provider-settings.png">
@@ -128,4 +128,4 @@
   </a>
 </p>
 
-系统设置中的 AI 模型配置支持保存多个 OpenAI Chat Completions 兼容 Provider，API Key 加密保存且不回显。
+系统设置中的 AI 模型配置支持一条 Provider 连接管理多个模型，并提供模型发现、按需导入、逐模型能力检测及默认/回退路由；API Key 加密保存且不回显。

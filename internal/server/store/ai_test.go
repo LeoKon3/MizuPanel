@@ -11,7 +11,7 @@ import (
 func testAIProvider(id, name string) AIProvider {
 	return AIProvider{
 		ID: id, Name: name, Protocol: "openai_chat_completions",
-		BaseURL: "https://model.test/v1", Model: "model-a", ProbeStatus: "unknown",
+		BaseURL: "https://model.test/v1", Model: "model-a", Enabled: true, ProbeStatus: "unknown",
 	}
 }
 
@@ -189,5 +189,122 @@ func TestAIStoreTurnConflictClaimRecoveryAndConversationCascade(t *testing.T) {
 	}
 	if nodes != 1 {
 		t.Fatalf("unrelated node count = %d, want 1", nodes)
+	}
+}
+
+func TestAIStoreProviderModelsRoutingAndAtomicFallback(t *testing.T) {
+	database := openTestDB(t)
+	database.SetMaxOpenConns(1)
+	repo := NewAIStore(database, serverdb.DialectSQLite)
+
+	provider, err := repo.CreateProvider(t.Context(), testAIProvider("provider-routing", "Routing"))
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	if err := repo.SaveModelProbe(t.Context(), provider.ID, true, true, "success", 12, "", time.Now().UTC()); err != nil {
+		t.Fatalf("probe first model: %v", err)
+	}
+	created, err := repo.CreateProviderModels(t.Context(), provider.ID, []AIProviderModel{{
+		ModelID: "model-b", DisplayName: "Fallback", Enabled: true, ProbeStatus: "unknown",
+	}})
+	if err != nil {
+		t.Fatalf("create second model: %v", err)
+	}
+	if len(created) != 1 || created[0].ProviderID != provider.ID {
+		t.Fatalf("created models = %+v", created)
+	}
+	fallback := created[0]
+	if err := repo.SaveModelProbe(t.Context(), fallback.ID, true, true, "success", 18, "", time.Now().UTC()); err != nil {
+		t.Fatalf("probe fallback model: %v", err)
+	}
+	defaultID, fallbackID := provider.ID, fallback.ID
+	if err := repo.SetRouting(t.Context(), &defaultID, &fallbackID); err != nil {
+		t.Fatalf("set routing: %v", err)
+	}
+	routing, err := repo.GetRouting(t.Context())
+	if err != nil {
+		t.Fatalf("get routing: %v", err)
+	}
+	if routing.DefaultModelID == nil || *routing.DefaultModelID != defaultID ||
+		routing.FallbackModelID == nil || *routing.FallbackModelID != fallbackID {
+		t.Fatalf("routing = %+v", routing)
+	}
+	if err := repo.SetRouting(t.Context(), &defaultID, &defaultID); !errors.Is(err, ErrAIInvalid) {
+		t.Fatalf("same default/fallback error = %v, want ErrAIInvalid", err)
+	}
+	if _, err := database.Exec(`UPDATE ai_provider_models SET is_default = 1 WHERE id = ?`, fallbackID); err == nil {
+		t.Fatal("database accepted a second global default model")
+	}
+	if err := repo.DeleteModel(t.Context(), fallbackID); !errors.Is(err, ErrAIConflict) {
+		t.Fatalf("delete fallback model error = %v, want ErrAIConflict", err)
+	}
+
+	conversation, err := repo.CreateConversationWithModel(t.Context(), "Routing", &defaultID)
+	if err != nil {
+		t.Fatalf("create selected conversation: %v", err)
+	}
+	provider, err = repo.GetProvider(t.Context(), provider.ID)
+	if err != nil {
+		t.Fatalf("reload provider: %v", err)
+	}
+	first, err := repo.GetModel(t.Context(), defaultID)
+	if err != nil {
+		t.Fatalf("reload default model: %v", err)
+	}
+	fallback, err = repo.GetModel(t.Context(), fallbackID)
+	if err != nil {
+		t.Fatalf("reload fallback model: %v", err)
+	}
+	turn, _, err := repo.StartModelTurn(t.Context(), conversation.ID, provider, first, "use fallback")
+	if err != nil {
+		t.Fatalf("start fallback turn: %v", err)
+	}
+	switched, err := repo.SwitchTurnModelBeforeTools(t.Context(), turn.ID, provider, fallback)
+	if err != nil {
+		t.Fatalf("switch turn model: %v", err)
+	}
+	if !switched.FallbackUsed || switched.ModelID == nil || *switched.ModelID != fallbackID ||
+		switched.RequestedModelID == nil || *switched.RequestedModelID != defaultID ||
+		switched.Model != "model-b" || switched.RequestedModel != "model-a" {
+		t.Fatalf("switched turn = %+v", switched)
+	}
+	if _, err := repo.CompleteTurn(t.Context(), switched, "fallback response"); err != nil {
+		t.Fatalf("complete fallback turn: %v", err)
+	}
+
+	guarded, _, err := repo.StartModelTurn(t.Context(), conversation.ID, provider, first, "tool first")
+	if err != nil {
+		t.Fatalf("start guarded turn: %v", err)
+	}
+	if _, err := repo.CreateToolCall(t.Context(), guarded, AIToolCall{
+		ProviderCallID: "read-call", ToolName: "list_nodes", Risk: "read", Status: "running",
+		ArgumentsJSON: `{}`, TargetType: "system", TargetID: "nodes",
+	}); err != nil {
+		t.Fatalf("create tool call before fallback: %v", err)
+	}
+	if _, err := repo.SwitchTurnModelBeforeTools(t.Context(), guarded.ID, provider, fallback); !errors.Is(err, ErrAIConflict) {
+		t.Fatalf("post-tool fallback error = %v, want ErrAIConflict", err)
+	}
+
+	if err := repo.SetRouting(t.Context(), nil, nil); err != nil {
+		t.Fatalf("clear routing: %v", err)
+	}
+	if err := repo.DeleteModel(t.Context(), defaultID); err != nil {
+		t.Fatalf("delete selected model: %v", err)
+	}
+	conversation, err = repo.GetConversation(t.Context(), conversation.ID)
+	if err != nil {
+		t.Fatalf("reload conversation after model delete: %v", err)
+	}
+	if conversation.ModelID != nil {
+		t.Fatalf("conversation model after delete = %v, want nil", *conversation.ModelID)
+	}
+	guarded, err = repo.GetTurn(t.Context(), guarded.ID)
+	if err != nil {
+		t.Fatalf("reload historical turn: %v", err)
+	}
+	if guarded.ModelID != nil || guarded.RequestedModelID == nil || *guarded.RequestedModelID != defaultID ||
+		guarded.RequestedModel != "model-a" {
+		t.Fatalf("historical routing after model delete = %+v", guarded)
 	}
 }

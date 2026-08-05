@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
+	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
 	"github.com/mizupanel/mizupanel/internal/server/k8s"
 	"github.com/mizupanel/mizupanel/internal/server/logbuffer"
 	"github.com/mizupanel/mizupanel/internal/server/servicecenter"
@@ -50,6 +51,7 @@ type NodeOperations interface {
 	ContainerStop(context.Context, string, string) (protocol.ContainerStopResponse, error)
 	ContainerRestart(context.Context, string, string) (protocol.ContainerRestartResponse, error)
 	DockerComposeList(context.Context, string) (protocol.DockerComposeListResponse, error)
+	DockerResourceList(context.Context, string) (protocol.DockerResourceListResponse, error)
 	DockerComposeAction(context.Context, string, string, string, string) (protocol.DockerComposeActionResponse, error)
 	SystemdServiceList(context.Context, string) (protocol.SystemdServiceListResponse, error)
 	SystemdServiceAction(context.Context, string, string, string, int) (protocol.SystemdServiceActionResponse, error)
@@ -66,11 +68,22 @@ type ApplicationServices interface {
 
 type KubernetesClusters interface {
 	ListClustersWithNodeInfo() ([]*k8s.PublicClusterWithNode, error)
+	GetClusterWithNodeInfo(string) (*k8s.PublicClusterWithNode, error)
+	GetSummary(context.Context, string) (*protocol.K8sResourceSummary, error)
+	GetNamespaces(context.Context, string) ([]protocol.K8sNamespace, error)
+	GetNodes(context.Context, string) ([]protocol.K8sNode, error)
+	GetPods(context.Context, string, string) ([]protocol.K8sPod, error)
+	GetDeployments(context.Context, string, string) ([]protocol.K8sDeployment, error)
+	GetStatefulSets(context.Context, string, string) ([]protocol.K8sStatefulSet, error)
+	GetDaemonSets(context.Context, string, string) ([]protocol.K8sDaemonSet, error)
+	GetServices(context.Context, string, string) ([]protocol.K8sService, error)
+	GetIngresses(context.Context, string, string) ([]protocol.K8sIngress, error)
 }
 
 type RegistryDependencies struct {
 	Nodes      *store.NodeStore
 	Metrics    *store.MetricStore
+	Processes  *store.ProcessSnapshotStore
 	Docker     *store.DockerSnapshotStore
 	Alerts     *store.AlertStore
 	Uptime     *store.UptimeStore
@@ -79,6 +92,7 @@ type RegistryDependencies struct {
 	AgentOps   NodeOperations
 	Automation AutomationRunner
 	Tasks      *store.TaskStore
+	Audit      *serveraudit.Store
 	Kubernetes KubernetesClusters
 }
 
@@ -99,6 +113,9 @@ type ValidatedToolCall struct {
 type SafeToolResult struct {
 	Data    any
 	Summary string
+	// Status is the stable operation outcome used by confirmation-gated tools.
+	// Read tools may leave it empty; confirmed operations default to success.
+	Status string
 }
 
 type registeredTool struct {
@@ -458,19 +475,20 @@ func (r *Registry) registerReadTools() {
 			result := make([]map[string]any, 0, len(clusters))
 			for _, cluster := range clusters {
 				result = append(result, map[string]any{
-					"id":             cluster.ID,
-					"name":           boundedString(cluster.Name, 128),
-					"status":         cluster.Status,
-					"version":        boundedString(cluster.Version, 64),
-					"node_count":     cluster.NodeCount,
+					"id":              cluster.ID,
+					"name":            boundedString(cluster.Name, 128),
+					"status":          cluster.Status,
+					"version":         boundedString(cluster.Version, 64),
+					"node_count":      cluster.NodeCount,
 					"namespace_count": cluster.NamespaceCount,
-					"node_name":      boundedString(cluster.NodeName, 128),
-					"node_status":    cluster.NodeStatus,
+					"node_name":       boundedString(cluster.NodeName, 128),
+					"node_status":     cluster.NodeStatus,
 				})
 			}
 			return SafeToolResult{Data: map[string]any{"clusters": result}, Summary: "Kubernetes 集群查询完成"}, nil
 		},
 	})
+	r.registerPlatformReadTools()
 }
 
 func (r *Registry) registerConfirmTools() {
@@ -498,7 +516,7 @@ func (r *Registry) registerConfirmTools() {
 				if err != nil || !ok {
 					return SafeToolResult{}, safeRemoteError(err)
 				}
-				return SafeToolResult{Data: map[string]any{"accepted": true}, Summary: "操作已接受"}, nil
+				return SafeToolResult{Data: map[string]any{"accepted": true, "status": "accepted"}, Summary: "操作已接受", Status: "accepted"}, nil
 			},
 		})
 	}
@@ -571,7 +589,7 @@ func (r *Registry) registerConfirmTools() {
 			if err != nil || !success {
 				return SafeToolResult{}, safeRemoteError(err)
 			}
-			return SafeToolResult{Data: map[string]any{"success": true, "action": args.Action}, Summary: "容器操作成功"}, nil
+			return SafeToolResult{Data: map[string]any{"success": true, "action": args.Action, "status": "success"}, Summary: "容器操作成功", Status: "success"}, nil
 		},
 	})
 
@@ -612,7 +630,7 @@ func (r *Registry) registerConfirmTools() {
 			if err != nil || !response.Success {
 				return SafeToolResult{}, safeRemoteError(err)
 			}
-			return SafeToolResult{Data: map[string]any{"success": true, "action": args.Action}, Summary: "Compose 操作成功"}, nil
+			return SafeToolResult{Data: map[string]any{"success": true, "action": args.Action, "status": "success"}, Summary: "Compose 操作成功", Status: "success"}, nil
 		},
 	})
 
@@ -648,7 +666,7 @@ func (r *Registry) registerConfirmTools() {
 			if err != nil || !response.Success {
 				return SafeToolResult{}, safeRemoteError(err)
 			}
-			return SafeToolResult{Data: map[string]any{"success": true, "action": args.Action}, Summary: "Systemd 操作成功"}, nil
+			return SafeToolResult{Data: map[string]any{"success": true, "action": args.Action, "status": "success"}, Summary: "Systemd 操作成功", Status: "success"}, nil
 		},
 	})
 
@@ -700,7 +718,7 @@ func (r *Registry) registerConfirmTools() {
 			if err != nil {
 				return SafeToolResult{}, safeRemoteError(err)
 			}
-			return SafeToolResult{Data: map[string]any{"run_id": run.ID, "status": run.Status}, Summary: "脚本任务已创建"}, nil
+			return SafeToolResult{Data: map[string]any{"run_id": run.ID, "status": run.Status, "operation_status": "accepted"}, Summary: "脚本任务已创建", Status: "accepted"}, nil
 		},
 	})
 }

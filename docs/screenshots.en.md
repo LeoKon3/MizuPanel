@@ -120,7 +120,7 @@ The Audit Trail traces sensitive operations by time, module, node, and result wh
   </a>
 </p>
 
-The top-bar AI assistant opens as an overlay drawer with keyboard-resizable width, Provider switching, and new-conversation support. Read-only tools run automatically; state-changing operations require explicit confirmation.
+The top-bar AI assistant opens as an overlay drawer with keyboard-resizable width, Provider-grouped conversation model switching, and new-conversation support. Read-only tools run automatically; state-changing operations require explicit confirmation.
 
 <p align="center">
   <a href="../assets/screenshots/ai-provider-settings.png">
@@ -128,4 +128,4 @@ The top-bar AI assistant opens as an overlay drawer with keyboard-resizable widt
   </a>
 </p>
 
-System Settings includes an AI Model Configuration section for managing multiple OpenAI Chat Completions compatible providers. API keys are encrypted and never echoed back.
+System Settings lets one OpenAI Chat Completions compatible Provider connection manage multiple models, with discovery, selective import, per-model probes, and default/fallback routing. API keys are encrypted and never echoed back.

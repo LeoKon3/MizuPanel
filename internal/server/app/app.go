@@ -115,9 +115,9 @@ func NewHandler(deps Dependencies) http.Handler {
 	}
 	var aiConfig api.AIConfig
 	if deps.AI != nil {
-		registry := serverai.NewRegistry(serverai.RegistryDependencies{Nodes: deps.Nodes, Metrics: deps.Metrics, Docker: deps.DockerSnapshots,
+		registry := serverai.NewRegistry(serverai.RegistryDependencies{Nodes: deps.Nodes, Metrics: deps.Metrics, Processes: deps.ProcessSnapshots, Docker: deps.DockerSnapshots,
 			Alerts: deps.Alerts, Uptime: deps.Uptime, Services: serviceCenter.Facade,
-			ServerLogs: deps.ServerLogs, AgentOps: hub, Automation: taskEngine, Tasks: deps.Tasks, Kubernetes: k8sService})
+			ServerLogs: deps.ServerLogs, AgentOps: hub, Automation: taskEngine, Tasks: deps.Tasks, Audit: deps.Audit, Kubernetes: k8sService})
 		aiConfig.Service = serverai.NewService(deps.AI, serverai.NewSecretManager(deps.AIKeyFile), registry, nil)
 		if err := aiConfig.Service.Initialize(context.Background()); err != nil {
 			log.Printf("Warning: AI service initialization failed: %s", serverai.SafeErrorMessage(err))

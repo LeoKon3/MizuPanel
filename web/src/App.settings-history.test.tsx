@@ -132,6 +132,8 @@ describe('App history and system settings', () => {
 
     const panel = await screen.findByRole('region', { name: '系统设置' })
     expect(within(panel).getByText('指标保留时间')).toBeInTheDocument()
+    expect(within(panel).queryByText('管理指标数据保留策略和 AI 模型连接。')).not.toBeInTheDocument()
+    expect(within(panel).queryByText('配置文件用于首次启动，后台保存后以数据库设置为准；延长保留时间不会恢复已清理数据。')).not.toBeInTheDocument()
     expect(await within(panel).findByText('v0.1.0')).toBeInTheDocument()
     expect(within(panel).getByRole('link', { name: '打开 GitHub 仓库' })).toHaveAttribute('href', 'https://github.com/LeoKon3/MizuPanel')
     fireEvent.click(within(panel).getByRole('button', { name: '7 天' }))

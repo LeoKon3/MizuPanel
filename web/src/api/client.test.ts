@@ -4,7 +4,7 @@ import { createContainerExecSession, createInstallCommand, createNodeGroup, crea
 import { checkUptimeMonitor, createUptimeMonitor, deleteUptimeMonitor, getUptimeIncidents, getUptimeMonitors, getUptimeResults, toggleUptimeMonitor, updateUptimeMonitor } from './client'
 import { createAutomationScript, createScheduledTask, deleteAutomationScript, deleteScheduledTask, getAutomationRun, getAutomationRuns, getAutomationScripts, getScheduledTasks, runAutomationScript, runScheduledTask, toggleScheduledTask, updateAutomationScript, updateScheduledTask } from './client'
 import { createApplicationService, deleteApplicationService, getApplicationService, getApplicationServices, updateApplicationService } from './client'
-import { confirmAIToolCall, createAIConversation, createAIProvider, deleteAIConversation, deleteAIProvider, getAIConversation, getAIConversations, getAIProviders, listAIProviderModels, rejectAIToolCall, renameAIConversation, sendAIMessage, sendAIMessageStream, setDefaultAIProvider, testAIProvider, updateAIProvider } from './client'
+import { confirmAIToolCall, createAIConversation, createAIProvider, deleteAIConversation, deleteAIModel, deleteAIProvider, discoverAIProvider, getAIConversation, getAIConversations, getAIModel, getAIProviderModels, getAIProviders, getAIRouting, importAIProviderModels, listAIProviderModels, rejectAIToolCall, renameAIConversation, sendAIMessage, sendAIMessageStream, setDefaultAIProvider, testAIModel, testAIProvider, updateAIConversationModel, updateAIModel, updateAIProvider, updateAIRouting } from './client'
 
 describe('api client', () => {
   afterEach(() => {
@@ -538,7 +538,7 @@ describe('api client', () => {
     await createAIConversation('Production checks')
     await renameAIConversation('conversation/1', 'Renamed checks')
     await getAIConversation('conversation/1', 100, controller.signal)
-    await sendAIMessage('conversation/1', 'provider/1', 'Check active alerts', controller.signal)
+    await sendAIMessage('conversation/1', 'Check active alerts', controller.signal)
     await confirmAIToolCall('tool/1')
     await rejectAIToolCall('tool/1')
     await deleteAIConversation('conversation/1')
@@ -553,7 +553,7 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/ai/conversations', expect.objectContaining({ method: 'POST', body: JSON.stringify({ title: 'Production checks' }) }))
     expect(fetchMock).toHaveBeenNthCalledWith(9, '/api/ai/conversations/conversation%2F1', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ title: 'Renamed checks' }) }))
     expect(fetchMock).toHaveBeenNthCalledWith(10, '/api/ai/conversations/conversation%2F1?limit=100', { signal: controller.signal })
-    expect(fetchMock).toHaveBeenNthCalledWith(11, '/api/ai/conversations/conversation%2F1/messages', expect.objectContaining({ method: 'POST', body: JSON.stringify({ provider_id: 'provider/1', content: 'Check active alerts' }), signal: controller.signal }))
+    expect(fetchMock).toHaveBeenNthCalledWith(11, '/api/ai/conversations/conversation%2F1/messages', expect.objectContaining({ method: 'POST', body: JSON.stringify({ content: 'Check active alerts' }), signal: controller.signal }))
     expect(fetchMock).toHaveBeenNthCalledWith(12, '/api/ai/tool-calls/tool%2F1/confirm', { method: 'POST' })
     expect(fetchMock).toHaveBeenNthCalledWith(13, '/api/ai/tool-calls/tool%2F1/reject', { method: 'POST' })
     expect(fetchMock).toHaveBeenNthCalledWith(14, '/api/ai/conversations/conversation%2F1', { method: 'DELETE' })
@@ -592,39 +592,41 @@ describe('api client', () => {
   test('sendAIMessageStream parses status events and returns the result', async () => {
     const events = [
       'event: status\ndata: {"phase":"model"}\n\n',
+      'event: status\ndata: {"phase":"fallback","provider_name":"Backup","model":"model-b"}\n\n',
       'event: status\ndata: {"phase":"tool","tool_name":"reboot_node","target_name":"node-1"}\n\n',
       'event: result\ndata: {"turn":{"id":"turn-1"}}\n\n'
     ]
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse(events))
     const onProgress = vi.fn()
-    const result = await sendAIMessageStream('conv/1', 'provider/1', 'reboot', undefined, onProgress)
+    const result = await sendAIMessageStream('conv/1', 'reboot', undefined, onProgress)
     expect(result.turn.id).toBe('turn-1')
-    expect(onProgress).toHaveBeenCalledTimes(2)
+    expect(onProgress).toHaveBeenCalledTimes(3)
     expect(onProgress).toHaveBeenNthCalledWith(1, { phase: 'model' })
-    expect(onProgress).toHaveBeenNthCalledWith(2, { phase: 'tool', tool_name: 'reboot_node', target_name: 'node-1' })
+    expect(onProgress).toHaveBeenNthCalledWith(2, { phase: 'fallback', provider_name: 'Backup', model: 'model-b' })
+    expect(onProgress).toHaveBeenNthCalledWith(3, { phase: 'tool', tool_name: 'reboot_node', target_name: 'node-1' })
     expect(fetch).toHaveBeenCalledWith('/api/ai/conversations/conv%2F1/messages/stream', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ provider_id: 'provider/1', content: 'reboot' })
+      body: JSON.stringify({ content: 'reboot' })
     }))
   })
 
   test('sendAIMessageStream throws on error events', async () => {
     const events = ['event: error\ndata: {"error":"provider unavailable"}\n\n']
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse(events))
-    await expect(sendAIMessageStream('conv/1', 'provider/1', 'hi', undefined, () => {}))
+    await expect(sendAIMessageStream('conv/1', 'hi', undefined, () => {}))
       .rejects.toThrow('provider unavailable')
   })
 
   test('sendAIMessageStream throws when no result event is returned', async () => {
     const events = ['event: status\ndata: {"phase":"model"}\n\n']
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse(events))
-    await expect(sendAIMessageStream('conv/1', 'provider/1', 'hi', undefined, () => {}))
+    await expect(sendAIMessageStream('conv/1', 'hi', undefined, () => {}))
       .rejects.toThrow('流式响应未返回结果')
   })
 
   test('sendAIMessageStream throws on non-ok response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }))
-    await expect(sendAIMessageStream('conv/1', 'provider/1', 'hi', undefined, () => {}))
+    await expect(sendAIMessageStream('conv/1', 'hi', undefined, () => {}))
       .rejects.toThrow('forbidden')
   })
 
@@ -637,5 +639,45 @@ describe('api client', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider_id: 'provider-1', base_url: 'https://model.test/v1', api_key: 'key-marker' })
     })
+  })
+
+  test('manages saved provider models, routing, and conversation selection with exact payloads', async () => {
+    const controller = new AbortController()
+    const modelInput = { model_id: 'model-a', display_name: 'Primary' }
+    const modelUpdate = { model_id: 'model-a', display_name: 'Primary', enabled: false }
+    const routing = { default_model_id: 'model/1', fallback_model_id: null }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ provider: { id: 'provider/1' }, models: ['model-a'] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ models: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ id: 'model/1' }] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'model/1' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'model/1' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'model/1' })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(routing)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(routing)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'conversation/1', model_id: 'model/1' })))
+
+    await discoverAIProvider('provider/1', controller.signal)
+    await getAIProviderModels('provider/1', controller.signal)
+    await importAIProviderModels('provider/1', [modelInput], false)
+    await getAIModel('model/1', controller.signal)
+    await updateAIModel('model/1', modelUpdate)
+    await testAIModel('model/1', controller.signal)
+    await deleteAIModel('model/1')
+    await getAIRouting(controller.signal)
+    await updateAIRouting(routing)
+    await updateAIConversationModel('conversation/1', 'model/1', controller.signal)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/ai/providers/provider%2F1/discover', { method: 'POST', signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/ai/providers/provider%2F1/models', { signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/ai/providers/provider%2F1/models', expect.objectContaining({ method: 'POST', body: JSON.stringify({ models: [modelInput], enabled: false }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/ai/models/model%2F1', { signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/ai/models/model%2F1', expect.objectContaining({ method: 'PUT', body: JSON.stringify(modelUpdate) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/ai/models/model%2F1/test', { method: 'POST', signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(7, '/api/ai/models/model%2F1', { method: 'DELETE' })
+    expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/ai/routing', { signal: controller.signal })
+    expect(fetchMock).toHaveBeenNthCalledWith(9, '/api/ai/routing', expect.objectContaining({ method: 'PUT', body: JSON.stringify(routing) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(10, '/api/ai/conversations/conversation%2F1', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ model_id: 'model/1' }), signal: controller.signal }))
   })
 })

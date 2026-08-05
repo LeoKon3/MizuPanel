@@ -29,15 +29,38 @@ type aiProviderRequest struct {
 	Model       string  `json:"model"`
 	APIKey      *string `json:"api_key,omitempty"`
 	ClearAPIKey bool    `json:"clear_api_key,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
 }
 
 type aiConversationRequest struct {
-	Title string `json:"title"`
+	Title   *string         `json:"title,omitempty"`
+	ModelID json.RawMessage `json:"model_id,omitempty"`
 }
 
 type aiMessageRequest struct {
 	ProviderID string `json:"provider_id"`
 	Content    string `json:"content"`
+}
+
+type aiProviderModelRequest struct {
+	ModelID     string `json:"model_id"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+type aiProviderModelsRequest struct {
+	Models  []aiProviderModelRequest `json:"models"`
+	Enabled *bool                    `json:"enabled,omitempty"`
+}
+
+type aiModelUpdateRequest struct {
+	ModelID     string `json:"model_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Enabled     *bool  `json:"enabled"`
+}
+
+type aiRoutingRequest struct {
+	DefaultModelID  json.RawMessage `json:"default_model_id"`
+	FallbackModelID json.RawMessage `json:"fallback_model_id"`
 }
 
 func (s *Server) handleAIProviders(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +88,14 @@ func (s *Server) handleAIProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "default" {
 		s.handleAIProviderDefault(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "discover" {
+		s.handleAIProviderDiscover(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "models" {
+		s.handleAIProviderModelCollection(w, r, parts[0])
 		return
 	}
 	writeError(w, http.StatusNotFound, "AI Provider 不存在")
@@ -96,7 +127,7 @@ func (s *Server) handleAIProviderCollection(w http.ResponseWriter, r *http.Reque
 		if request.APIKey != nil {
 			apiKey = *request.APIKey
 		}
-		provider, err := s.ai.CreateProvider(r.Context(), serverai.ProviderInput{Name: request.Name, Protocol: request.Protocol, BaseURL: request.BaseURL, Model: request.Model, APIKey: apiKey})
+		provider, err := s.ai.CreateProvider(r.Context(), serverai.ProviderInput{Name: request.Name, Protocol: request.Protocol, BaseURL: request.BaseURL, Model: request.Model, APIKey: apiKey, Enabled: request.Enabled})
 		if err != nil {
 			writeAIError(w, err)
 			return
@@ -129,7 +160,7 @@ func (s *Server) handleAIProviderResource(w http.ResponseWriter, r *http.Request
 		if !decodeAIRequest(w, r, &request) {
 			return
 		}
-		provider, err := s.ai.UpdateProvider(r.Context(), id, serverai.ProviderUpdate{Name: request.Name, Protocol: request.Protocol, BaseURL: request.BaseURL, Model: request.Model, APIKey: request.APIKey, ClearAPIKey: request.ClearAPIKey})
+		provider, err := s.ai.UpdateProvider(r.Context(), id, serverai.ProviderUpdate{Name: request.Name, Protocol: request.Protocol, BaseURL: request.BaseURL, Model: request.Model, APIKey: request.APIKey, ClearAPIKey: request.ClearAPIKey, Enabled: request.Enabled})
 		if err != nil {
 			writeAIError(w, err)
 			return
@@ -199,6 +230,201 @@ func (s *Server) handleAIProviderDefault(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusOK, provider)
 }
 
+func (s *Server) handleAIProviderDiscover(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	serveraudit.Mark(r, "ai", "provider_discover")
+	serveraudit.SetTarget(r, "ai_provider", id, "")
+	serveraudit.SetMetadata(r, "provider_id", id)
+	if !authorizeAIMutation(w, r, false) {
+		return
+	}
+	models, err := s.ai.DiscoverProvider(r.Context(), id)
+	if err != nil {
+		serveraudit.SetResult(r, serveraudit.ResultFailure, "model_discovery_failed")
+		writeAIError(w, err)
+		return
+	}
+	provider, err := s.ai.GetProvider(r.Context(), id)
+	if err != nil {
+		writeAIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"provider": provider, "models": models})
+}
+
+func (s *Server) handleAIProviderModelCollection(w http.ResponseWriter, r *http.Request, providerID string) {
+	switch r.Method {
+	case http.MethodGet:
+		models, err := s.ai.ListProviderModels(r.Context(), providerID)
+		if err != nil {
+			writeAIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": models})
+	case http.MethodPost:
+		serveraudit.Mark(r, "ai", "model_import")
+		serveraudit.SetTarget(r, "ai_provider", providerID, "")
+		serveraudit.SetMetadata(r, "provider_id", providerID)
+		if !authorizeAIMutation(w, r, true) {
+			return
+		}
+		var request aiProviderModelsRequest
+		if !decodeAIRequest(w, r, &request) {
+			return
+		}
+		inputs := make([]serverai.ModelInput, 0, len(request.Models))
+		for _, model := range request.Models {
+			inputs = append(inputs, serverai.ModelInput{
+				ModelID: model.ModelID, DisplayName: model.DisplayName, Enabled: request.Enabled,
+			})
+		}
+		models, err := s.ai.ImportModels(r.Context(), providerID, inputs)
+		if err != nil {
+			writeAIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"models": models})
+	default:
+		writeMethodNotAllowed(w, http.MethodGet, http.MethodPost)
+	}
+}
+
+func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
+	if s.ai == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI 服务不可用")
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/ai/models"), "/")
+	parts := strings.Split(path, "/")
+	if path == "" || len(parts) > 2 || (len(parts) == 2 && parts[1] != "test") {
+		writeError(w, http.StatusNotFound, "AI 模型不存在")
+		return
+	}
+	id := parts[0]
+	if len(parts) == 2 {
+		s.handleAIModelTest(w, r, id)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		model, err := s.ai.GetModel(r.Context(), id)
+		if err != nil {
+			writeAIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, model)
+	case http.MethodPut:
+		serveraudit.Mark(r, "ai", "model_update")
+		serveraudit.SetTarget(r, "ai_model", id, "")
+		serveraudit.SetMetadata(r, "model_id", id)
+		if !authorizeAIMutation(w, r, true) {
+			return
+		}
+		var request aiModelUpdateRequest
+		if !decodeAIRequest(w, r, &request) {
+			return
+		}
+		if request.Enabled == nil {
+			writeError(w, http.StatusBadRequest, "模型启用状态不能为空")
+			return
+		}
+		model, err := s.ai.UpdateModel(r.Context(), id, serverai.ModelUpdate{
+			ModelID: request.ModelID, DisplayName: request.DisplayName, Enabled: *request.Enabled,
+		})
+		if err != nil {
+			writeAIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, model)
+	case http.MethodDelete:
+		serveraudit.Mark(r, "ai", "model_delete")
+		serveraudit.SetTarget(r, "ai_model", id, "")
+		serveraudit.SetMetadata(r, "model_id", id)
+		if !authorizeAIMutation(w, r, false) {
+			return
+		}
+		if err := s.ai.DeleteModel(r.Context(), id); err != nil {
+			writeAIError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeMethodNotAllowed(w, http.MethodGet, http.MethodPut, http.MethodDelete)
+	}
+}
+
+func (s *Server) handleAIModelTest(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	serveraudit.Mark(r, "ai", "model_test")
+	serveraudit.SetTarget(r, "ai_model", id, "")
+	serveraudit.SetMetadata(r, "model_id", id)
+	if !authorizeAIMutation(w, r, false) {
+		return
+	}
+	model, err := s.ai.TestModel(r.Context(), id)
+	if err != nil {
+		serveraudit.SetResult(r, serveraudit.ResultFailure, "capability_probe_failed")
+		writeAIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, model)
+}
+
+func (s *Server) handleAIRouting(w http.ResponseWriter, r *http.Request) {
+	if s.ai == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI 服务不可用")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		routing, err := s.ai.GetRouting(r.Context())
+		if err != nil {
+			writeAIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, routing)
+	case http.MethodPut:
+		serveraudit.Mark(r, "ai", "routing_update")
+		serveraudit.SetTarget(r, "ai_routing", "global", "")
+		if !authorizeAIMutation(w, r, true) {
+			return
+		}
+		var request aiRoutingRequest
+		if !decodeAIRequest(w, r, &request) {
+			return
+		}
+		defaultID, defaultPresent, valid := decodeNullableModelID(w, request.DefaultModelID)
+		if !valid {
+			return
+		}
+		fallbackID, fallbackPresent, valid := decodeNullableModelID(w, request.FallbackModelID)
+		if !valid {
+			return
+		}
+		if !defaultPresent || !fallbackPresent {
+			writeError(w, http.StatusBadRequest, "默认和备用模型字段不能为空")
+			return
+		}
+		routing, err := s.ai.SetRouting(r.Context(), defaultID, fallbackID)
+		if err != nil {
+			writeAIError(w, err)
+			return
+		}
+		if routing.DefaultModelID != nil {
+			serveraudit.SetMetadata(r, "model_id", *routing.DefaultModelID)
+		}
+		writeJSON(w, http.StatusOK, routing)
+	default:
+		writeMethodNotAllowed(w, http.MethodGet, http.MethodPut)
+	}
+}
+
 func (s *Server) handleAIConversations(w http.ResponseWriter, r *http.Request) {
 	if s.ai == nil {
 		writeError(w, http.StatusServiceUnavailable, "AI 服务不可用")
@@ -247,7 +473,15 @@ func (s *Server) handleAIConversationCollection(w http.ResponseWriter, r *http.R
 		if !decodeAIRequest(w, r, &request) {
 			return
 		}
-		conversation, err := s.ai.CreateConversation(r.Context(), request.Title)
+		modelID, _, valid := decodeNullableModelID(w, request.ModelID)
+		if !valid {
+			return
+		}
+		title := ""
+		if request.Title != nil {
+			title = *request.Title
+		}
+		conversation, err := s.ai.CreateConversationWithModel(r.Context(), title, modelID)
 		if err != nil {
 			writeAIError(w, err)
 			return
@@ -280,9 +514,25 @@ func (s *Server) handleAIConversationResource(w http.ResponseWriter, r *http.Req
 		if !decodeAIRequest(w, r, &request) {
 			return
 		}
-		if err := s.ai.RenameConversation(r.Context(), id, request.Title); err != nil {
-			writeAIError(w, err)
+		if request.Title == nil && request.ModelID == nil {
+			writeError(w, http.StatusBadRequest, "AI 会话更新不能为空")
 			return
+		}
+		if request.Title != nil {
+			if err := s.ai.RenameConversation(r.Context(), id, *request.Title); err != nil {
+				writeAIError(w, err)
+				return
+			}
+		}
+		if request.ModelID != nil {
+			modelID, _, valid := decodeNullableModelID(w, request.ModelID)
+			if !valid {
+				return
+			}
+			if _, err := s.ai.SetConversationModel(r.Context(), id, modelID); err != nil {
+				writeAIError(w, err)
+				return
+			}
 		}
 		state, err := s.ai.ConversationState(r.Context(), id, 50)
 		if err != nil {
@@ -428,15 +678,36 @@ func aiAuditCallback(r *http.Request) serverai.AuditCallback {
 		result := serveraudit.ResultSuccess
 		if event.Status == "failure" {
 			result = serveraudit.ResultFailure
-		} else if event.Status == "pending" || event.Status == "running" {
+		} else if event.Status == "pending" || event.Status == "running" || event.Status == "accepted" {
 			result = serveraudit.ResultAccepted
 		}
-		metadata := map[string]string{"tool_name": event.ToolCall.ToolName, "risk": event.ToolCall.Risk, "status": event.Status}
+		metadata := map[string]string{"status": event.Status}
+		if event.ToolCall.ToolName != "" {
+			metadata["tool_name"] = event.ToolCall.ToolName
+		}
+		if event.ToolCall.Risk != "" {
+			metadata["risk"] = event.ToolCall.Risk
+		}
 		if event.ProviderID != "" {
 			metadata["provider_id"] = event.ProviderID
 		}
+		if event.ModelID != "" {
+			metadata["model_id"] = event.ModelID
+		}
 		if event.Model != "" {
 			metadata["model"] = event.Model
+		}
+		if event.RequestedProviderID != "" {
+			metadata["requested_provider_id"] = event.RequestedProviderID
+		}
+		if event.RequestedModelID != "" {
+			metadata["requested_model_id"] = event.RequestedModelID
+		}
+		if event.RequestedModel != "" {
+			metadata["requested_model"] = event.RequestedModel
+		}
+		if event.FallbackUsed {
+			metadata["fallback_used"] = "true"
 		}
 		serveraudit.Record(r, serveraudit.RecordOptions{Module: "ai", Action: event.Action,
 			TargetType: event.ToolCall.TargetType, TargetID: event.ToolCall.TargetID,
@@ -444,6 +715,29 @@ func aiAuditCallback(r *http.Request) serverai.AuditCallback {
 			Result: result, Summary: event.Status, Duration: event.Duration,
 			Metadata: metadata})
 	}
+}
+
+func decodeNullableModelID(w http.ResponseWriter, raw json.RawMessage) (*string, bool, bool) {
+	if len(raw) == 0 {
+		return nil, false, true
+	}
+	var value *string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		writeError(w, http.StatusBadRequest, "模型 ID 格式无效")
+		return nil, true, false
+	}
+	if value == nil {
+		return nil, true, true
+	}
+	normalized := strings.TrimSpace(*value)
+	if normalized == "" {
+		return nil, true, true
+	}
+	if len(normalized) > 128 {
+		writeError(w, http.StatusBadRequest, "模型 ID 格式无效")
+		return nil, true, false
+	}
+	return &normalized, true, true
 }
 
 func decodeAIRequest(w http.ResponseWriter, r *http.Request, target any) bool {

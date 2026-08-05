@@ -392,6 +392,11 @@ func sqliteMigrationStatements() []string {
 					base_url TEXT NOT NULL,
 					model TEXT NOT NULL,
 					api_key_ciphertext TEXT NOT NULL DEFAULT '',
+					enabled INTEGER NOT NULL DEFAULT 1,
+					discovery_status TEXT NOT NULL DEFAULT 'unknown',
+					discovery_latency_ms INTEGER NOT NULL DEFAULT 0,
+					discovered_at TEXT,
+					discovery_error TEXT NOT NULL DEFAULT '',
 					is_default INTEGER NOT NULL DEFAULT 0,
 					chat_capable INTEGER NOT NULL DEFAULT 0,
 					tools_capable INTEGER NOT NULL DEFAULT 0,
@@ -402,25 +407,56 @@ func sqliteMigrationStatements() []string {
 					updated_at TEXT NOT NULL
 				);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_providers_default ON ai_providers(is_default) WHERE is_default = 1;`,
+		`CREATE TABLE IF NOT EXISTS ai_provider_models (
+					id TEXT PRIMARY KEY,
+					provider_id TEXT NOT NULL,
+					model_id TEXT NOT NULL,
+					display_name TEXT NOT NULL DEFAULT '',
+					enabled INTEGER NOT NULL DEFAULT 1,
+					chat_capable INTEGER NOT NULL DEFAULT 0,
+					tools_capable INTEGER NOT NULL DEFAULT 0,
+					probe_status TEXT NOT NULL DEFAULT 'unknown',
+					probe_latency_ms INTEGER NOT NULL DEFAULT 0,
+					probed_at TEXT,
+					probe_error TEXT NOT NULL DEFAULT '',
+					is_default INTEGER NOT NULL DEFAULT 0,
+					is_fallback INTEGER NOT NULL DEFAULT 0,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL,
+					UNIQUE (provider_id, model_id),
+					FOREIGN KEY (provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE
+				);`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_provider_models_provider ON ai_provider_models(provider_id, created_at, id);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_provider_models_default ON ai_provider_models(is_default) WHERE is_default = 1;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_provider_models_fallback ON ai_provider_models(is_fallback) WHERE is_fallback = 1;`,
 		`CREATE TABLE IF NOT EXISTS ai_conversations (
 					id TEXT PRIMARY KEY,
 					title TEXT NOT NULL,
+					model_id TEXT,
 					created_at TEXT NOT NULL,
-					updated_at TEXT NOT NULL
+					updated_at TEXT NOT NULL,
+					FOREIGN KEY (model_id) REFERENCES ai_provider_models(id) ON DELETE SET NULL
 				);`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_conversations_updated ON ai_conversations(updated_at DESC, id DESC);`,
 		`CREATE TABLE IF NOT EXISTS ai_turns (
 					id TEXT PRIMARY KEY,
 					conversation_id TEXT NOT NULL,
+					model_id TEXT,
 					provider_id TEXT NOT NULL DEFAULT '',
 					provider_name TEXT NOT NULL,
 					protocol TEXT NOT NULL,
 					model TEXT NOT NULL,
+					requested_provider_id TEXT NOT NULL DEFAULT '',
+					requested_provider_name TEXT NOT NULL DEFAULT '',
+					requested_model_id TEXT,
+					requested_model TEXT NOT NULL DEFAULT '',
+					fallback_used INTEGER NOT NULL DEFAULT 0,
 					status TEXT NOT NULL,
 					error_code TEXT NOT NULL DEFAULT '',
 					created_at TEXT NOT NULL,
 					updated_at TEXT NOT NULL,
-					FOREIGN KEY (conversation_id) REFERENCES ai_conversations(id) ON DELETE CASCADE
+					FOREIGN KEY (conversation_id) REFERENCES ai_conversations(id) ON DELETE CASCADE,
+					FOREIGN KEY (model_id) REFERENCES ai_provider_models(id) ON DELETE SET NULL
 				);`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_turns_conversation_created ON ai_turns(conversation_id, created_at DESC, id DESC);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_turns_active ON ai_turns(conversation_id) WHERE status IN ('running', 'awaiting_confirmation');`,
@@ -839,6 +875,11 @@ func mysqlMigrationStatements() []string {
 					base_url VARCHAR(2048) NOT NULL,
 					model VARCHAR(255) NOT NULL,
 					api_key_ciphertext LONGTEXT NOT NULL,
+					enabled BOOLEAN NOT NULL DEFAULT 1,
+					discovery_status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+					discovery_latency_ms INT NOT NULL DEFAULT 0,
+					discovered_at VARCHAR(64),
+					discovery_error VARCHAR(512) NOT NULL DEFAULT '',
 					is_default BOOLEAN NOT NULL DEFAULT 0,
 					chat_capable BOOLEAN NOT NULL DEFAULT 0,
 					tools_capable BOOLEAN NOT NULL DEFAULT 0,
@@ -853,9 +894,34 @@ func mysqlMigrationStatements() []string {
 		`ALTER TABLE ai_providers ADD COLUMN default_marker VARCHAR(1) NULL;`,
 		`UPDATE ai_providers SET default_marker = '1' WHERE is_default = 1;`,
 		`CREATE UNIQUE INDEX uq_ai_providers_default ON ai_providers(default_marker);`,
+		`CREATE TABLE IF NOT EXISTS ai_provider_models (
+					id VARCHAR(36) PRIMARY KEY,
+					provider_id VARCHAR(36) NOT NULL,
+					model_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+					display_name VARCHAR(255) NOT NULL DEFAULT '',
+					enabled BOOLEAN NOT NULL DEFAULT 1,
+					chat_capable BOOLEAN NOT NULL DEFAULT 0,
+					tools_capable BOOLEAN NOT NULL DEFAULT 0,
+					probe_status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+					probe_latency_ms INT NOT NULL DEFAULT 0,
+					probed_at VARCHAR(64),
+					probe_error VARCHAR(512) NOT NULL DEFAULT '',
+					is_default BOOLEAN NOT NULL DEFAULT 0,
+					is_fallback BOOLEAN NOT NULL DEFAULT 0,
+					default_marker VARCHAR(1) NULL,
+					fallback_marker VARCHAR(1) NULL,
+					created_at VARCHAR(64) NOT NULL,
+					updated_at VARCHAR(64) NOT NULL,
+					UNIQUE KEY uq_ai_provider_models_identity (provider_id, model_id),
+					UNIQUE KEY uq_ai_provider_models_default (default_marker),
+					UNIQUE KEY uq_ai_provider_models_fallback (fallback_marker),
+					INDEX idx_ai_provider_models_provider (provider_id, created_at, id),
+					FOREIGN KEY (provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE
+				);`,
 		`CREATE TABLE IF NOT EXISTS ai_conversations (
 					id VARCHAR(36) PRIMARY KEY,
 					title VARCHAR(255) NOT NULL,
+					model_id VARCHAR(36) NULL,
 					created_at VARCHAR(64) NOT NULL,
 					updated_at VARCHAR(64) NOT NULL,
 					INDEX idx_ai_conversations_updated (updated_at, id)
@@ -863,10 +929,16 @@ func mysqlMigrationStatements() []string {
 		`CREATE TABLE IF NOT EXISTS ai_turns (
 					id VARCHAR(36) PRIMARY KEY,
 					conversation_id VARCHAR(36) NOT NULL,
+					model_id VARCHAR(36) NULL,
 					provider_id VARCHAR(36) NOT NULL DEFAULT '',
 					provider_name VARCHAR(191) NOT NULL,
 					protocol VARCHAR(64) NOT NULL,
 					model VARCHAR(255) NOT NULL,
+					requested_provider_id VARCHAR(36) NOT NULL DEFAULT '',
+					requested_provider_name VARCHAR(191) NOT NULL DEFAULT '',
+					requested_model_id VARCHAR(36) NULL,
+					requested_model VARCHAR(255) NOT NULL DEFAULT '',
+					fallback_used BOOLEAN NOT NULL DEFAULT 0,
 					status VARCHAR(32) NOT NULL,
 					error_code VARCHAR(64) NOT NULL DEFAULT '',
 					active_marker VARCHAR(1) NULL,
@@ -954,8 +1026,105 @@ func migrateStatements(db *sql.DB, dialect Dialect, statements []string) error {
 			return err
 		}
 	}
+	for _, statement := range aiCompatibilityColumnStatements(dialect) {
+		if err := addColumnIfMissing(db, statement); err != nil {
+			return err
+		}
+	}
+	for _, statement := range aiUpgradeStatements(dialect) {
+		if _, err := db.Exec(statement); err != nil && !isIgnorableMigrationError(err) {
+			return err
+		}
+	}
 	_, err := db.Exec(`UPDATE nodes SET agent_mode = COALESCE(NULLIF(agent_mode, ''), 'normal'), agent_user = COALESCE(agent_user, '')`)
 	return err
+}
+
+func aiCompatibilityColumnStatements(dialect Dialect) []string {
+	if dialect == DialectMySQL {
+		return []string{
+			`ALTER TABLE ai_providers ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1`,
+			`ALTER TABLE ai_providers ADD COLUMN discovery_status VARCHAR(32) NOT NULL DEFAULT 'unknown'`,
+			`ALTER TABLE ai_providers ADD COLUMN discovery_latency_ms INT NOT NULL DEFAULT 0`,
+			`ALTER TABLE ai_providers ADD COLUMN discovered_at VARCHAR(64)`,
+			`ALTER TABLE ai_providers ADD COLUMN discovery_error VARCHAR(512) NOT NULL DEFAULT ''`,
+			`ALTER TABLE ai_conversations ADD COLUMN model_id VARCHAR(36) NULL`,
+			`ALTER TABLE ai_turns ADD COLUMN model_id VARCHAR(36) NULL`,
+			`ALTER TABLE ai_turns ADD COLUMN requested_provider_id VARCHAR(36) NOT NULL DEFAULT ''`,
+			`ALTER TABLE ai_turns ADD COLUMN requested_provider_name VARCHAR(191) NOT NULL DEFAULT ''`,
+			`ALTER TABLE ai_turns ADD COLUMN requested_model_id VARCHAR(36) NULL`,
+			`ALTER TABLE ai_turns ADD COLUMN requested_model VARCHAR(255) NOT NULL DEFAULT ''`,
+			`ALTER TABLE ai_turns ADD COLUMN fallback_used BOOLEAN NOT NULL DEFAULT 0`,
+		}
+	}
+	return []string{
+		`ALTER TABLE ai_providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE ai_providers ADD COLUMN discovery_status TEXT NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE ai_providers ADD COLUMN discovery_latency_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE ai_providers ADD COLUMN discovered_at TEXT`,
+		`ALTER TABLE ai_providers ADD COLUMN discovery_error TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_conversations ADD COLUMN model_id TEXT REFERENCES ai_provider_models(id) ON DELETE SET NULL`,
+		`ALTER TABLE ai_turns ADD COLUMN model_id TEXT REFERENCES ai_provider_models(id) ON DELETE SET NULL`,
+		`ALTER TABLE ai_turns ADD COLUMN requested_provider_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_turns ADD COLUMN requested_provider_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_turns ADD COLUMN requested_model_id TEXT`,
+		`ALTER TABLE ai_turns ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_turns ADD COLUMN fallback_used INTEGER NOT NULL DEFAULT 0`,
+	}
+}
+
+func aiUpgradeStatements(dialect Dialect) []string {
+	markerMissing := `NOT EXISTS (SELECT 1 FROM settings WHERE key = 'migration.ai_provider_models_v1')`
+	insertModels := `INSERT INTO ai_provider_models
+		(id, provider_id, model_id, display_name, enabled, chat_capable, tools_capable,
+		 probe_status, probe_latency_ms, probed_at, probe_error, is_default, is_fallback,
+		 created_at, updated_at)
+		SELECT p.id, p.id, p.model, '', 1, p.chat_capable, p.tools_capable,
+		 p.probe_status, 0, p.probed_at, p.probe_error, p.is_default, 0,
+		 p.created_at, p.updated_at
+		FROM ai_providers p
+		WHERE TRIM(p.model) <> '' AND ` + markerMissing + `
+		 AND NOT EXISTS (SELECT 1 FROM ai_provider_models m WHERE m.provider_id = p.id AND m.model_id = p.model)`
+	backfillConversations := `UPDATE ai_conversations SET model_id =
+		(SELECT id FROM ai_provider_models WHERE is_default = 1 LIMIT 1)
+		WHERE model_id IS NULL AND ` + markerMissing
+	backfillTurns := `UPDATE ai_turns SET
+		model_id = COALESCE(model_id, (SELECT m.id FROM ai_provider_models m WHERE m.provider_id = ai_turns.provider_id AND m.model_id = ai_turns.model LIMIT 1)),
+		requested_provider_id = CASE WHEN requested_provider_id = '' THEN provider_id ELSE requested_provider_id END,
+		requested_provider_name = CASE WHEN requested_provider_name = '' THEN provider_name ELSE requested_provider_name END,
+		requested_model_id = COALESCE(requested_model_id, (SELECT m.id FROM ai_provider_models m WHERE m.provider_id = ai_turns.provider_id AND m.model_id = ai_turns.model LIMIT 1)),
+		requested_model = CASE WHEN requested_model = '' THEN model ELSE requested_model END`
+	markComplete := `INSERT INTO settings (key, value, updated_at)
+		SELECT 'migration.ai_provider_models_v1', 'complete', CURRENT_TIMESTAMP
+		WHERE ` + markerMissing
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_ai_conversations_model ON ai_conversations(model_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_turns_model ON ai_turns(model_id)`,
+	}
+	if dialect == DialectMySQL {
+		markerMissing = "NOT EXISTS (SELECT 1 FROM settings WHERE `key` = 'migration.ai_provider_models_v1')"
+		insertModels = `INSERT INTO ai_provider_models
+			(id, provider_id, model_id, display_name, enabled, chat_capable, tools_capable,
+			 probe_status, probe_latency_ms, probed_at, probe_error, is_default, is_fallback,
+			 default_marker, fallback_marker, created_at, updated_at)
+			SELECT p.id, p.id, p.model, '', 1, p.chat_capable, p.tools_capable,
+			 p.probe_status, 0, p.probed_at, p.probe_error, p.is_default, 0,
+			 CASE WHEN p.is_default = 1 THEN '1' ELSE NULL END, NULL, p.created_at, p.updated_at
+			FROM ai_providers p
+			WHERE TRIM(p.model) <> '' AND ` + markerMissing + `
+			 AND NOT EXISTS (SELECT 1 FROM ai_provider_models m WHERE m.provider_id = p.id AND m.model_id = p.model)`
+		backfillConversations = `UPDATE ai_conversations SET model_id =
+			(SELECT id FROM ai_provider_models WHERE is_default = 1 LIMIT 1)
+			WHERE model_id IS NULL AND ` + markerMissing
+		markComplete = "INSERT INTO settings (`key`, value, updated_at) SELECT 'migration.ai_provider_models_v1', 'complete', CURRENT_TIMESTAMP WHERE " + markerMissing
+		indexes = []string{
+			`CREATE INDEX idx_ai_conversations_model ON ai_conversations(model_id)`,
+			`CREATE INDEX idx_ai_turns_model ON ai_turns(model_id)`,
+			`ALTER TABLE ai_conversations ADD CONSTRAINT fk_ai_conversations_model FOREIGN KEY (model_id) REFERENCES ai_provider_models(id) ON DELETE SET NULL`,
+			`ALTER TABLE ai_turns ADD CONSTRAINT fk_ai_turns_model FOREIGN KEY (model_id) REFERENCES ai_provider_models(id) ON DELETE SET NULL`,
+		}
+	}
+	return append([]string{insertModels, backfillConversations, backfillTurns, markComplete}, indexes...)
 }
 
 func uptimeIncidentCompatibilityColumnStatements(dialect Dialect) []string {
@@ -1079,5 +1248,6 @@ func addColumnIfMissing(db *sql.DB, statement string) error {
 
 func isIgnorableMigrationError(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "duplicate column") || strings.Contains(message, "duplicate key name")
+	return strings.Contains(message, "duplicate column") || strings.Contains(message, "duplicate key name") ||
+		strings.Contains(message, "duplicate foreign key constraint")
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestServiceInitializeAllowsProvidersWithoutEncryptedSecrets(t *testing.T) {
 	aiStore := store.NewAIStore(database, serverdb.DialectSQLite)
 	if _, err := aiStore.CreateProvider(t.Context(), store.AIProvider{
 		ID: "provider-no-key", Name: "No key", Protocol: ProtocolOpenAIChatCompletions,
-		BaseURL: "http://model.internal/v1", Model: "model-a", ProbeStatus: "unknown",
+		BaseURL: "http://model.internal/v1", Model: "model-a", Enabled: true, ProbeStatus: "unknown",
 	}); err != nil {
 		t.Fatalf("create provider without secret: %v", err)
 	}
@@ -261,5 +262,240 @@ func TestServiceRepeatedConfirmationExecutesToolOnce(t *testing.T) {
 	}
 	if executions.Load() != 1 {
 		t.Fatalf("tool executions = %d, want 1", executions.Load())
+	}
+}
+
+func TestServiceConfirmationProjectsAcceptedAndUnsupportedStatuses(t *testing.T) {
+	tests := []struct {
+		name            string
+		result          SafeToolResult
+		executeErr      error
+		wantStatus      string
+		wantMessagePart string
+	}{
+		{name: "accepted", result: SafeToolResult{Summary: "queued", Status: "accepted"}, wantStatus: "accepted", wantMessagePart: "操作已接受，正在处理中。"},
+		{name: "unsupported", executeErr: ErrUnsupportedTool, wantStatus: "unsupported", wantMessagePart: "当前操作不受支持，未执行。"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			registry := &Registry{tools: make(map[string]registeredTool)}
+			definition := noArgumentDefinition("test_confirm_status", "Test confirmation status")
+			registry.add(registeredTool{
+				definition: definition,
+				risk:       RiskConfirm,
+				validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
+					if err := strictArguments(raw, &struct{}{}); err != nil {
+						return nil, ToolTarget{}, ErrInvalidArguments
+					}
+					return json.RawMessage(`{}`), ToolTarget{Type: "node", ID: "node-1", Name: "Node One", NodeID: "node-1"}, nil
+				},
+				execute: func(context.Context, json.RawMessage) (SafeToolResult, error) {
+					return test.result, test.executeErr
+				},
+			})
+			adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+				return ChatResponse{ToolCalls: []ToolCall{{ID: "call-1", Name: definition.Name, Arguments: json.RawMessage(`{}`)}}}, nil
+			}}
+			service, aiStore, _ := newServiceTestFixture(t, registry, adapter)
+			provider := createCapableServiceProvider(t, service, aiStore)
+			conversation, err := service.CreateConversation(t.Context(), "Confirmation status")
+			if err != nil {
+				t.Fatalf("create conversation: %v", err)
+			}
+			proposal, err := service.Send(t.Context(), conversation.ID, provider.ID, "run it", nil)
+			if err != nil || proposal.ToolCall == nil {
+				t.Fatalf("Send = result:%+v err:%v", proposal, err)
+			}
+			confirmed, err := service.Confirm(t.Context(), proposal.ToolCall.ID, nil)
+			if err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+			if confirmed.ToolCall == nil || confirmed.ToolCall.Status != test.wantStatus {
+				t.Fatalf("confirmed tool call = %+v, want status %q", confirmed.ToolCall, test.wantStatus)
+			}
+			if confirmed.Message == nil || !strings.Contains(confirmed.Message.Content, test.wantMessagePart) {
+				t.Fatalf("confirmed message = %+v, want %q", confirmed.Message, test.wantMessagePart)
+			}
+		})
+	}
+}
+
+func TestServiceDiscoveryImportAndSelectedModelProbe(t *testing.T) {
+	var listCalls, probeCalls atomic.Int32
+	adapter := serviceTestAdapter{
+		complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+			return ChatResponse{Content: "unused"}, nil
+		},
+		models: func(_ context.Context, credential ProviderCredential) ([]string, error) {
+			listCalls.Add(1)
+			if credential.Model != "" {
+				t.Fatalf("discovery credential model = %q, want empty", credential.Model)
+			}
+			return []string{"model-b", "model-a", "model-b", ""}, nil
+		},
+		probe: func(_ context.Context, credential ProviderCredential) (Capabilities, error) {
+			probeCalls.Add(1)
+			if credential.Model != "model-b" {
+				t.Fatalf("probe credential model = %q, want model-b", credential.Model)
+			}
+			return Capabilities{Chat: true, Tools: true}, nil
+		},
+	}
+	service, _, _ := newServiceTestFixture(t, nil, adapter)
+	disabled := false
+	provider, err := service.CreateProvider(t.Context(), ProviderInput{
+		Name: "Connection only", Protocol: ProtocolOpenAIChatCompletions,
+		BaseURL: "https://model.test/v1", Enabled: &disabled,
+	})
+	if err != nil {
+		t.Fatalf("create connection-only provider: %v", err)
+	}
+	if provider.Enabled || len(provider.Models) != 0 || provider.Model != "" {
+		t.Fatalf("connection-only provider = %+v", provider)
+	}
+	models, err := service.DiscoverProvider(t.Context(), provider.ID)
+	if err != nil {
+		t.Fatalf("discover provider: %v", err)
+	}
+	if listCalls.Load() != 1 || probeCalls.Load() != 0 || len(models) != 2 || models[0] != "model-b" || models[1] != "model-a" {
+		t.Fatalf("discovery = models:%v list calls:%d probe calls:%d", models, listCalls.Load(), probeCalls.Load())
+	}
+	imported, err := service.ImportModels(t.Context(), provider.ID, []ModelInput{{ModelID: "model-b", DisplayName: "Primary"}})
+	if err != nil {
+		t.Fatalf("import model: %v", err)
+	}
+	if len(imported) != 1 {
+		t.Fatalf("imported models = %+v", imported)
+	}
+	if _, err := service.TestModel(t.Context(), imported[0].ID); !errors.Is(err, ErrProviderCapability) {
+		t.Fatalf("probe disabled model error = %v, want ErrProviderCapability", err)
+	}
+	if probeCalls.Load() != 0 {
+		t.Fatalf("disabled model probe calls = %d, want 0", probeCalls.Load())
+	}
+	enabled := true
+	provider, err = service.UpdateProvider(t.Context(), provider.ID, ProviderUpdate{
+		Name: provider.Name, Protocol: provider.Protocol, BaseURL: provider.BaseURL, Enabled: &enabled,
+	})
+	if err != nil {
+		t.Fatalf("enable provider: %v", err)
+	}
+	if !provider.Enabled {
+		t.Fatalf("enabled provider = %+v", provider)
+	}
+	probed, err := service.TestModel(t.Context(), imported[0].ID)
+	if err != nil {
+		t.Fatalf("probe selected model: %v", err)
+	}
+	if probeCalls.Load() != 1 || !probed.ChatCapable || !probed.ToolsCapable || probed.ProbeStatus != "success" {
+		t.Fatalf("probed model = %+v, calls = %d", probed, probeCalls.Load())
+	}
+}
+
+func configureFallbackService(t *testing.T, service *Service, aiStore *store.AIStore) (store.AIProviderModel, store.AIProviderModel) {
+	t.Helper()
+	provider := createCapableServiceProvider(t, service, aiStore)
+	if len(provider.Models) != 1 {
+		t.Fatalf("initial provider models = %+v", provider.Models)
+	}
+	imported, err := service.ImportModels(t.Context(), provider.ID, []ModelInput{{ModelID: "model-b", DisplayName: "Fallback"}})
+	if err != nil {
+		t.Fatalf("import fallback model: %v", err)
+	}
+	if err := aiStore.SaveModelProbe(t.Context(), imported[0].ID, true, true, "success", 7, "", provider.CreatedAt); err != nil {
+		t.Fatalf("probe fallback model: %v", err)
+	}
+	defaultModel, err := service.GetModel(t.Context(), provider.Models[0].ID)
+	if err != nil {
+		t.Fatalf("get default model: %v", err)
+	}
+	fallbackModel, err := service.GetModel(t.Context(), imported[0].ID)
+	if err != nil {
+		t.Fatalf("get fallback model: %v", err)
+	}
+	defaultID, fallbackID := defaultModel.ID, fallbackModel.ID
+	if _, err := service.SetRouting(t.Context(), &defaultID, &fallbackID); err != nil {
+		t.Fatalf("set service routing: %v", err)
+	}
+	return defaultModel, fallbackModel
+}
+
+func TestServiceFallsBackOnceBeforeToolsAndPersistsActualModel(t *testing.T) {
+	var calls []string
+	adapter := serviceTestAdapter{complete: func(_ context.Context, credential ProviderCredential, _ ChatRequest) (ChatResponse, error) {
+		calls = append(calls, credential.Model)
+		if credential.Model == "model-a" {
+			return ChatResponse{}, &AdapterError{Kind: ErrorRateLimit, Message: "rate limited"}
+		}
+		return ChatResponse{Content: "fallback completed"}, nil
+	}}
+	service, aiStore, _ := newServiceTestFixture(t, nil, adapter)
+	defaultModel, fallbackModel := configureFallbackService(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "Fallback")
+	if err != nil {
+		t.Fatalf("create default conversation: %v", err)
+	}
+	if conversation.ModelID == nil || *conversation.ModelID != defaultModel.ID {
+		t.Fatalf("new conversation model = %v, want %s", conversation.ModelID, defaultModel.ID)
+	}
+	var progress []ProgressEvent
+	var audits []AuditEvent
+	result, err := service.SendWithProgress(t.Context(), conversation.ID, "", "check status",
+		func(event AuditEvent) { audits = append(audits, event) },
+		func(event ProgressEvent) { progress = append(progress, event) })
+	if err != nil {
+		t.Fatalf("send with fallback: %v", err)
+	}
+	if len(calls) != 2 || calls[0] != "model-a" || calls[1] != "model-b" {
+		t.Fatalf("adapter calls = %v", calls)
+	}
+	if !result.Turn.FallbackUsed || result.Turn.ModelID == nil || *result.Turn.ModelID != fallbackModel.ID ||
+		result.Turn.RequestedModelID == nil || *result.Turn.RequestedModelID != defaultModel.ID ||
+		result.Turn.Model != "model-b" || result.Turn.RequestedModel != "model-a" {
+		t.Fatalf("fallback turn = %+v", result.Turn)
+	}
+	if result.Message == nil || result.Message.Model != "model-b" || result.Message.Content != "fallback completed" {
+		t.Fatalf("fallback message = %+v", result.Message)
+	}
+	fallbackProgress := 0
+	for _, event := range progress {
+		if event.Phase == ProgressFallback {
+			fallbackProgress++
+			if event.Model != "model-b" {
+				t.Fatalf("fallback progress = %+v", event)
+			}
+		}
+	}
+	if fallbackProgress != 1 {
+		t.Fatalf("fallback progress count = %d, events = %+v", fallbackProgress, progress)
+	}
+	if len(audits) != 1 || audits[0].Action != "model_fallback" || !audits[0].FallbackUsed ||
+		audits[0].RequestedModelID != defaultModel.ID || audits[0].ModelID != fallbackModel.ID {
+		t.Fatalf("fallback audits = %+v", audits)
+	}
+}
+
+func TestServiceDoesNotFallbackForAuthenticationFailure(t *testing.T) {
+	var calls []string
+	adapter := serviceTestAdapter{complete: func(_ context.Context, credential ProviderCredential, _ ChatRequest) (ChatResponse, error) {
+		calls = append(calls, credential.Model)
+		return ChatResponse{}, &AdapterError{Kind: ErrorAuthentication, Message: "authentication failed"}
+	}}
+	service, aiStore, _ := newServiceTestFixture(t, nil, adapter)
+	defaultModel, _ := configureFallbackService(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "No fallback")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	result, err := service.Send(t.Context(), conversation.ID, "", "check status", nil)
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) || adapterErr.Kind != ErrorAuthentication {
+		t.Fatalf("send error = %v, want authentication AdapterError", err)
+	}
+	if len(calls) != 1 || calls[0] != "model-a" {
+		t.Fatalf("ineligible fallback calls = %v", calls)
+	}
+	if result.Turn.FallbackUsed || result.Turn.RequestedModelID == nil || *result.Turn.RequestedModelID != defaultModel.ID {
+		t.Fatalf("ineligible fallback turn = %+v", result.Turn)
 	}
 }

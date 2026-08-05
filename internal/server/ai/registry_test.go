@@ -18,6 +18,16 @@ func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
 		"list_uptime_monitors",
 		"get_log_snapshot",
 		"list_k8s_clusters",
+		"get_docker_snapshot",
+		"get_docker_resources",
+		"list_compose_projects",
+		"list_node_processes",
+		"list_systemd_services",
+		"get_k8s_cluster_summary",
+		"list_k8s_resources",
+		"list_automation_runs",
+		"list_audit_events",
+		"diagnose_node",
 		"reboot_node",
 		"upgrade_agent",
 		"docker_container_action",
@@ -41,9 +51,18 @@ func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
 	for _, forbidden := range []string{
 		"shell", "exec", "docker_exec", "docker_delete", "docker_prune",
 		"compose_down", "file_write", "file_delete", "kubernetes_apply",
+		"cc-switch", "cc_switch", "ccswitch", "import_cc_switch", "cc-switch-import",
 	} {
 		if _, ok := registry.tools[forbidden]; ok {
 			t.Fatalf("forbidden tool %q is registered", forbidden)
+		}
+	}
+	for _, definition := range definitions {
+		name := strings.ToLower(definition.Name)
+		for _, marker := range []string{"cc-switch", "cc_switch", "ccswitch"} {
+			if strings.Contains(name, marker) {
+				t.Fatalf("cc-switch configuration import concept is registered as %q", definition.Name)
+			}
 		}
 	}
 }
@@ -62,6 +81,11 @@ func TestRegistryRejectsUnknownFieldsTrailingJSONAndForbiddenEnums(t *testing.T)
 		{name: "container delete", tool: "docker_container_action", raw: `{"node_id":"node-1","container_id":"container-1","action":"delete"}`},
 		{name: "compose down", tool: "compose_service_action", raw: `{"node_id":"node-1","project_name":"panel","action":"down"}`},
 		{name: "systemd enable", tool: "systemd_service_action", raw: `{"node_id":"node-1","service_name":"panel.service","action":"enable"}`},
+		{name: "k8s resource enum", tool: "list_k8s_resources", raw: `{"cluster_id":"cluster-1","resource":"raw"}`},
+		{name: "k8s resource unknown field", tool: "list_k8s_resources", raw: `{"cluster_id":"cluster-1","resource":"pods","path":"/api"}`},
+		{name: "process limit", tool: "list_node_processes", raw: `{"node_id":"node-1","limit":51}`},
+		{name: "audit result", tool: "list_audit_events", raw: `{"result":"pending"}`},
+		{name: "automation status", tool: "list_automation_runs", raw: `{"status":"pending"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

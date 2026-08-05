@@ -1,7 +1,7 @@
 {
   "name": "mizupanel-web",
   "private": true,
-  "version": "0.1.14",
+  "version": "0.1.17",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

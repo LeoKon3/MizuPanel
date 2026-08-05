@@ -272,6 +272,8 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 	if server.ai != nil {
 		mux.HandleFunc("/api/ai/providers", server.requireAuth(server.handleAIProviders))
 		mux.HandleFunc("/api/ai/providers/", server.requireAuth(server.handleAIProviders))
+		mux.HandleFunc("/api/ai/models/", server.requireAuth(server.handleAIModels))
+		mux.HandleFunc("/api/ai/routing", server.requireAuth(server.handleAIRouting))
 		mux.HandleFunc("/api/ai/conversations", server.requireAuth(server.handleAIConversations))
 		mux.HandleFunc("/api/ai/conversations/", server.requireAuth(server.handleAIConversations))
 		mux.HandleFunc("/api/ai/tool-calls/", server.requireAuth(server.handleAIToolCalls))

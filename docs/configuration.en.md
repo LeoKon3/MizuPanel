@@ -215,13 +215,15 @@ When enabled, node management, system settings, Agent installation, automation t
 
 ## AI Providers And Local Data
 
-The **AI Model Configuration** section in System Settings can store multiple OpenAI Chat Completions compatible Providers. Each profile has a name, Base URL, Model, and optional API Key. A Provider can only become the default or be used for operations after both chat and function-tool capability checks pass. The Base URL should include the compatible API root, for example:
+The **AI Model Configuration** section in System Settings separates connections from models. Each OpenAI Chat Completions compatible Provider stores a name, Base URL, and optional API Key while owning multiple child models. After saving a connection, discover its bounded `/models` list and selectively import IDs, or add a model manually when the endpoint does not implement model discovery. Discovery does not automatically run capability calls for every result; only explicitly configured models are probed individually for chat and function-tool support. The Base URL should include the compatible API root, for example:
 
 ```text
 http://model.internal:8000/v1
 ```
 
-The Server sends non-streaming requests to `/chat/completions` under the normalized URL. An empty API Key omits Bearer authentication for trusted unauthenticated services on a private network. Saved keys are never echoed: leaving the edit field empty preserves the current key, while replacement and explicit clearing are separate actions.
+The Server sends non-streaming requests to `/chat/completions` under the normalized URL. An empty API Key omits Bearer authentication for trusted unauthenticated services on a private network. Saved keys are never echoed: leaving the edit field empty preserves the current key, while replacement and explicit clearing are separate actions. Changing the Base URL, protocol, or key invalidates connection discovery and every child-model capability result until they are tested again.
+
+Only enabled models with verified chat and tool support can be selected. In a conversation, select a Provider first and then choose one of its models from the second menu; model names have no built-in operational roles. The global default only supplies the initial model for new conversations. Later choices are persisted per conversation and restored when older conversations are reopened, without rewriting historical Provider/model snapshots. A distinct global fallback model may also be configured. It is tried once only for a first-call timeout, rate limit, or upstream-availability failure before any tool call or result exists. Authentication, protocol, capability, cancellation, and post-tool failures never fall back. Completed messages identify the model that actually answered.
 
 ```yaml
 security:
@@ -230,7 +232,7 @@ security:
 
 `MIZUPANEL_AI_KEY_FILE` can override the path. When a Provider is first saved, the Server creates a 32-byte master key with `0600` permissions. If encrypted credentials already exist and the key is missing, damaged, or replaced, the Server refuses decryption instead of silently creating a new key over the problem.
 
-Conversations, ordinary user/assistant messages, model snapshots, turn status, and normalized tool records live in the existing database. System prompts, raw model requests/responses, hidden reasoning, raw tool output, log content, and script bodies are not persisted as conversation history. Model calls are a data-egress boundary, so configure only a trusted internal or third-party model service.
+Conversations, ordinary user/assistant messages, requested/actual model snapshots, fallback state, turn status, and normalized tool records live in the existing database. System prompts, raw model requests/responses, hidden reasoning, raw tool output, log content, and script bodies are not persisted as conversation history. Model calls are a data-egress boundary, so configure only a trusted internal or third-party model service.
 
 ## Alerting
 

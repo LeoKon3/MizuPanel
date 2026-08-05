@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import * as api from '../../api/client'
-import type { AIConversation, AIMessage, AIProvider, AIToolCall } from '../../types'
+import type { AIConversation, AIMessage, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
 import { AIAssistantDrawer, AIWorkspacePage } from './AIAssistant'
 import { type AIAssistantState, useAIAssistantState } from './useAIAssistantState'
 
@@ -14,30 +14,67 @@ vi.mock('../../api/client', () => ({
   getAIConversations: vi.fn(),
   getAIProviders: vi.fn(),
   rejectAIToolCall: vi.fn(),
-  sendAIMessage: vi.fn(),
-  sendAIMessageStream: vi.fn()
+  sendAIMessageStream: vi.fn(),
+  updateAIConversationModel: vi.fn()
 }))
 
-const provider = (id: string, name: string, isDefault = false): AIProvider => ({
-  id,
-  name,
-  protocol: 'openai_chat_completions',
-  base_url: 'http://model.internal/v1',
-  model: `${name}-model`,
-  has_api_key: true,
-  is_default: isDefault,
-  chat_capable: true,
-  tools_capable: true,
-  probe_status: 'success',
-  probed_at: '2026-08-01T00:00:00Z',
-  probe_error: '',
-  created_at: '2026-08-01T00:00:00Z',
-  updated_at: '2026-08-01T00:00:00Z'
-})
+function model(providerID: string, id: string, overrides: Partial<AIProviderModel> = {}): AIProviderModel {
+  return {
+    id,
+    provider_id: providerID,
+    model_id: `${id}-upstream`,
+    display_name: '',
+    enabled: true,
+    chat_capable: true,
+    tools_capable: true,
+    probe_status: 'success',
+    probe_latency_ms: 25,
+    probed_at: '2026-08-01T00:00:00Z',
+    probe_error: '',
+    is_default: false,
+    is_fallback: false,
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+    ...overrides
+  }
+}
+
+function provider(id: string, name: string, models?: AIProviderModel[]): AIProvider {
+  const children = models ?? [model(id, `model-${id}`)]
+  const compatibility = children[0]
+  return {
+    id,
+    name,
+    protocol: 'openai_chat_completions',
+    base_url: 'http://model.internal/v1',
+    enabled: true,
+    discovery_status: 'success',
+    discovery_latency_ms: 18,
+    discovered_at: '2026-08-01T00:00:00Z',
+    discovery_error: '',
+    models: children,
+    model: compatibility?.model_id ?? '',
+    has_api_key: true,
+    is_default: Boolean(compatibility?.is_default),
+    chat_capable: Boolean(compatibility?.chat_capable),
+    tools_capable: Boolean(compatibility?.tools_capable),
+    probe_status: compatibility?.probe_status ?? 'unknown',
+    probed_at: compatibility?.probed_at ?? null,
+    probe_error: compatibility?.probe_error ?? '',
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z'
+  }
+}
+
+const primaryModel = model('provider-1', 'model-1', { is_default: true })
+const secondaryModel = model('provider-1', 'model-2')
+const fallbackModel = model('provider-2', 'model-3', { is_fallback: true })
+const providers = [provider('provider-1', 'Primary', [primaryModel, secondaryModel]), provider('provider-2', 'Secondary', [fallbackModel])]
 
 const conversation: AIConversation = {
   id: 'conversation-1',
   title: 'Current incidents',
+  model_id: primaryModel.id,
   created_at: '2026-08-01T00:00:00Z',
   updated_at: '2026-08-01T00:00:00Z'
 }
@@ -57,24 +94,51 @@ const pendingCall: AIToolCall = {
   updated_at: '2026-08-01T00:00:00Z'
 }
 
+function turn(overrides: Partial<AITurn> = {}): AITurn {
+  return {
+    id: 'turn-1',
+    conversation_id: conversation.id,
+    model_id: primaryModel.id,
+    provider_id: 'provider-1',
+    provider_name: 'Primary',
+    protocol: 'openai_chat_completions',
+    model: primaryModel.model_id,
+    requested_provider_id: 'provider-1',
+    requested_provider_name: 'Primary',
+    requested_model_id: primaryModel.id,
+    requested_model: primaryModel.model_id,
+    fallback_used: false,
+    status: 'completed',
+    error_code: '',
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+    ...overrides
+  }
+}
+
 function assistant(overrides: Partial<AIAssistantState> = {}): AIAssistantState {
   return {
     drawerOpen: true,
     drawerWidth: 480,
-    providers: [provider('provider-1', 'Primary', true)],
+    providers,
     conversations: [conversation],
     activeConversationID: conversation.id,
     conversation: { conversation, messages: [], tool_calls: [] },
     selectedProviderID: 'provider-1',
+    selectedModelID: primaryModel.id,
+    selectingModel: false,
     loading: false,
     sending: false,
+    sendingConversationID: undefined,
     progress: undefined,
+    turnResults: {},
     openDrawer: vi.fn(),
     closeDrawer: vi.fn(),
     setDrawerWidth: vi.fn(),
     ensureLoaded: vi.fn(),
     refreshProviders: vi.fn(),
     selectProvider: vi.fn(),
+    selectModel: vi.fn(),
     selectConversation: vi.fn(),
     newConversation: vi.fn(),
     deleteConversation: vi.fn(),
@@ -92,15 +156,35 @@ function SharedStateHarness() {
   return (
     <>
       <button type="button" onClick={state.openDrawer}>Open assistant</button>
+      <output data-testid="selected-provider">{state.selectedProviderID}</output>
+      <output data-testid="selected-model">{state.selectedModelID}</output>
       <AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />
       <AIWorkspacePage assistant={state} onOpenSettings={vi.fn()} />
     </>
   )
 }
 
+function ToolDecisionHarness({ call }: { call: AIToolCall }) {
+  const state = useAIAssistantState()
+  return (
+    <>
+      <button type="button" onClick={state.openDrawer}>Open assistant</button>
+      <button type="button" onClick={() => void state.confirm(call)}>Confirm tool</button>
+      {state.toast ? <output data-testid="tool-decision-toast">{state.toast.type}:{state.toast.message}</output> : null}
+    </>
+  )
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
+}
+
 describe('AI assistant', () => {
   beforeEach(() => {
-    vi.mocked(api.getAIProviders).mockResolvedValue({ providers: [provider('provider-1', 'Primary', true), provider('provider-2', 'Secondary')] })
+    vi.mocked(api.getAIProviders).mockResolvedValue({ providers })
     vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [] })
   })
 
@@ -108,22 +192,136 @@ describe('AI assistant', () => {
     vi.clearAllMocks()
   })
 
-  test('shares provider selection between the global drawer and full workspace', async () => {
+  test('shares two-stage Provider and model selection between drawer and workspace', async () => {
     render(<SharedStateHarness />)
     fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
 
-    const drawerSelect = await screen.findByLabelText('选择模型', { selector: '#ai-drawer-provider' })
-    const workspaceSelect = screen.getByLabelText('选择模型', { selector: '#ai-workspace-provider' })
-    expect(drawerSelect).toHaveValue('provider-1')
-    expect(workspaceSelect).toHaveValue('provider-1')
+    const drawerProvider = await screen.findByLabelText('选择供应商', { selector: '#ai-drawer-provider' })
+    const drawerModel = screen.getByLabelText('选择模型', { selector: '#ai-drawer-model' })
+    const workspaceProvider = screen.getByLabelText('选择供应商', { selector: '#ai-workspace-provider' })
+    const workspaceModel = screen.getByLabelText('选择模型', { selector: '#ai-workspace-model' })
+    expect(drawerProvider).toHaveValue('provider-1')
+    expect(workspaceProvider).toHaveValue('provider-1')
+    expect(drawerModel).toHaveValue(primaryModel.id)
+    expect(workspaceModel).toHaveValue(primaryModel.id)
+    expect(within(drawerModel).getByRole('option', { name: /model-2-upstream/ })).toBeInTheDocument()
+    expect(within(drawerModel).queryByRole('option', { name: /model-3-upstream/ })).not.toBeInTheDocument()
 
-    fireEvent.change(drawerSelect, { target: { value: 'provider-2' } })
-    expect(workspaceSelect).toHaveValue('provider-2')
-    expect(api.getAIProviders).toHaveBeenCalledTimes(1)
+    fireEvent.change(drawerProvider, { target: { value: 'provider-2' } })
+    await waitFor(() => expect(workspaceProvider).toHaveValue('provider-2'))
+    expect(drawerModel).toHaveValue('')
+    expect(screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })).toBeDisabled()
+    expect(within(drawerModel).getByRole('option', { name: /model-3-upstream/ })).toBeInTheDocument()
+    expect(api.updateAIConversationModel).not.toHaveBeenCalled()
+
+    fireEvent.change(drawerModel, { target: { value: fallbackModel.id } })
+    await waitFor(() => expect(workspaceModel).toHaveValue(fallbackModel.id))
+    expect(screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })).not.toBeDisabled()
+    expect(api.updateAIConversationModel).not.toHaveBeenCalled()
   })
 
-  test('supports bounded keyboard resizing and a provider empty state', () => {
-    const state = assistant({ providers: [], selectedProviderID: '' })
+  test('persists selection for an active conversation and rolls back on failure', async () => {
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation).mockResolvedValue({ conversation, messages: [], tool_calls: [] })
+    vi.mocked(api.updateAIConversationModel).mockRejectedValue(new Error('模型不可用'))
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+
+    const selector = await screen.findByLabelText('选择模型', { selector: '#ai-drawer-model' })
+    await waitFor(() => expect(selector).toHaveValue(primaryModel.id))
+    fireEvent.change(selector, { target: { value: secondaryModel.id } })
+
+    await waitFor(() => expect(api.updateAIConversationModel).toHaveBeenCalledWith(conversation.id, secondaryModel.id, expect.any(AbortSignal)))
+    expect(selector).toHaveValue(primaryModel.id)
+    expect(await screen.findByText('模型切换失败: 模型不可用')).toBeInTheDocument()
+  })
+
+  test('ignores stale conversation responses and restores each persisted model', async () => {
+    const secondConversation = { ...conversation, id: 'conversation-2', title: 'Second', model_id: fallbackModel.id }
+    const firstLoad = deferred<{ conversation: AIConversation; messages: []; tool_calls: [] }>()
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation, secondConversation] })
+    vi.mocked(api.getAIConversation).mockImplementation((id) => id === conversation.id
+      ? firstLoad.promise
+      : Promise.resolve({ conversation: secondConversation, messages: [], tool_calls: [] }))
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: /Second/ }))
+    await waitFor(() => expect(screen.getByTestId('selected-model')).toHaveTextContent(fallbackModel.id))
+    expect(screen.getByTestId('selected-provider')).toHaveTextContent('provider-2')
+    firstLoad.resolve({ conversation, messages: [], tool_calls: [] })
+    await Promise.resolve()
+    expect(screen.getByTestId('selected-model')).toHaveTextContent(fallbackModel.id)
+    expect(screen.getByTestId('selected-provider')).toHaveTextContent('provider-2')
+  })
+
+  test('ignores stale model PATCH responses', async () => {
+    const firstPatch = deferred<AIConversation>()
+    const secondPatch = deferred<AIConversation>()
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation).mockResolvedValue({ conversation, messages: [], tool_calls: [] })
+    vi.mocked(api.updateAIConversationModel)
+      .mockImplementationOnce(() => firstPatch.promise)
+      .mockImplementationOnce(() => secondPatch.promise)
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+
+    const selector = await screen.findByLabelText('选择模型', { selector: '#ai-drawer-model' })
+    const providerSelector = screen.getByLabelText('选择供应商', { selector: '#ai-drawer-provider' })
+    await waitFor(() => expect(selector).toHaveValue(primaryModel.id))
+    fireEvent.change(selector, { target: { value: secondaryModel.id } })
+    fireEvent.change(providerSelector, { target: { value: 'provider-2' } })
+    fireEvent.change(selector, { target: { value: fallbackModel.id } })
+    secondPatch.resolve({ ...conversation, model_id: fallbackModel.id })
+    await waitFor(() => expect(selector).toHaveValue(fallbackModel.id))
+    firstPatch.resolve({ ...conversation, model_id: secondaryModel.id })
+    await Promise.resolve()
+    expect(selector).toHaveValue(fallbackModel.id)
+  })
+
+  test('new conversations inherit the server default unless a model was explicitly selected', async () => {
+    vi.mocked(api.createAIConversation)
+      .mockResolvedValueOnce(conversation)
+      .mockResolvedValueOnce({ ...conversation, id: 'conversation-2', model_id: fallbackModel.id })
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+
+    await screen.findByLabelText('选择模型', { selector: '#ai-drawer-model' })
+    fireEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0])
+    await waitFor(() => expect(api.createAIConversation).toHaveBeenNthCalledWith(1, '', undefined))
+
+    vi.mocked(api.deleteAIConversation).mockResolvedValue()
+    fireEvent.click(screen.getAllByRole('button', { name: '删除会话' })[0])
+    await waitFor(() => expect(api.deleteAIConversation).toHaveBeenCalledWith(conversation.id))
+    const providerSelector = screen.getByLabelText('选择供应商', { selector: '#ai-drawer-provider' })
+    const selector = screen.getByLabelText('选择模型', { selector: '#ai-drawer-model' })
+    fireEvent.change(providerSelector, { target: { value: 'provider-2' } })
+    fireEvent.change(selector, { target: { value: fallbackModel.id } })
+    await waitFor(() => expect(selector).toHaveValue(fallbackModel.id))
+    fireEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0])
+    await waitFor(() => expect(api.createAIConversation).toHaveBeenNthCalledWith(2, '', fallbackModel.id))
+  })
+
+  test('blocks a disabled or deleted conversation model until an explicit replacement is selected', () => {
+    const disabled = model('provider-1', 'disabled-model', { enabled: false })
+    const disabledProvider = provider('provider-1', 'Primary', [disabled, secondaryModel])
+    const disabledConversation = { ...conversation, model_id: disabled.id }
+    const state = assistant({
+      providers: [disabledProvider],
+      conversation: { conversation: disabledConversation, messages: [], tool_calls: [] },
+      selectedModelID: disabled.id
+    })
+    const { rerender } = render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    expect(screen.getByLabelText('发送给 AI 运维助手')).toBeDisabled()
+    expect(screen.getByLabelText('选择模型')).toHaveValue(disabled.id)
+
+    rerender(<AIAssistantDrawer assistant={{ ...state, conversation: { conversation: { ...disabledConversation, model_id: null }, messages: [], tool_calls: [] }, selectedModelID: '' }} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    expect(screen.getByLabelText('发送给 AI 运维助手')).toBeDisabled()
+    expect(screen.getByLabelText('选择模型')).toHaveValue('')
+  })
+
+  test('supports bounded keyboard resizing and a Provider empty state', () => {
+    const state = assistant({ providers: [], selectedModelID: '' })
     const onOpenSettings = vi.fn()
     render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={onOpenSettings} />)
 
@@ -136,108 +334,100 @@ describe('AI assistant', () => {
     expect(state.setDrawerWidth).toHaveBeenNthCalledWith(2, 460)
     expect(state.setDrawerWidth).toHaveBeenNthCalledWith(3, 420)
     expect(state.setDrawerWidth).toHaveBeenNthCalledWith(4, 720)
-
-    expect(screen.getByText('还没有模型配置')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '配置模型' }))
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
   })
 
-  test('requires the custom confirmation dialog and exposes only one confirm action', async () => {
+  test('renders only pending write-risk cards and uses the custom confirmation dialog', async () => {
     const confirm = vi.fn(async () => undefined)
-    const state = assistant({ conversation: { conversation, messages: [], tool_calls: [pendingCall] }, confirm })
+    const completedRead = { ...pendingCall, id: 'read-1', risk: 'read' as const, status: 'success' as const, tool_name: 'list_nodes' }
+    const state = assistant({ conversation: { conversation, messages: [], tool_calls: [completedRead, pendingCall] }, confirm })
     const nativeConfirm = vi.spyOn(window, 'confirm')
     render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
 
-    const trigger = screen.getByRole('button', { name: '检查并确认' })
-    fireEvent.click(trigger)
+    expect(screen.queryByText('查询节点')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '检查并确认' }))
     const dialog = screen.getByRole('dialog', { name: '确认 AI 运维操作' })
     await waitFor(() => expect(dialog).toHaveFocus())
-    expect(within(dialog).getByText('目标：nginx.service')).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: '确认执行' }))
-
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
-    expect(confirm).toHaveBeenCalledWith(pendingCall)
-    expect(screen.queryByRole('dialog', { name: '确认 AI 运维操作' })).not.toBeInTheDocument()
     expect(nativeConfirm).not.toHaveBeenCalled()
     nativeConfirm.mockRestore()
   })
 
-
-  test('optimistically inserts the user message before the stream resolves', async () => {
-    let progressSeen: string[] = []
-    const userMessage = (text: string): AIMessage => ({
-      id: `msg-${text}`,
-      conversation_id: conversation.id,
-      turn_id: 'turn-1',
-      role: 'user',
-      content: text,
-      provider_name: 'Primary',
-      model: 'Primary-model',
-      created_at: '2026-08-02T00:00:00Z'
-    })
-    const sendResult = { turn: { id: 'turn-1', conversation_id: conversation.id, provider_id: 'provider-1', provider_name: 'Primary', protocol: 'openai_chat_completions' as const, model: 'Primary-model', status: 'completed' as const, error_code: '', created_at: '', updated_at: '' } }
-    vi.mocked(api.getAIConversation).mockResolvedValue({ conversation, messages: [userMessage('reboot the host')], tool_calls: [] })
+  test.each([
+    { status: 'success', summary: '节点已重启', expected: 'success:AI 运维操作执行成功' },
+    { status: 'accepted', summary: '重启请求已提交', expected: 'success:AI 运维操作已接受，正在处理中' },
+    { status: 'failure', summary: '节点重启失败', expected: 'error:AI 运维操作执行失败: 节点重启失败' },
+    { status: 'unsupported', summary: '当前 Agent 不支持重启', expected: 'error:AI 运维操作不受支持' }
+  ] satisfies Array<{ status: AIToolCall['status'], summary: string, expected: string }>)('reports confirmed tool status $status without claiming every operation succeeded', async ({ status, summary, expected }) => {
+    const completedCall = { ...pendingCall, status, result_summary: summary }
     vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
-    vi.mocked(api.sendAIMessageStream).mockImplementation(async (_id, _provider, _content, _signal, onProgress) => {
-      onProgress({ phase: 'model' })
-      onProgress({ phase: 'tool', tool_name: 'reboot_node', target_name: 'node-1' })
-      onProgress({ phase: 'composing' })
-      return sendResult
-    })
+    vi.mocked(api.getAIConversation).mockResolvedValue({ conversation, messages: [], tool_calls: [pendingCall] })
+    vi.mocked(api.confirmAIToolCall).mockResolvedValue({ turn: turn(), tool_call: completedCall })
+    render(<ToolDecisionHarness call={pendingCall} />)
 
-    render(<SharedStateHarness />)
     fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
-    await screen.findByTestId('ai-drawer-messages')
+    await waitFor(() => expect(api.getAIConversation).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm tool' }))
 
-    const composer = screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' }) as HTMLTextAreaElement
-    fireEvent.change(composer, { target: { value: 'reboot the host' } })
-    fireEvent.keyDown(composer, { key: 'Enter' })
-
-    // Optimistic message appears before any async completes.
-    const drawer = screen.getByTestId('ai-drawer-messages')
-    await waitFor(() => expect(within(drawer).getByText('reboot the host')).toBeInTheDocument())
-    await waitFor(() => expect(api.sendAIMessageStream).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(vi.mocked(api.getAIConversation)).toHaveBeenCalled())
-
-    // Progress phases were reflected through to the streaming callback.
-    progressSeen = progressSeen // appease unused
-    expect(vi.mocked(api.sendAIMessageStream).mock.calls[0]).toEqual(
-      expect.arrayContaining([conversation.id, 'provider-1', 'reboot the host', expect.any(AbortSignal), expect.any(Function)])
-    )
+    await waitFor(() => expect(api.confirmAIToolCall).toHaveBeenCalledWith(pendingCall.id))
+    expect(await screen.findByTestId('tool-decision-toast')).toHaveTextContent(expected)
   })
 
-  test('aborts the stream and clears progress on stop', async () => {
-    const abortSpy = vi.spyOn(AbortController.prototype, 'abort')
-    let resolveStream: (value: { turn: { id: string } }) => void = () => {}
-    vi.mocked(api.getAIConversation).mockResolvedValue({ conversation, messages: [], tool_calls: [] })
-    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
-    vi.mocked(api.sendAIMessageStream).mockImplementation((_id, _provider, _content, _signal, onProgress) => {
-      onProgress({ phase: 'model' })
-      return new Promise((resolve) => { resolveStream = resolve as typeof resolveStream })
+  test('keeps read progress inline and labels the actual fallback result', async () => {
+    const userMessage: AIMessage = { id: 'user-1', conversation_id: conversation.id, turn_id: 'turn-1', role: 'user', content: 'check nodes', provider_name: 'Primary', model: primaryModel.model_id, created_at: '' }
+    const assistantMessage: AIMessage = { id: 'assistant-1', conversation_id: conversation.id, turn_id: 'turn-1', role: 'assistant', content: 'All nodes are healthy.', provider_name: 'Secondary', model: fallbackModel.model_id, created_at: '' }
+    const fallbackTurn = turn({
+      model_id: fallbackModel.id,
+      provider_id: 'provider-2',
+      provider_name: 'Secondary',
+      model: fallbackModel.model_id,
+      fallback_used: true
     })
-
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation)
+      .mockResolvedValueOnce({ conversation, messages: [], tool_calls: [] })
+      .mockResolvedValue({ conversation, messages: [userMessage, assistantMessage], tool_calls: [] })
+    vi.mocked(api.sendAIMessageStream).mockImplementation(async (_id, _content, _signal, onProgress) => {
+      onProgress({ phase: 'tool', tool_name: 'list_nodes', target_name: 'all nodes' })
+      onProgress({ phase: 'fallback', provider_name: 'Secondary', model: fallbackModel.model_id })
+      return { turn: fallbackTurn, message: assistantMessage }
+    })
     render(<SharedStateHarness />)
     fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
-    await screen.findByTestId('ai-drawer-messages')
+    const composer = await screen.findByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })
+    await waitFor(() => expect(composer).not.toBeDisabled())
+    fireEvent.change(composer, { target: { value: 'check nodes' } })
+    fireEvent.keyDown(composer, { key: 'Enter' })
 
-    const composer = screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' }) as HTMLTextAreaElement
+    await waitFor(() => expect(api.sendAIMessageStream).toHaveBeenCalledWith(conversation.id, 'check nodes', expect.any(AbortSignal), expect.any(Function)))
+    expect(vi.mocked(api.sendAIMessageStream).mock.calls[0]?.[1]).toBe('check nodes')
+    expect(JSON.stringify(vi.mocked(api.sendAIMessageStream).mock.calls[0])).not.toContain('provider_id')
+    const drawer = screen.getByTestId('ai-drawer-messages')
+    expect(await within(drawer).findByText(/备用响应 · Secondary/)).toHaveTextContent(`原请求 Primary / ${primaryModel.model_id}`)
+  })
+
+  test('aborts the stream and clears inline progress on stop', async () => {
+    const abortSpy = vi.spyOn(AbortController.prototype, 'abort')
+    const stream = deferred<AISendResult>()
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation).mockResolvedValue({ conversation, messages: [], tool_calls: [] })
+    vi.mocked(api.sendAIMessageStream).mockImplementation((_id, _content, _signal, onProgress) => {
+      onProgress({ phase: 'model' })
+      return stream.promise
+    })
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    const composer = await screen.findByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })
+    await waitFor(() => expect(composer).not.toBeDisabled())
     fireEvent.change(composer, { target: { value: 'query nodes' } })
     fireEvent.keyDown(composer, { key: 'Enter' })
-
-    const drawer2 = screen.getByTestId('ai-drawer-messages')
-    await waitFor(() => expect(within(drawer2).getByRole('status')).toHaveTextContent('思考中...'))
-
-    // Stop button should abort the in-flight stream.
-    const stopButton = screen.getAllByRole('button', { name: '停止模型请求' })[0]
-    fireEvent.click(stopButton)
-    expect(abortSpy).toHaveBeenCalledTimes(1)
-
-    // The stream promise rejects via the controller; settle it so the finally block runs.
-    resolveStream({ turn: { id: 'turn-1' } })
-
-    // Conversation is reloaded to authoritative state and progress cleared.
-    await waitFor(() => expect(vi.mocked(api.getAIConversation)).toHaveBeenCalled())
+    await waitFor(() => expect(within(screen.getByTestId('ai-drawer-messages')).getByRole('status')).toHaveTextContent('思考中...'))
+    fireEvent.click(screen.getAllByRole('button', { name: '停止模型请求' })[0])
+    expect(abortSpy).toHaveBeenCalled()
+    stream.resolve({ turn: turn() })
+    await waitFor(() => expect(api.getAIConversation).toHaveBeenCalled())
     abortSpy.mockRestore()
   })
-
 })

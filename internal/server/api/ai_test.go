@@ -269,6 +269,152 @@ func TestAIProviderModelsAPIUsesTransientCredentialsWithoutEchoingSecrets(t *tes
 	}
 }
 
+func TestAIProviderModelRoutingAndConversationSelectionAPI(t *testing.T) {
+	const keyMarker = "saved-routing-key-marker"
+	adapter := aiAPITestAdapter{
+		capabilities: serverai.Capabilities{Chat: true, Tools: true},
+		response:     serverai.ChatResponse{Content: "ok"},
+		listModels: func(_ context.Context, credential serverai.ProviderCredential) ([]string, error) {
+			if credential.APIKey != keyMarker || credential.Model != "" {
+				t.Fatalf("discovery credential = %+v", credential)
+			}
+			return []string{"model-a", "model-b"}, nil
+		},
+	}
+	fixture := newAIAPIFixture(t, AuthConfig{}, adapter)
+
+	created := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/providers",
+		`{"name":"Routing","protocol":"openai_chat_completions","base_url":"https://model.test/v1","model":"","api_key":"`+keyMarker+`"}`,
+		"application/json", "http://panel.test")
+	if created.Code != http.StatusCreated || strings.Contains(created.Body.String(), keyMarker) {
+		t.Fatalf("create connection provider = %d %s", created.Code, created.Body.String())
+	}
+	var provider store.AIProvider
+	if err := json.NewDecoder(created.Body).Decode(&provider); err != nil {
+		t.Fatalf("decode provider: %v", err)
+	}
+	if provider.ID == "" || len(provider.Models) != 0 {
+		t.Fatalf("connection provider = %+v", provider)
+	}
+
+	discovered := performAIRawRequest(fixture.handler, http.MethodPost,
+		"/api/ai/providers/"+provider.ID+"/discover", "", "", "http://panel.test")
+	if discovered.Code != http.StatusOK || !strings.Contains(discovered.Body.String(), `"models":["model-a","model-b"]`) ||
+		strings.Contains(discovered.Body.String(), keyMarker) {
+		t.Fatalf("discover saved provider = %d %s", discovered.Code, discovered.Body.String())
+	}
+	importedResponse := performAIRawRequest(fixture.handler, http.MethodPost,
+		"/api/ai/providers/"+provider.ID+"/models",
+		`{"models":[{"model_id":"model-a","display_name":"Primary"},{"model_id":"model-b","display_name":"Fallback"}],"enabled":true}`,
+		"application/json", "http://panel.test")
+	if importedResponse.Code != http.StatusCreated {
+		t.Fatalf("import provider models = %d %s", importedResponse.Code, importedResponse.Body.String())
+	}
+	var imported struct {
+		Models []store.AIProviderModel `json:"models"`
+	}
+	if err := json.NewDecoder(importedResponse.Body).Decode(&imported); err != nil || len(imported.Models) != 2 {
+		t.Fatalf("decode imported models = %+v err=%v", imported, err)
+	}
+	defaultModel, fallbackModel := imported.Models[0], imported.Models[1]
+
+	unverifiedRouting := performAIRawRequest(fixture.handler, http.MethodPut, "/api/ai/routing",
+		`{"default_model_id":"`+defaultModel.ID+`","fallback_model_id":"`+fallbackModel.ID+`"}`,
+		"application/json", "http://panel.test")
+	if unverifiedRouting.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unverified routing = %d %s", unverifiedRouting.Code, unverifiedRouting.Body.String())
+	}
+	for _, model := range imported.Models {
+		probe := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/models/"+model.ID+"/test", "", "", "http://panel.test")
+		if probe.Code != http.StatusOK || !strings.Contains(probe.Body.String(), `"probe_status":"success"`) {
+			t.Fatalf("probe model %s = %d %s", model.ID, probe.Code, probe.Body.String())
+		}
+	}
+	routing := performAIRawRequest(fixture.handler, http.MethodPut, "/api/ai/routing",
+		`{"default_model_id":"`+defaultModel.ID+`","fallback_model_id":"`+fallbackModel.ID+`"}`,
+		"application/json", "http://panel.test")
+	if routing.Code != http.StatusOK || !strings.Contains(routing.Body.String(), defaultModel.ID) || !strings.Contains(routing.Body.String(), fallbackModel.ID) {
+		t.Fatalf("set routing = %d %s", routing.Code, routing.Body.String())
+	}
+	readRouting := performAIRawRequest(fixture.handler, http.MethodGet, "/api/ai/routing", "", "", "")
+	if readRouting.Code != http.StatusOK || readRouting.Body.String() != routing.Body.String() {
+		t.Fatalf("read routing = %d %s, want %s", readRouting.Code, readRouting.Body.String(), routing.Body.String())
+	}
+
+	createdConversation := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/conversations",
+		`{"title":"Persist selection"}`, "application/json", "http://panel.test")
+	if createdConversation.Code != http.StatusCreated {
+		t.Fatalf("create default conversation = %d %s", createdConversation.Code, createdConversation.Body.String())
+	}
+	var conversation store.AIConversation
+	if err := json.NewDecoder(createdConversation.Body).Decode(&conversation); err != nil {
+		t.Fatalf("decode conversation: %v", err)
+	}
+	if conversation.ModelID == nil || *conversation.ModelID != defaultModel.ID {
+		t.Fatalf("new conversation selection = %+v", conversation)
+	}
+	selected := performAIRawRequest(fixture.handler, http.MethodPatch, "/api/ai/conversations/"+conversation.ID,
+		`{"model_id":"`+fallbackModel.ID+`"}`, "application/json", "http://panel.test")
+	if selected.Code != http.StatusOK || !strings.Contains(selected.Body.String(), fallbackModel.ID) {
+		t.Fatalf("persist fallback selection = %d %s", selected.Code, selected.Body.String())
+	}
+
+	disableSpecial := performAIRawRequest(fixture.handler, http.MethodPut, "/api/ai/models/"+fallbackModel.ID,
+		`{"model_id":"model-b","display_name":"Fallback","enabled":false}`,
+		"application/json", "http://panel.test")
+	if disableSpecial.Code != http.StatusConflict {
+		t.Fatalf("disable routed fallback = %d %s", disableSpecial.Code, disableSpecial.Body.String())
+	}
+	clearFallback := performAIRawRequest(fixture.handler, http.MethodPut, "/api/ai/routing",
+		`{"default_model_id":"`+defaultModel.ID+`","fallback_model_id":null}`,
+		"application/json", "http://panel.test")
+	if clearFallback.Code != http.StatusOK {
+		t.Fatalf("clear fallback = %d %s", clearFallback.Code, clearFallback.Body.String())
+	}
+	disabled := performAIRawRequest(fixture.handler, http.MethodPut, "/api/ai/models/"+fallbackModel.ID,
+		`{"model_id":"model-b","display_name":"Fallback","enabled":false}`,
+		"application/json", "http://panel.test")
+	if disabled.Code != http.StatusOK || !strings.Contains(disabled.Body.String(), `"enabled":false`) {
+		t.Fatalf("disable fallback model = %d %s", disabled.Code, disabled.Body.String())
+	}
+	reselectDisabled := performAIRawRequest(fixture.handler, http.MethodPatch, "/api/ai/conversations/"+conversation.ID,
+		`{"model_id":"`+fallbackModel.ID+`"}`, "application/json", "http://panel.test")
+	if reselectDisabled.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("select disabled model = %d %s", reselectDisabled.Code, reselectDisabled.Body.String())
+	}
+	deleted := performAIRawRequest(fixture.handler, http.MethodDelete, "/api/ai/models/"+fallbackModel.ID, "", "", "http://panel.test")
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete selected model = %d %s", deleted.Code, deleted.Body.String())
+	}
+	state := performAIRawRequest(fixture.handler, http.MethodGet, "/api/ai/conversations/"+conversation.ID, "", "", "")
+	if state.Code != http.StatusOK || !strings.Contains(state.Body.String(), `"model_id":null`) {
+		t.Fatalf("conversation after selected model delete = %d %s", state.Code, state.Body.String())
+	}
+	deleteDefault := performAIRawRequest(fixture.handler, http.MethodDelete, "/api/ai/models/"+defaultModel.ID, "", "", "http://panel.test")
+	if deleteDefault.Code != http.StatusConflict {
+		t.Fatalf("delete default model = %d %s", deleteDefault.Code, deleteDefault.Body.String())
+	}
+
+	strict := performAIRawRequest(fixture.handler, http.MethodPut, "/api/ai/routing",
+		`{"default_model_id":null,"fallback_model_id":null,"api_key":"`+keyMarker+`"}`,
+		"application/json", "http://panel.test")
+	if strict.Code != http.StatusBadRequest || strings.Contains(strict.Body.String(), keyMarker) {
+		t.Fatalf("strict routing request = %d %s", strict.Code, strict.Body.String())
+	}
+	method := performAIRawRequest(fixture.handler, http.MethodGet, "/api/ai/models/"+defaultModel.ID+"/test", "", "", "")
+	if method.Code != http.StatusMethodNotAllowed || method.Header().Get("Allow") != http.MethodPost {
+		t.Fatalf("model test method = %d Allow=%q", method.Code, method.Header().Get("Allow"))
+	}
+
+	var auditText string
+	if err := fixture.db.QueryRow(`SELECT COALESCE(GROUP_CONCAT(metadata_json, ''), '') FROM audit_events WHERE module = 'ai'`).Scan(&auditText); err != nil {
+		t.Fatalf("query AI audit metadata: %v", err)
+	}
+	if strings.Contains(auditText, keyMarker) || strings.Contains(auditText, "https://model.test") {
+		t.Fatalf("AI routing audit exposed connection secret: %s", auditText)
+	}
+}
+
 func TestAIErrorStatusMappingIsStableAndSanitized(t *testing.T) {
 	tests := []struct {
 		name   string

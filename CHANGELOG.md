@@ -2,6 +2,65 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.17 - 2026-08-05
+
+### Fixed
+
+- Fixed the Overview K8s online count to require both an online Agent node
+  and a healthy K8s API connection.
+- Fixed Overview system information to follow the server selected in the
+  Server Status panel instead of always showing the first node.
+- Fixed confirmed AI operation feedback to preserve success, asynchronous
+  acceptance, failure, and unsupported results instead of always reporting
+  success.
+- Fixed node diagnosis to report only genuinely failed Systemd units instead
+  of treating ordinary inactive services as faults.
+
+## v0.1.16 - 2026-08-05
+
+### Added
+
+- Added fixed, bounded AI read tools for Docker containers and resources,
+  Compose projects, host processes, Systemd services, Kubernetes resources,
+  automation run history, and audit events.
+- Added node diagnosis that combines available metrics, process, Docker,
+  Compose, and Systemd signals without exposing command lines or raw payloads.
+
+### Security
+
+- Kept the AI registry fixed and confirmation-gated. Arbitrary Shell, file
+  access, Kubernetes YAML/apply, and cc-switch configuration import remain out
+  of scope.
+- Added explicit unavailable-source projections and bounded typed Kubernetes
+  resource selection so the model cannot turn a missing capability into an
+  empty healthy result.
+
+### Changed
+
+- Reused existing Server stores and Agent/Kubernetes service boundaries for AI
+  inspection instead of adding duplicate REST or database paths.
+- Bumped the Server, Dashboard package metadata, README badges, and
+  Server-bundled Agent release version to 0.1.16.
+
+## v0.1.15 - 2026-08-04
+
+### Added
+
+- Added child-model management so one OpenAI Chat Completions compatible Provider connection can discover, selectively import, manually add, enable, test, and manage multiple models without duplicating its Base URL or encrypted credential.
+- Added per-conversation model persistence, two-stage Provider-then-model switching, and explicit global default and fallback routing with requested/actual model history snapshots.
+- Added one bounded pre-tool fallback attempt for first-call timeout, rate-limit, and upstream-availability failures, with visible fallback progress and actual-model attribution.
+
+### Changed
+
+- Reworked AI settings into compact Provider rows with expandable model controls and kept the AI workspace composer visible at supported desktop sizes.
+- Kept ordinary read-tool activity in the inline progress stream while retaining persistent cards and explicit confirmation only for pending state-changing operations.
+- Bumped the Server, Dashboard package metadata, README badges, and Server-bundled Agent release version to 0.1.15.
+
+### Security
+
+- Provider discovery and model probes return bounded sanitized projections. API keys, Provider ciphertext, prompts, raw upstream model payloads, tool output, and upstream response bodies remain excluded from browser responses, logs, audit metadata, and fixtures.
+- Fallback is prohibited after any tool state exists and never applies to authentication, protocol, validation, capability, cancellation, or post-tool failures.
+
 ## v0.1.14 - 2026-08-01
 
 ### Added

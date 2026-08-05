@@ -1,9 +1,11 @@
 import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from 'react'
 import { Bot, ChevronRight, CircleAlert, LoaderCircle, Maximize2, MessageSquarePlus, PanelRightClose, Plus, Send, Settings2, Square, Trash2, X } from 'lucide-react'
 
-import type { AIToolCall } from '../../types'
+import type { AIProgress, AIToolCall } from '../../types'
 import { Toast } from '../Toast'
-import type { AIAssistantState, AIProgress } from './useAIAssistantState'
+import { AIModelSelector } from './AIModelSelector'
+import type { AIAssistantState } from './useAIAssistantState'
+import { findAIModel, isAIModelUsable } from './useAIAssistantState'
 
 type ConversationPanelProps = {
   assistant: AIAssistantState
@@ -34,6 +36,7 @@ function toolTarget(call: AIToolCall) {
 
 function progressText(progress: AIProgress, labels: Record<string, string>) {
   if (progress.phase === 'model') return '思考中...'
+  if (progress.phase === 'fallback') return `当前请求模型暂时不可用，切换到 ${[progress.provider_name, progress.model].filter(Boolean).join(' / ') || '回退模型'}...`
   if (progress.phase === 'tool') return `调用工具: ${labels[progress.tool_name ?? ''] ?? progress.tool_name ?? ''} → ${progress.target_name ?? ''}`
   if (progress.phase === 'composing') return '整理结果...'
   if (progress.phase === 'awaiting_confirmation') return '等待确认...'
@@ -49,7 +52,9 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   const dialogRef = useRef<HTMLDivElement>(null)
   const messages = assistant.conversation?.messages ?? []
   const toolCalls = assistant.conversation?.tool_calls ?? []
-  const usableProviders = assistant.providers.filter((provider) => provider.chat_capable && provider.tools_capable)
+  const selected = findAIModel(assistant.providers, assistant.selectedModelID)
+  const canSend = selected?.provider.id === assistant.selectedProviderID && isAIModelUsable(selected.provider, selected.model)
+  const activeSending = assistant.sending && assistant.sendingConversationID === assistant.activeConversationID
 
   useEffect(() => {
     if (confirmCall) dialogRef.current?.focus()
@@ -104,16 +109,22 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
           </div>
         ) : (
           <div className="space-y-3">
-            {messages.map((message) => (
-              <article key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[88%] min-w-0 border px-3 py-2.5 text-sm font-semibold leading-6 ${message.role === 'user' ? 'border-primary/30 bg-primary text-primary-foreground' : 'border-border bg-surface text-foreground'}`}>
-                  <p className="whitespace-pre-wrap break-words">{message.content}</p>
-                  {message.role === 'assistant' && (message.provider_name || message.model) ? (
-                    <p className="mt-1 truncate text-[11px] font-bold opacity-60">{[message.provider_name, message.model].filter(Boolean).join(' / ')}</p>
-                  ) : null}
-                </div>
-              </article>
-            ))}
+            {messages.map((message) => {
+              const turn = assistant.turnResults[message.turn_id]
+              return (
+                <article key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[88%] min-w-0 border px-3 py-2.5 text-sm font-semibold leading-6 ${message.role === 'user' ? 'border-primary/30 bg-primary text-primary-foreground' : 'border-border bg-surface text-foreground'}`}>
+                    <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                    {message.role === 'assistant' && (message.provider_name || message.model) ? (
+                      <p className="mt-1 truncate text-[11px] font-bold opacity-60">
+                        {turn?.fallback_used ? '备用响应 · ' : ''}{[message.provider_name, message.model].filter(Boolean).join(' / ')}
+                        {turn?.fallback_used && turn.requested_model ? `（原请求 ${turn.requested_provider_name} / ${turn.requested_model}）` : ''}
+                      </p>
+                    ) : null}
+                  </div>
+                </article>
+              )
+            })}
 
             {toolCalls.filter((call) => call.status === 'pending').map((call) => (
               <div key={call.id} className={`border px-3 py-3 ${call.status === 'pending' ? 'border-warning/40 bg-warning/10' : 'border-border bg-surface/70'}`}>
@@ -132,7 +143,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               </div>
             ))}
 
-            {assistant.sending ? (
+            {activeSending ? (
               <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground" role="status">
                 <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
                 {assistant.progress ? progressText(assistant.progress, toolLabels) : '模型正在处理请求'}
@@ -150,21 +161,21 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
           rows={3}
           value={draft}
           maxLength={16 * 1024}
-          disabled={usableProviders.length === 0}
+          disabled={!canSend}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={handleComposerKeyDown}
-          placeholder={usableProviders.length > 0 ? '询问当前故障、告警或运维操作...' : '先在系统设置中完成模型能力检测'}
+          placeholder={canSend ? '询问当前故障、告警或运维操作...' : '先选择已启用且通过检测的模型'}
           className="soft-input max-h-36 min-h-[76px] w-full resize-y px-3 py-2 text-sm font-semibold leading-6 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
         />
         <div className="mt-2 flex items-center justify-between gap-3">
           <p className="min-w-0 truncate text-[11px] font-bold text-muted-foreground">变更操作始终需要人工确认</p>
-          {assistant.sending ? (
+          {activeSending ? (
             <button type="button" onClick={assistant.stop} title="停止模型请求" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-danger/40 bg-card text-danger focus:outline-none focus:ring-4 focus:ring-danger/20">
               <Square size={15} fill="currentColor" aria-hidden="true" />
               <span className="sr-only">停止模型请求</span>
             </button>
           ) : (
-            <button type="button" onClick={submit} disabled={!draft.trim() || usableProviders.length === 0} title="发送消息" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center bg-primary text-primary-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="button" onClick={submit} disabled={!draft.trim() || !canSend || assistant.sending || assistant.selectingModel} title="发送消息" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center bg-primary text-primary-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50">
               <Send size={16} aria-hidden="true" />
               <span className="sr-only">发送消息</span>
             </button>
@@ -259,10 +270,7 @@ export function AIAssistantDrawer({ assistant, onOpenWorkspace, onOpenSettings }
           <button type="button" onClick={assistant.closeDrawer} title="关闭 AI 助手" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground"><PanelRightClose size={16} aria-hidden="true" /><span className="sr-only">关闭 AI 助手</span></button>
         </header>
         <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2">
-          <label htmlFor="ai-drawer-provider" className="sr-only">选择模型</label>
-          <select id="ai-drawer-provider" value={assistant.selectedProviderID} onChange={(event) => assistant.selectProvider(event.target.value)} className="soft-input min-h-9 min-w-0 flex-1 px-2 text-xs font-bold">
-            {assistant.providers.length === 0 ? <option value="">未配置模型</option> : assistant.providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.chat_capable || !provider.tools_capable}>{provider.name} / {provider.model}{provider.chat_capable && provider.tools_capable ? '' : '（未通过检测）'}</option>)}
-          </select>
+          <AIModelSelector assistant={assistant} idPrefix="ai-drawer" />
           <button type="button" onClick={onOpenSettings} title="模型设置" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-card text-muted-foreground hover:text-foreground"><Settings2 size={16} aria-hidden="true" /><span className="sr-only">模型设置</span></button>
         </div>
         <ConversationPanel assistant={assistant} mode="drawer" onOpenSettings={onOpenSettings} />
@@ -306,10 +314,7 @@ export function AIWorkspacePage({ assistant, onOpenSettings }: { assistant: AIAs
             <p className="mt-0.5 truncate text-xs font-semibold text-muted-foreground">查询自动执行，变更需要确认</p>
           </div>
           <div className="flex min-w-0 items-center gap-2">
-            <label htmlFor="ai-workspace-provider" className="sr-only">选择模型</label>
-            <select id="ai-workspace-provider" value={assistant.selectedProviderID} onChange={(event) => assistant.selectProvider(event.target.value)} className="soft-input min-h-9 max-w-[320px] px-2 text-xs font-bold">
-              {assistant.providers.length === 0 ? <option value="">未配置模型</option> : assistant.providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.chat_capable || !provider.tools_capable}>{provider.name} / {provider.model}{provider.chat_capable && provider.tools_capable ? '' : '（未通过检测）'}</option>)}
-            </select>
+            <div className="w-[min(520px,48vw)] min-w-[360px]"><AIModelSelector assistant={assistant} idPrefix="ai-workspace" /></div>
             <button type="button" onClick={onOpenSettings} title="模型设置" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground"><Settings2 size={16} aria-hidden="true" /><span className="sr-only">模型设置</span></button>
           </div>
         </header>

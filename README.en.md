@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.14-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.17-14B8A6">
 </p>
 
 <p align="center">
@@ -140,11 +140,11 @@ Log content is read on demand: it is not written to SQLite, centrally collected,
 
 <strong>AI Natural-Language Operations Assistant</strong>
 
-The top-bar **AI Operations Assistant** opens as an overlay drawer and can expand into the full `/ai` workspace. Conversations and ordinary messages are persisted in MizuPanel's SQLite/MySQL database, so navigation and closing the drawer do not discard the active conversation. The first release supports multiple OpenAI Chat Completions compatible Providers with configurable Base URL, Model, and optional API Key, plus separate chat and function-tool capability checks.
+The top-bar **AI Operations Assistant** opens as an overlay drawer and can expand into the full `/ai` workspace. Each OpenAI Chat Completions compatible Provider stores one Base URL and optional API Key while managing multiple child models. Model IDs can be discovered and selectively imported or added manually, then verified one at a time for chat and tool support. Conversations select a Provider first and then one of its models, persist that model across reloads, and support explicit global default and one-shot pre-tool fallback routing.
 
 The model can only select from a fixed Server-owned operations registry. Incident, alert, node, service, uptime, metric, and bounded-log queries may run automatically. Host reboot, Agent upgrade, Docker/Compose/Systemd state changes, and existing saved-script runs must display their target and impact and receive explicit administrator confirmation. Arbitrary Shell, file writes/deletes, resource deletion, and Kubernetes writes are not expressible through the registry.
 
-Provider API Keys are encrypted by the Server using `data/ai.key`; read APIs return neither plaintext nor ciphertext. Backups and migrations must preserve the database and `ai.key` together, because existing Provider credentials cannot be decrypted if the key file is lost. System prompts, raw model responses, raw tool output, and log content are not persisted as conversation history. See the [configuration docs](docs/configuration.en.md) for the complete setup and data boundary.
+Provider API Keys are encrypted by the Server using `data/ai.key`; read APIs return neither plaintext nor ciphertext. Fallback applies only once to a transient timeout, rate limit, or upstream-availability failure on the first model call before any tool work. Authentication, protocol, cancellation, and post-tool failures never fall back. Backups and migrations must preserve the database and `ai.key` together. System prompts, raw model responses, raw tool output, and log content are not persisted as conversation history. See the [configuration docs](docs/configuration.en.md) for the complete setup and data boundary.
 
 <strong>Run From Release Package</strong>
 

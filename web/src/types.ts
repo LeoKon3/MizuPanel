@@ -1187,18 +1187,43 @@ export type ApplicationServiceInput = {
 }
 
 export type AIProtocol = 'openai_chat_completions'
+export type AIHealthStatus = 'unknown' | 'success' | 'failure'
+
+export type AIProviderModel = {
+  id: string
+  provider_id: string
+  model_id: string
+  display_name: string
+  enabled: boolean
+  chat_capable: boolean
+  tools_capable: boolean
+  probe_status: AIHealthStatus
+  probe_latency_ms: number
+  probed_at: string | null
+  probe_error: string
+  is_default: boolean
+  is_fallback: boolean
+  created_at: string
+  updated_at: string
+}
 
 export type AIProvider = {
   id: string
   name: string
   protocol: AIProtocol
   base_url: string
+  enabled: boolean
+  discovery_status: AIHealthStatus
+  discovery_latency_ms: number
+  discovered_at: string | null
+  discovery_error: string
+  models: AIProviderModel[]
   model: string
   has_api_key: boolean
   is_default: boolean
   chat_capable: boolean
   tools_capable: boolean
-  probe_status: 'unknown' | 'success' | 'failure'
+  probe_status: AIHealthStatus
   probed_at: string | null
   probe_error: string
   created_at: string
@@ -1212,11 +1237,29 @@ export type AIProviderInput = {
   model: string
   api_key?: string
   clear_api_key?: boolean
+  enabled?: boolean
+}
+
+export type AIProviderModelInput = {
+  model_id: string
+  display_name?: string
+}
+
+export type AIProviderModelUpdate = {
+  model_id: string
+  display_name: string
+  enabled: boolean
+}
+
+export type AIRouting = {
+  default_model_id: string | null
+  fallback_model_id: string | null
 }
 
 export type AIConversation = {
   id: string
   title: string
+  model_id: string | null
   created_at: string
   updated_at: string
 }
@@ -1235,10 +1278,16 @@ export type AIMessage = {
 export type AITurn = {
   id: string
   conversation_id: string
+  model_id: string | null
   provider_id: string
   provider_name: string
   protocol: AIProtocol
   model: string
+  requested_provider_id: string
+  requested_provider_name: string
+  requested_model_id: string | null
+  requested_model: string
+  fallback_used: boolean
   status: 'running' | 'awaiting_confirmation' | 'completed' | 'failed' | 'interrupted'
   error_code: string
   created_at: string
@@ -1250,7 +1299,7 @@ export type AIToolCall = {
   turn_id: string
   tool_name: string
   risk: 'read' | 'confirm'
-  status: 'running' | 'success' | 'failure' | 'pending' | 'rejected' | 'interrupted'
+  status: 'running' | 'success' | 'failure' | 'accepted' | 'unsupported' | 'pending' | 'rejected' | 'interrupted'
   target_type: string
   target_id: string
   target_name: string
@@ -1270,4 +1319,12 @@ export type AISendResult = {
   turn: AITurn
   message?: AIMessage
   tool_call?: AIToolCall
+}
+
+export type AIProgress = {
+  phase: 'accepted' | 'model' | 'fallback' | 'tool' | 'composing' | 'awaiting_confirmation' | 'completed'
+  tool_name?: string
+  target_name?: string
+  provider_name?: string
+  model?: string
 }

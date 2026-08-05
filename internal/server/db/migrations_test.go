@@ -87,6 +87,122 @@ func TestMigrateSQLiteCreatesReplaySafeAuditSchema(t *testing.T) {
 	}
 }
 
+func TestMigrateSQLiteUpgradesLegacyAIModelRoutingReplaySafely(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+
+	if _, err := database.Exec(`
+		CREATE TABLE ai_providers (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, normalized_name TEXT NOT NULL UNIQUE,
+			protocol TEXT NOT NULL, base_url TEXT NOT NULL, model TEXT NOT NULL,
+			api_key_ciphertext TEXT NOT NULL DEFAULT '', is_default INTEGER NOT NULL DEFAULT 0,
+			chat_capable INTEGER NOT NULL DEFAULT 0, tools_capable INTEGER NOT NULL DEFAULT 0,
+			probe_status TEXT NOT NULL DEFAULT 'unknown', probed_at TEXT,
+			probe_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		);
+		CREATE TABLE ai_conversations (
+			id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		);
+		CREATE TABLE ai_turns (
+			id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, provider_id TEXT NOT NULL DEFAULT '',
+			provider_name TEXT NOT NULL, protocol TEXT NOT NULL, model TEXT NOT NULL,
+			status TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (conversation_id) REFERENCES ai_conversations(id) ON DELETE CASCADE
+		);
+	`); err != nil {
+		t.Fatalf("create legacy AI schema: %v", err)
+	}
+	const now = "2026-08-03T12:00:00Z"
+	if _, err := database.Exec(`INSERT INTO ai_providers
+		(id, name, normalized_name, protocol, base_url, model, api_key_ciphertext, is_default,
+		 chat_capable, tools_capable, probe_status, probed_at, probe_error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 'success', ?, '', ?, ?)`,
+		"provider-legacy", "Legacy", "legacy", "openai_chat_completions", "https://model.test/v1",
+		"legacy-model", "ciphertext-marker", now, now, now); err != nil {
+		t.Fatalf("seed legacy provider: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO ai_conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+		"conversation-legacy", "Legacy chat", now, now); err != nil {
+		t.Fatalf("seed legacy conversation: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO ai_turns
+		(id, conversation_id, provider_id, provider_name, protocol, model, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?)`, "turn-legacy", "conversation-legacy",
+		"provider-legacy", "Legacy", "openai_chat_completions", "legacy-model", now, now); err != nil {
+		t.Fatalf("seed legacy turn: %v", err)
+	}
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("upgrade legacy AI schema: %v", err)
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("replay legacy AI upgrade: %v", err)
+	}
+
+	var providerID, upstreamModel string
+	var isDefault, chatCapable, toolsCapable int
+	if err := database.QueryRow(`SELECT id, model_id, is_default, chat_capable, tools_capable
+		FROM ai_provider_models`).Scan(&providerID, &upstreamModel, &isDefault, &chatCapable, &toolsCapable); err != nil {
+		t.Fatalf("query migrated model: %v", err)
+	}
+	if providerID != "provider-legacy" || upstreamModel != "legacy-model" || isDefault != 1 || chatCapable != 1 || toolsCapable != 1 {
+		t.Fatalf("migrated model = id:%q model:%q default:%d chat:%d tools:%d",
+			providerID, upstreamModel, isDefault, chatCapable, toolsCapable)
+	}
+	var ciphertext string
+	if err := database.QueryRow(`SELECT api_key_ciphertext FROM ai_providers WHERE id = ?`, "provider-legacy").Scan(&ciphertext); err != nil {
+		t.Fatalf("query preserved ciphertext: %v", err)
+	}
+	if ciphertext != "ciphertext-marker" {
+		t.Fatalf("ciphertext changed during migration: %q", ciphertext)
+	}
+	var conversationModel, turnModel, requestedProvider, requestedModelID, requestedModel string
+	if err := database.QueryRow(`SELECT c.model_id, t.model_id, t.requested_provider_id,
+		t.requested_model_id, t.requested_model FROM ai_conversations c JOIN ai_turns t
+		ON t.conversation_id = c.id WHERE c.id = ?`, "conversation-legacy").
+		Scan(&conversationModel, &turnModel, &requestedProvider, &requestedModelID, &requestedModel); err != nil {
+		t.Fatalf("query migrated routing snapshots: %v", err)
+	}
+	if conversationModel != "provider-legacy" || turnModel != "provider-legacy" ||
+		requestedProvider != "provider-legacy" || requestedModelID != "provider-legacy" || requestedModel != "legacy-model" {
+		t.Fatalf("migrated routing = conversation:%q turn:%q requested provider:%q model id:%q model:%q",
+			conversationModel, turnModel, requestedProvider, requestedModelID, requestedModel)
+	}
+	var markerCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'migration.ai_provider_models_v1'`).Scan(&markerCount); err != nil {
+		t.Fatalf("query migration marker: %v", err)
+	}
+	if markerCount != 1 {
+		t.Fatalf("migration marker count = %d, want 1", markerCount)
+	}
+
+	if _, err := database.Exec(`DELETE FROM ai_provider_models WHERE id = ?`, "provider-legacy"); err != nil {
+		t.Fatalf("delete migrated model: %v", err)
+	}
+	var nullableConversationModel, nullableTurnModel sql.NullString
+	if err := database.QueryRow(`SELECT c.model_id, t.model_id FROM ai_conversations c JOIN ai_turns t
+		ON t.conversation_id = c.id WHERE c.id = ?`, "conversation-legacy").
+		Scan(&nullableConversationModel, &nullableTurnModel); err != nil {
+		t.Fatalf("query cleared model references: %v", err)
+	}
+	if nullableConversationModel.Valid || nullableTurnModel.Valid {
+		t.Fatalf("deleted model references = conversation:%v turn:%v, want NULL", nullableConversationModel, nullableTurnModel)
+	}
+	var historicalProvider, historicalModel string
+	if err := database.QueryRow(`SELECT requested_provider_id, requested_model FROM ai_turns WHERE id = ?`, "turn-legacy").
+		Scan(&historicalProvider, &historicalModel); err != nil {
+		t.Fatalf("query preserved snapshots: %v", err)
+	}
+	if historicalProvider != "provider-legacy" || historicalModel != "legacy-model" {
+		t.Fatalf("historical snapshot changed = provider:%q model:%q", historicalProvider, historicalModel)
+	}
+}
+
 func TestMigrateSQLiteCreatesUptimeSchema(t *testing.T) {
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -730,7 +846,7 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 	if err := Migrate(database); err != nil {
 		t.Fatalf("replay Migrate: %v", err)
 	}
-	for _, table := range []string{"ai_providers", "ai_conversations", "ai_turns", "ai_messages", "ai_tool_calls"} {
+	for _, table := range []string{"ai_providers", "ai_provider_models", "ai_conversations", "ai_turns", "ai_messages", "ai_tool_calls"} {
 		var name string
 		if err := database.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
 			t.Fatalf("missing AI table %s: %v", table, err)
@@ -738,14 +854,16 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 	}
 	var indexCount int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (
-		'uq_ai_providers_default', 'idx_ai_conversations_updated',
-		'idx_ai_turns_conversation_created', 'uq_ai_turns_active',
-		'idx_ai_messages_conversation_created', 'idx_ai_tool_calls_turn_created'
-	)`).Scan(&indexCount); err != nil {
+			'uq_ai_providers_default', 'idx_ai_provider_models_provider',
+			'uq_ai_provider_models_default', 'uq_ai_provider_models_fallback',
+			'idx_ai_conversations_updated', 'idx_ai_conversations_model', 'idx_ai_turns_model',
+			'idx_ai_turns_conversation_created', 'uq_ai_turns_active',
+			'idx_ai_messages_conversation_created', 'idx_ai_tool_calls_turn_created'
+		)`).Scan(&indexCount); err != nil {
 		t.Fatalf("query AI indexes: %v", err)
 	}
-	if indexCount != 6 {
-		t.Fatalf("AI index count = %d, want 6", indexCount)
+	if indexCount != 11 {
+		t.Fatalf("AI index count = %d, want 11", indexCount)
 	}
 
 	now := "2026-07-31T12:00:00Z"
@@ -806,15 +924,29 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 
 func TestMySQLMigrationIncludesAISchemaAndSafeWidths(t *testing.T) {
 	statements := strings.Join(mysqlMigrationStatements(), "\n")
+	compatibility := strings.Join(aiCompatibilityColumnStatements(DialectMySQL), "\n")
+	upgrade := strings.Join(aiUpgradeStatements(DialectMySQL), "\n")
+	all := statements + "\n" + compatibility + "\n" + upgrade
 	for _, fragment := range []string{
 		"CREATE TABLE IF NOT EXISTS ai_providers",
 		"base_url VARCHAR(2048) NOT NULL",
 		"api_key_ciphertext LONGTEXT NOT NULL",
+		"enabled BOOLEAN NOT NULL DEFAULT 1",
+		"discovery_latency_ms INT NOT NULL DEFAULT 0",
 		"UNIQUE KEY uq_ai_providers_normalized_name (normalized_name)",
 		"ALTER TABLE ai_providers ADD COLUMN default_marker VARCHAR(1) NULL",
 		"CREATE UNIQUE INDEX uq_ai_providers_default ON ai_providers(default_marker)",
+		"CREATE TABLE IF NOT EXISTS ai_provider_models",
+		"model_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL",
+		"UNIQUE KEY uq_ai_provider_models_identity (provider_id, model_id)",
+		"UNIQUE KEY uq_ai_provider_models_default (default_marker)",
+		"UNIQUE KEY uq_ai_provider_models_fallback (fallback_marker)",
 		"CREATE TABLE IF NOT EXISTS ai_conversations",
+		"ALTER TABLE ai_conversations ADD COLUMN model_id VARCHAR(36) NULL",
 		"CREATE TABLE IF NOT EXISTS ai_turns",
+		"requested_provider_id VARCHAR(36) NOT NULL DEFAULT ''",
+		"requested_model_id VARCHAR(36) NULL",
+		"fallback_used BOOLEAN NOT NULL DEFAULT 0",
 		"active_marker VARCHAR(1) NULL",
 		"UNIQUE KEY uq_ai_turns_active (conversation_id, active_marker)",
 		"CREATE TABLE IF NOT EXISTS ai_messages",
@@ -822,10 +954,14 @@ func TestMySQLMigrationIncludesAISchemaAndSafeWidths(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS ai_tool_calls",
 		"arguments_json LONGTEXT NOT NULL",
 		"target_id VARCHAR(1024) NOT NULL DEFAULT ''",
+		"INSERT INTO ai_provider_models",
+		"migration.ai_provider_models_v1",
+		"FOREIGN KEY (provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE",
+		"FOREIGN KEY (model_id) REFERENCES ai_provider_models(id) ON DELETE SET NULL",
 		"FOREIGN KEY (conversation_id) REFERENCES ai_conversations(id) ON DELETE CASCADE",
 		"FOREIGN KEY (turn_id) REFERENCES ai_turns(id) ON DELETE CASCADE",
 	} {
-		if !strings.Contains(statements, fragment) {
+		if !strings.Contains(all, fragment) {
 			t.Errorf("MySQL AI migration missing %q", fragment)
 		}
 	}

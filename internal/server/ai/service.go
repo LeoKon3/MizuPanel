@@ -35,6 +35,7 @@ type ProviderInput struct {
 	BaseURL  string
 	Model    string
 	APIKey   string
+	Enabled  *bool
 }
 
 type ProviderUpdate struct {
@@ -44,15 +45,40 @@ type ProviderUpdate struct {
 	Model       string
 	APIKey      *string
 	ClearAPIKey bool
+	Enabled     *bool
+}
+
+type ModelInput struct {
+	ModelID     string
+	DisplayName string
+	Enabled     *bool
+}
+
+type ModelUpdate struct {
+	ModelID     string
+	DisplayName string
+	Enabled     bool
+}
+
+type ResolvedModel struct {
+	Provider   store.AIProvider
+	Model      store.AIProviderModel
+	Credential ProviderCredential
+	Adapter    Adapter
 }
 
 type AuditEvent struct {
-	Action     string
-	ProviderID string
-	Model      string
-	ToolCall   store.AIToolCall
-	Status     string
-	Duration   time.Duration
+	Action              string
+	ProviderID          string
+	ModelID             string
+	Model               string
+	RequestedProviderID string
+	RequestedModelID    string
+	RequestedModel      string
+	FallbackUsed        bool
+	ToolCall            store.AIToolCall
+	Status              string
+	Duration            time.Duration
 }
 
 type AuditCallback func(AuditEvent)
@@ -74,6 +100,7 @@ type ProgressPhase string
 const (
 	ProgressAccepted             ProgressPhase = "accepted"
 	ProgressModel                ProgressPhase = "model"
+	ProgressFallback             ProgressPhase = "fallback"
 	ProgressTool                 ProgressPhase = "tool"
 	ProgressComposing            ProgressPhase = "composing"
 	ProgressAwaitingConfirmation ProgressPhase = "awaiting_confirmation"
@@ -81,9 +108,11 @@ const (
 )
 
 type ProgressEvent struct {
-	Phase      ProgressPhase `json:"phase"`
-	ToolName   string        `json:"tool_name,omitempty"`
-	TargetName string        `json:"target_name,omitempty"`
+	Phase        ProgressPhase `json:"phase"`
+	ToolName     string        `json:"tool_name,omitempty"`
+	TargetName   string        `json:"target_name,omitempty"`
+	ProviderName string        `json:"provider_name,omitempty"`
+	Model        string        `json:"model,omitempty"`
 }
 
 type ProgressCallback func(ProgressEvent)
@@ -123,6 +152,10 @@ func (s *Service) CreateProvider(ctx context.Context, input ProviderInput) (stor
 		return store.AIProvider{}, err
 	}
 	provider.ID = uuid.NewString()
+	provider.Enabled = true
+	if input.Enabled != nil {
+		provider.Enabled = *input.Enabled
+	}
 	provider.APIKeyCiphertext, err = s.secrets.Encrypt(provider.ID, provider.Protocol, input.APIKey)
 	if err != nil {
 		return store.AIProvider{}, err
@@ -138,11 +171,19 @@ func (s *Service) UpdateProvider(ctx context.Context, id string, update Provider
 	if update.ClearAPIKey && update.APIKey != nil {
 		return store.AIProvider{}, store.ErrAIInvalid
 	}
-	normalized, err := normalizeProvider(ProviderInput{Name: update.Name, Protocol: update.Protocol, BaseURL: update.BaseURL, Model: update.Model})
+	modelValue := update.Model
+	if strings.TrimSpace(modelValue) == "" {
+		modelValue = existing.Model
+	}
+	normalized, err := normalizeProvider(ProviderInput{Name: update.Name, Protocol: update.Protocol, BaseURL: update.BaseURL, Model: modelValue})
 	if err != nil {
 		return store.AIProvider{}, err
 	}
 	normalized.ID = existing.ID
+	normalized.Enabled = existing.Enabled
+	if update.Enabled != nil {
+		normalized.Enabled = *update.Enabled
+	}
 	normalized.APIKeyCiphertext = existing.APIKeyCiphertext
 	if update.ClearAPIKey {
 		normalized.APIKeyCiphertext = ""
@@ -163,17 +204,26 @@ func (s *Service) UpdateProvider(ctx context.Context, id string, update Provider
 	}
 	connectionChanged := normalized.Protocol != existing.Protocol ||
 		normalized.BaseURL != existing.BaseURL ||
-		normalized.Model != existing.Model ||
 		normalized.APIKeyCiphertext != existing.APIKeyCiphertext
 	if !connectionChanged {
-		normalized.Default = existing.Default
-		normalized.ChatCapable = existing.ChatCapable
-		normalized.ToolsCapable = existing.ToolsCapable
-		normalized.ProbeStatus = existing.ProbeStatus
-		normalized.ProbedAt = existing.ProbedAt
-		normalized.ProbeError = existing.ProbeError
+		normalized.DiscoveryStatus = existing.DiscoveryStatus
+		normalized.DiscoveryLatency = existing.DiscoveryLatency
+		normalized.DiscoveredAt = existing.DiscoveredAt
+		normalized.DiscoveryError = existing.DiscoveryError
 	}
-	return s.store.UpdateProvider(ctx, normalized)
+	updated, err := s.store.UpdateProviderConnection(ctx, normalized, connectionChanged)
+	if err != nil {
+		return store.AIProvider{}, err
+	}
+	if strings.TrimSpace(update.Model) != "" && update.Model != existing.Model && len(existing.Models) > 0 {
+		model := existing.Models[0]
+		model.ModelID = strings.TrimSpace(update.Model)
+		if _, err := s.store.UpdateModel(ctx, model); err != nil {
+			return store.AIProvider{}, err
+		}
+		return s.store.GetProvider(ctx, id)
+	}
+	return updated, nil
 }
 
 func (s *Service) DeleteProvider(ctx context.Context, id string) error {
@@ -189,18 +239,14 @@ func (s *Service) GetProvider(ctx context.Context, id string) (store.AIProvider,
 }
 
 func (s *Service) TestProvider(ctx context.Context, id string) (store.AIProvider, error) {
-	provider, credential, adapter, err := s.providerCredential(ctx, id, false)
+	provider, err := s.store.GetProvider(ctx, id)
 	if err != nil {
 		return store.AIProvider{}, err
 	}
-	capabilities, probeErr := adapter.Probe(ctx, credential)
-	status, safeError := "success", ""
-	if probeErr != nil {
-		status, safeError = "failure", SafeErrorMessage(probeErr)
+	if len(provider.Models) == 0 {
+		return store.AIProvider{}, store.ErrAINotFound
 	}
-	if err := s.store.SaveProviderProbe(ctx, provider.ID, capabilities.Chat, capabilities.Tools, status, safeError, s.now().UTC()); err != nil {
-		return store.AIProvider{}, err
-	}
+	_, probeErr := s.TestModel(ctx, provider.Models[0].ID)
 	updated, err := s.store.GetProvider(ctx, id)
 	if err != nil {
 		return store.AIProvider{}, err
@@ -208,11 +254,133 @@ func (s *Service) TestProvider(ctx context.Context, id string) (store.AIProvider
 	return updated, probeErr
 }
 
+func (s *Service) DiscoverProvider(ctx context.Context, id string) ([]string, error) {
+	provider, credential, adapter, err := s.providerConnectionCredential(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	started := s.now()
+	models, discoverErr := adapter.ListModels(ctx, credential)
+	elapsed := s.now().Sub(started)
+	status, safeError := "success", ""
+	if discoverErr != nil {
+		status, safeError = "failure", SafeErrorMessage(discoverErr)
+	}
+	if err := s.store.SaveProviderDiscovery(ctx, provider.ID, status, durationMilliseconds(elapsed), safeError, s.now().UTC()); err != nil {
+		return nil, err
+	}
+	if discoverErr != nil {
+		return nil, discoverErr
+	}
+	return normalizeDiscoveredModels(models), nil
+}
+
+func (s *Service) ImportModels(ctx context.Context, providerID string, inputs []ModelInput) ([]store.AIProviderModel, error) {
+	if len(inputs) == 0 || len(inputs) > 100 {
+		return nil, store.ErrAIInvalid
+	}
+	models := make([]store.AIProviderModel, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		modelID, displayName, err := normalizeModelInput(input.ModelID, input.DisplayName)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[modelID]; exists {
+			return nil, store.ErrAIConflict
+		}
+		seen[modelID] = struct{}{}
+		enabled := true
+		if input.Enabled != nil {
+			enabled = *input.Enabled
+		}
+		models = append(models, store.AIProviderModel{ModelID: modelID, DisplayName: displayName, Enabled: enabled, ProbeStatus: "unknown"})
+	}
+	return s.store.CreateProviderModels(ctx, providerID, models)
+}
+
+func (s *Service) ListProviderModels(ctx context.Context, providerID string) ([]store.AIProviderModel, error) {
+	if _, err := s.store.GetProvider(ctx, providerID); err != nil {
+		return nil, err
+	}
+	return s.store.ListProviderModels(ctx, providerID)
+}
+
+func (s *Service) GetModel(ctx context.Context, id string) (store.AIProviderModel, error) {
+	return s.store.GetModel(ctx, id)
+}
+
+func (s *Service) UpdateModel(ctx context.Context, id string, update ModelUpdate) (store.AIProviderModel, error) {
+	modelID, displayName, err := normalizeModelInput(update.ModelID, update.DisplayName)
+	if err != nil {
+		return store.AIProviderModel{}, err
+	}
+	return s.store.UpdateModel(ctx, store.AIProviderModel{ID: id, ModelID: modelID, DisplayName: displayName, Enabled: update.Enabled})
+}
+
+func (s *Service) DeleteModel(ctx context.Context, id string) error {
+	return s.store.DeleteModel(ctx, id)
+}
+
+func (s *Service) TestModel(ctx context.Context, id string) (store.AIProviderModel, error) {
+	resolved, err := s.resolveModel(ctx, id, false)
+	if err != nil {
+		return store.AIProviderModel{}, err
+	}
+	started := s.now()
+	capabilities, probeErr := resolved.Adapter.Probe(ctx, resolved.Credential)
+	elapsed := s.now().Sub(started)
+	status, safeError := "success", ""
+	if probeErr != nil {
+		status, safeError = "failure", SafeErrorMessage(probeErr)
+	}
+	if err := s.store.SaveModelProbe(ctx, id, capabilities.Chat, capabilities.Tools, status,
+		durationMilliseconds(elapsed), safeError, s.now().UTC()); err != nil {
+		return store.AIProviderModel{}, err
+	}
+	updated, err := s.store.GetModel(ctx, id)
+	if err != nil {
+		return store.AIProviderModel{}, err
+	}
+	return updated, probeErr
+}
+
+func (s *Service) GetRouting(ctx context.Context) (store.AIRouting, error) {
+	return s.store.GetRouting(ctx)
+}
+
+func (s *Service) SetRouting(ctx context.Context, defaultID, fallbackID *string) (store.AIRouting, error) {
+	defaultID = normalizedOptionalID(defaultID)
+	fallbackID = normalizedOptionalID(fallbackID)
+	if defaultID != nil && fallbackID != nil && *defaultID == *fallbackID {
+		return store.AIRouting{}, store.ErrAIInvalid
+	}
+	for _, modelID := range []*string{defaultID, fallbackID} {
+		if modelID == nil {
+			continue
+		}
+		if _, err := s.resolveModel(ctx, *modelID, true); err != nil {
+			return store.AIRouting{}, err
+		}
+	}
+	if err := s.store.SetRouting(ctx, defaultID, fallbackID); err != nil {
+		if errors.Is(err, store.ErrAIInvalid) && (defaultID != nil || fallbackID != nil) {
+			return store.AIRouting{}, ErrProviderCapability
+		}
+		return store.AIRouting{}, err
+	}
+	return s.store.GetRouting(ctx)
+}
+
 func (s *Service) SetDefaultProvider(ctx context.Context, id string) error {
 	return s.store.SetDefaultProvider(ctx, id)
 }
 
 func (s *Service) CreateConversation(ctx context.Context, title string) (store.AIConversation, error) {
+	return s.CreateConversationWithModel(ctx, title, nil)
+}
+
+func (s *Service) CreateConversationWithModel(ctx context.Context, title string, modelID *string) (store.AIConversation, error) {
 	if strings.TrimSpace(title) == "" {
 		title = "新会话"
 	}
@@ -220,7 +388,20 @@ func (s *Service) CreateConversation(ctx context.Context, title string) (store.A
 	if err != nil {
 		return store.AIConversation{}, err
 	}
-	return s.store.CreateConversation(ctx, title)
+	modelID = normalizedOptionalID(modelID)
+	if modelID != nil {
+		if _, err := s.resolveModel(ctx, *modelID, true); err != nil {
+			return store.AIConversation{}, err
+		}
+	} else {
+		defaultModel, defaultErr := s.store.DefaultModel(ctx)
+		if defaultErr == nil {
+			modelID = &defaultModel.ID
+		} else if !errors.Is(defaultErr, store.ErrAINotFound) {
+			return store.AIConversation{}, defaultErr
+		}
+	}
+	return s.store.CreateConversationWithModel(ctx, title, modelID)
 }
 
 func (s *Service) ListConversations(ctx context.Context, limit int) ([]store.AIConversation, error) {
@@ -233,6 +414,22 @@ func (s *Service) RenameConversation(ctx context.Context, id, title string) erro
 		return err
 	}
 	return s.store.RenameConversation(ctx, id, validated)
+}
+
+func (s *Service) SetConversationModel(ctx context.Context, id string, modelID *string) (store.AIConversation, error) {
+	modelID = normalizedOptionalID(modelID)
+	if modelID != nil {
+		if _, err := s.resolveModel(ctx, *modelID, true); err != nil {
+			return store.AIConversation{}, err
+		}
+	}
+	if err := s.store.SetConversationModel(ctx, id, modelID); err != nil {
+		if errors.Is(err, store.ErrAIInvalid) && modelID != nil {
+			return store.AIConversation{}, ErrProviderCapability
+		}
+		return store.AIConversation{}, err
+	}
+	return s.store.GetConversation(ctx, id)
 }
 
 func (s *Service) DeleteConversation(ctx context.Context, id string) error {
@@ -267,18 +464,48 @@ func (s *Service) SendWithProgress(ctx context.Context, conversationID, provider
 	if len(content) > maxUserMessageBytes {
 		return SendResult{}, ErrMessageTooLarge
 	}
-	provider, credential, adapter, err := s.providerCredential(ctx, providerID, true)
-	if err != nil {
-		return SendResult{}, err
-	}
 	conversation, err := s.store.GetConversation(ctx, conversationID)
 	if err != nil {
 		return SendResult{}, err
 	}
+	if providerID != "" {
+		provider, providerErr := s.store.GetProvider(ctx, providerID)
+		if providerErr != nil {
+			return SendResult{}, providerErr
+		}
+		var compatibilityID string
+		for _, model := range provider.Models {
+			if model.ModelID == provider.Model {
+				compatibilityID = model.ID
+				break
+			}
+		}
+		if compatibilityID == "" && len(provider.Models) > 0 {
+			compatibilityID = provider.Models[0].ID
+		}
+		if compatibilityID == "" {
+			return SendResult{}, ErrProviderCapability
+		}
+		if conversation.ModelID == nil || *conversation.ModelID != compatibilityID {
+			if err := s.store.SetConversationModel(ctx, conversationID, &compatibilityID); err != nil {
+				if errors.Is(err, store.ErrAIInvalid) {
+					return SendResult{}, ErrProviderCapability
+				}
+				return SendResult{}, err
+			}
+			conversation.ModelID = &compatibilityID
+		}
+	}
+	resolved, err := s.ResolveConversationModel(ctx, conversationID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	provider, model := resolved.Provider, resolved.Model
+	credential, adapter := resolved.Credential, resolved.Adapter
 	if conversation.Title == "新会话" {
 		_ = s.store.RenameConversation(ctx, conversation.ID, localConversationTitle(content))
 	}
-	turn, _, err := s.store.StartTurn(ctx, conversationID, provider, content)
+	turn, _, err := s.store.StartModelTurn(ctx, conversationID, provider, model, content)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -300,7 +527,35 @@ func (s *Service) SendWithProgress(ctx context.Context, conversationID, provider
 		s.emitProgress(progress, ProgressEvent{Phase: ProgressModel})
 		response, callErr := adapter.Complete(ctx, credential, ChatRequest{Messages: messages, Tools: s.registry.Definitions()})
 		if callErr != nil {
-			return result, callErr
+			if modelCall != 0 || !isFallbackEligible(ctx, callErr) {
+				return result, callErr
+			}
+			fallback, fallbackErr := s.resolveFallback(ctx, model.ID)
+			if fallbackErr != nil {
+				if errors.Is(fallbackErr, store.ErrAINotFound) || errors.Is(fallbackErr, ErrProviderCapability) {
+					return result, callErr
+				}
+				return result, fallbackErr
+			}
+			turn, fallbackErr = s.store.SwitchTurnModelBeforeTools(ctx, turn.ID, fallback.Provider, fallback.Model)
+			if fallbackErr != nil {
+				return result, fallbackErr
+			}
+			result.Turn = turn
+			provider, model = fallback.Provider, fallback.Model
+			credential, adapter = fallback.Credential, fallback.Adapter
+			s.emitProgress(progress, ProgressEvent{Phase: ProgressFallback, ProviderName: provider.Name, Model: model.ModelID})
+			if audit != nil {
+				audit(AuditEvent{Action: "model_fallback", ProviderID: provider.ID, ModelID: model.ID,
+					Model: model.ModelID, RequestedProviderID: turn.RequestedProviderID,
+					RequestedModelID: pointerString(turn.RequestedModelID), RequestedModel: turn.RequestedModel,
+					FallbackUsed: true, Status: "success"})
+			}
+			modelCall++
+			response, callErr = adapter.Complete(ctx, credential, ChatRequest{Messages: messages, Tools: s.registry.Definitions()})
+			if callErr != nil {
+				return result, callErr
+			}
 		}
 		if len(response.ToolCalls) == 0 {
 			final := strings.TrimSpace(response.Content)
@@ -326,7 +581,7 @@ func (s *Service) SendWithProgress(ctx context.Context, conversationID, provider
 			if validationErr != nil {
 				validationFailed = true
 				if audit != nil {
-					audit(AuditEvent{Action: "tool_query", ProviderID: provider.ID, Model: provider.Model,
+					audit(AuditEvent{Action: "tool_query", ProviderID: provider.ID, ModelID: model.ID, Model: model.ModelID,
 						ToolCall: store.AIToolCall{ToolName: boundedString(proposed.Name, 64), Risk: "unknown",
 							TargetType: "conversation", TargetID: conversationID}, Status: "failure"})
 				}
@@ -349,7 +604,7 @@ func (s *Service) SendWithProgress(ctx context.Context, conversationID, provider
 			if audit != nil {
 				for _, call := range validated {
 					if call.Risk == RiskConfirm {
-						audit(AuditEvent{Action: "tool_propose", ProviderID: provider.ID, Model: provider.Model,
+						audit(AuditEvent{Action: "tool_propose", ProviderID: provider.ID, ModelID: model.ID, Model: model.ModelID,
 							ToolCall: store.AIToolCall{ToolName: call.Definition.Name, Risk: string(call.Risk),
 								TargetType: call.Target.Type, TargetID: call.Target.ID, TargetName: call.Target.Name,
 								NodeID: call.Target.NodeID}, Status: "failure"})
@@ -377,7 +632,7 @@ func (s *Service) SendWithProgress(ctx context.Context, conversationID, provider
 				}
 				s.emitProgress(progress, ProgressEvent{Phase: ProgressAwaitingConfirmation, ToolName: call.Definition.Name, TargetName: call.Target.Name})
 				if audit != nil {
-					audit(AuditEvent{Action: "tool_propose", ProviderID: provider.ID, Model: provider.Model, ToolCall: created, Status: "pending"})
+					audit(AuditEvent{Action: "tool_propose", ProviderID: provider.ID, ModelID: model.ID, Model: model.ModelID, ToolCall: created, Status: "pending"})
 				}
 				result.ToolCall, result.Turn.Status = &created, "awaiting_confirmation"
 				return result, nil
@@ -403,7 +658,7 @@ func (s *Service) SendWithProgress(ctx context.Context, conversationID, provider
 			}
 			created.Status, created.ResultSummary = status, summary
 			if audit != nil {
-				audit(AuditEvent{Action: "tool_query", ProviderID: provider.ID, Model: provider.Model, ToolCall: created, Status: status, Duration: s.now().Sub(started)})
+				audit(AuditEvent{Action: "tool_query", ProviderID: provider.ID, ModelID: model.ID, Model: model.ModelID, ToolCall: created, Status: status, Duration: s.now().Sub(started)})
 			}
 			encoded := boundedToolResult(toolPayload)
 			messages = append(messages, ChatMessage{Role: "tool", ToolCallID: proposed.ID, Content: encoded})
@@ -424,30 +679,49 @@ func (s *Service) Confirm(ctx context.Context, id string, audit AuditCallback) (
 		return SendResult{}, err
 	}
 	if audit != nil {
-		audit(AuditEvent{Action: "tool_confirm", ProviderID: turn.ProviderID, Model: turn.Model, ToolCall: call, Status: "running"})
+		audit(AuditEvent{Action: "tool_confirm", ProviderID: turn.ProviderID, ModelID: pointerString(turn.ModelID), Model: turn.Model,
+			RequestedProviderID: turn.RequestedProviderID, RequestedModelID: pointerString(turn.RequestedModelID), RequestedModel: turn.RequestedModel,
+			FallbackUsed: turn.FallbackUsed, ToolCall: call, Status: "running"})
 	}
 	validated, err := s.registry.Validate(ctx, call.ToolName, json.RawMessage(call.ArgumentsJSON))
 	if err != nil || validated.Risk != RiskConfirm || validated.Target.ID != call.TargetID || validated.Target.NodeID != call.NodeID {
-		_ = s.store.UpdateToolCallResult(context.WithoutCancel(ctx), call.ID, "failure", "目标已变化，操作未执行")
-		message, finishErr := s.store.CompleteTurn(context.WithoutCancel(ctx), turn, "目标状态已变化，操作未执行。")
+		status, summary, assistant := "failure", "目标已变化，操作未执行", "目标状态已变化，操作未执行。"
+		if errors.Is(err, ErrUnsupportedTool) {
+			status, summary, assistant = "unsupported", "当前操作不受支持", "当前操作不受支持，未执行。"
+		}
+		_ = s.store.UpdateToolCallResult(context.WithoutCancel(ctx), call.ID, status, summary)
+		message, finishErr := s.store.CompleteTurn(context.WithoutCancel(ctx), turn, assistant)
 		if finishErr != nil {
 			return SendResult{}, finishErr
 		}
-		call.Status, call.ResultSummary = "failure", "目标已变化，操作未执行"
+		turn.Status = "completed"
+		call.Status, call.ResultSummary = status, summary
 		if audit != nil {
-			audit(AuditEvent{Action: "tool_execute", ProviderID: turn.ProviderID, Model: turn.Model, ToolCall: call, Status: "failure"})
+			audit(AuditEvent{Action: "tool_execute", ProviderID: turn.ProviderID, ModelID: pointerString(turn.ModelID), Model: turn.Model,
+				RequestedProviderID: turn.RequestedProviderID, RequestedModelID: pointerString(turn.RequestedModelID), RequestedModel: turn.RequestedModel,
+				FallbackUsed: turn.FallbackUsed, ToolCall: call, Status: status})
 		}
 		return SendResult{Turn: turn, Message: &message, ToolCall: &call}, nil
 	}
 	started := s.now()
 	toolResult, executeErr := s.registry.Execute(ctx, validated)
-	status, summary, assistant := "success", toolResult.Summary, "操作执行成功。"
+	status, summary, assistant := toolResult.Status, toolResult.Summary, "操作执行成功。"
+	if status == "" {
+		status = "success"
+	}
 	if executeErr != nil {
 		status, summary, assistant = "failure", "操作执行失败", "操作执行失败，未确认成功状态。"
+		if errors.Is(executeErr, ErrUnsupportedTool) {
+			status, summary, assistant = "unsupported", "当前操作不受支持", "当前操作不受支持，未执行。"
+		}
+	} else if status == "accepted" {
+		assistant = "操作已接受，正在处理中。"
 	}
 	call.Status, call.ResultSummary = status, summary
 	if audit != nil {
-		audit(AuditEvent{Action: "tool_execute", ProviderID: turn.ProviderID, Model: turn.Model, ToolCall: call, Status: status, Duration: s.now().Sub(started)})
+		audit(AuditEvent{Action: "tool_execute", ProviderID: turn.ProviderID, ModelID: pointerString(turn.ModelID), Model: turn.Model,
+			RequestedProviderID: turn.RequestedProviderID, RequestedModelID: pointerString(turn.RequestedModelID), RequestedModel: turn.RequestedModel,
+			FallbackUsed: turn.FallbackUsed, ToolCall: call, Status: status, Duration: s.now().Sub(started)})
 	}
 	if err := s.store.UpdateToolCallResult(context.WithoutCancel(ctx), call.ID, status, summary); err != nil {
 		return SendResult{}, err
@@ -471,9 +745,82 @@ func (s *Service) Reject(ctx context.Context, id string, audit AuditCallback) (S
 	}
 	turn.Status = "completed"
 	if audit != nil {
-		audit(AuditEvent{Action: "tool_reject", ProviderID: turn.ProviderID, Model: turn.Model, ToolCall: call, Status: "rejected"})
+		audit(AuditEvent{Action: "tool_reject", ProviderID: turn.ProviderID, ModelID: pointerString(turn.ModelID), Model: turn.Model,
+			RequestedProviderID: turn.RequestedProviderID, RequestedModelID: pointerString(turn.RequestedModelID), RequestedModel: turn.RequestedModel,
+			FallbackUsed: turn.FallbackUsed, ToolCall: call, Status: "rejected"})
 	}
 	return SendResult{Turn: turn, Message: &message, ToolCall: &call}, nil
+}
+
+func (s *Service) ResolveConversationModel(ctx context.Context, conversationID string) (ResolvedModel, error) {
+	conversation, err := s.store.GetConversation(ctx, conversationID)
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	if conversation.ModelID == nil || *conversation.ModelID == "" {
+		return ResolvedModel{}, ErrProviderCapability
+	}
+	return s.resolveModel(ctx, *conversation.ModelID, true)
+}
+
+func (s *Service) resolveFallback(ctx context.Context, requestedModelID string) (ResolvedModel, error) {
+	model, err := s.store.FallbackModel(ctx, requestedModelID)
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	return s.resolveModel(ctx, model.ID, true)
+}
+
+func (s *Service) resolveModel(ctx context.Context, id string, requireCapabilities bool) (ResolvedModel, error) {
+	if s == nil || s.store == nil || s.secrets == nil {
+		return ResolvedModel{}, ErrServiceUnavailable
+	}
+	model, err := s.store.GetModel(ctx, id)
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	provider, err := s.store.GetProvider(ctx, model.ProviderID)
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	if !provider.Enabled || !model.Enabled {
+		return ResolvedModel{}, ErrProviderCapability
+	}
+	if requireCapabilities && (!model.ChatCapable || !model.ToolsCapable) {
+		return ResolvedModel{}, ErrProviderCapability
+	}
+	adapter, ok := s.adapters[provider.Protocol]
+	if !ok {
+		return ResolvedModel{}, ErrServiceUnavailable
+	}
+	apiKey, err := s.secrets.Decrypt(provider.ID, provider.Protocol, provider.APIKeyCiphertext)
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	credential := ProviderCredential{ID: provider.ID, Name: provider.Name, Protocol: provider.Protocol,
+		BaseURL: provider.BaseURL, APIKey: apiKey, Model: model.ModelID}
+	return ResolvedModel{Provider: provider, Model: model, Credential: credential, Adapter: adapter}, nil
+}
+
+func (s *Service) providerConnectionCredential(ctx context.Context, id string) (store.AIProvider, ProviderCredential, Adapter, error) {
+	if s == nil || s.store == nil || s.secrets == nil {
+		return store.AIProvider{}, ProviderCredential{}, nil, ErrServiceUnavailable
+	}
+	provider, err := s.store.GetProvider(ctx, id)
+	if err != nil {
+		return store.AIProvider{}, ProviderCredential{}, nil, err
+	}
+	adapter, ok := s.adapters[provider.Protocol]
+	if !ok {
+		return store.AIProvider{}, ProviderCredential{}, nil, ErrServiceUnavailable
+	}
+	apiKey, err := s.secrets.Decrypt(provider.ID, provider.Protocol, provider.APIKeyCiphertext)
+	if err != nil {
+		return store.AIProvider{}, ProviderCredential{}, nil, err
+	}
+	credential := ProviderCredential{ID: provider.ID, Name: provider.Name, Protocol: provider.Protocol,
+		BaseURL: provider.BaseURL, APIKey: apiKey}
+	return provider, credential, adapter, nil
 }
 
 func (s *Service) providerCredential(ctx context.Context, id string, requireCapabilities bool) (store.AIProvider, ProviderCredential, Adapter, error) {
@@ -490,7 +837,7 @@ func (s *Service) providerCredential(ctx context.Context, id string, requireCapa
 	if err != nil {
 		return store.AIProvider{}, ProviderCredential{}, nil, err
 	}
-	if requireCapabilities && (!provider.ChatCapable || !provider.ToolsCapable) {
+	if requireCapabilities && (!provider.Enabled || !provider.ChatCapable || !provider.ToolsCapable) {
 		return store.AIProvider{}, ProviderCredential{}, nil, ErrProviderCapability
 	}
 	adapter, ok := s.adapters[provider.Protocol]
@@ -510,14 +857,87 @@ func normalizeProvider(input ProviderInput) (store.AIProvider, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Protocol = strings.TrimSpace(input.Protocol)
 	input.Model = strings.TrimSpace(input.Model)
-	if input.Name == "" || !utf8.ValidString(input.Name) || len(input.Name) > 191 || input.Model == "" || !utf8.ValidString(input.Model) || len(input.Model) > 255 || input.Protocol != ProtocolOpenAIChatCompletions {
+	if input.Name == "" || !utf8.ValidString(input.Name) || len(input.Name) > 191 ||
+		(input.Model != "" && (!utf8.ValidString(input.Model) || len(input.Model) > 255)) ||
+		input.Protocol != ProtocolOpenAIChatCompletions {
 		return store.AIProvider{}, store.ErrAIInvalid
 	}
 	baseURL, err := NormalizeBaseURL(input.BaseURL)
 	if err != nil || len(input.APIKey) > 16*1024 {
 		return store.AIProvider{}, store.ErrAIInvalid
 	}
-	return store.AIProvider{Name: input.Name, Protocol: input.Protocol, BaseURL: baseURL, Model: input.Model, ProbeStatus: "unknown"}, nil
+	return store.AIProvider{Name: input.Name, Protocol: input.Protocol, BaseURL: baseURL, Model: input.Model,
+		Enabled: true, DiscoveryStatus: "unknown", ProbeStatus: "unknown"}, nil
+}
+
+func normalizeModelInput(modelID, displayName string) (string, string, error) {
+	modelID = strings.TrimSpace(modelID)
+	displayName = strings.TrimSpace(displayName)
+	if modelID == "" || !utf8.ValidString(modelID) || len(modelID) > 255 ||
+		!utf8.ValidString(displayName) || len(displayName) > 255 {
+		return "", "", store.ErrAIInvalid
+	}
+	return modelID, displayName, nil
+}
+
+func normalizeDiscoveredModels(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, min(len(values), 100))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || !utf8.ValidString(value) || len(value) > 255 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+		if len(result) == 100 {
+			break
+		}
+	}
+	return result
+}
+
+func normalizedOptionalID(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func durationMilliseconds(value time.Duration) int {
+	if value <= 0 {
+		return 0
+	}
+	milliseconds := value.Milliseconds()
+	if milliseconds > 600000 {
+		return 600000
+	}
+	return int(milliseconds)
+}
+
+func pointerString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func isFallbackEligible(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var adapterErr *AdapterError
+	if !errors.As(err, &adapterErr) {
+		return false
+	}
+	return adapterErr.Kind == ErrorTimeout || adapterErr.Kind == ErrorRateLimit || adapterErr.Kind == ErrorUpstream
 }
 
 func boundedContext(messages []store.AIMessage) []ChatMessage {
@@ -621,12 +1041,16 @@ func (s *Service) ListModels(ctx context.Context, providerID, baseURL, apiKey st
 		return nil, ErrServiceUnavailable
 	}
 	if apiKey == "" && providerID != "" {
-		_, savedCredential, _, err := s.providerCredential(ctx, providerID, false)
+		_, savedCredential, _, err := s.providerConnectionCredential(ctx, providerID)
 		if err != nil {
 			return nil, err
 		}
 		apiKey = savedCredential.APIKey
 	}
 	credential := ProviderCredential{Protocol: ProtocolOpenAIChatCompletions, BaseURL: baseURL, APIKey: apiKey}
-	return adapter.ListModels(ctx, credential)
+	models, err := adapter.ListModels(ctx, credential)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeDiscoveredModels(models), nil
 }

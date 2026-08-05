@@ -42,11 +42,13 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPagePr
       .catch(() => setAlertRulesCount(0))
   }, [])
 
-  // 自动选择第一个在线节点
+  // 默认选择第一个在线节点；节点被删除或刷新后，修正失效的选择。
   useEffect(() => {
-    if (!selectedNodeID && nodes.length > 0) {
-      const firstOnline = nodes.find((n) => n.status === 'online')
-      setSelectedNodeID(firstOnline?.id || nodes[0].id)
+    const selectedStillExists = selectedNodeID && nodes.some((node) => node.id === selectedNodeID)
+    const fallbackNode = nodes.find((node) => node.status === 'online') || nodes[0]
+    const nextSelectedNodeID = selectedStillExists ? selectedNodeID : fallbackNode?.id
+    if (nextSelectedNodeID !== selectedNodeID) {
+      setSelectedNodeID(nextSelectedNodeID)
     }
   }, [nodes, selectedNodeID])
 
@@ -174,7 +176,9 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPagePr
     })
   }, [nodes, timeRange])
 
-  const onlineClustersCount = k8sClusters.filter(c => c.status === 'online').length
+  const onlineClustersCount = k8sClusters.filter((cluster) => (
+    cluster.node_status === 'online' && cluster.status === 'online'
+  )).length
   const totalClustersCount = k8sClusters.length
   const activeAlertsCount = alertHistory.length
 
@@ -182,10 +186,7 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPagePr
   const onlineNodesWithMetrics = nodes.filter(n => n.status === 'online' && n.latest_metric)
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeID)
-  const selectedMetrics = selectedNode?.latest_metric
-
-  // 服务器信息（显示第一个节点作为示例）
-  const serverNode = nodes[0]
+  const serverNode = selectedNode || nodes[0]
 
   return (
     <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-4">
@@ -286,7 +287,12 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPagePr
           <div className="space-y-2">
             {nodes.length > 0 ? (
               nodes.slice(0, 5).map((node) => (
-                <ServerStatusCard key={node.id} node={node} />
+                <ServerStatusCard
+                  key={node.id}
+                  node={node}
+                  selected={node.id === selectedNodeID}
+                  onSelect={() => setSelectedNodeID(node.id)}
+                />
               ))
             ) : (
               <div className="soft-empty-state p-8 text-center">
@@ -761,14 +767,27 @@ function TrendChart({
   )
 }
 
-function ServerStatusCard({ node }: { node: Node }) {
+function ServerStatusCard({
+  node,
+  selected,
+  onSelect,
+}: {
+  node: Node
+  selected: boolean
+  onSelect: () => void
+}) {
   const metric = node.latest_metric
   const statusText = node.status === 'online' ? '在线' : '离线'
   const statusColor = node.status === 'online' ? 'bg-success' : 'bg-muted-foreground/40'
   const statusGlow = node.status === 'online' ? 'shadow-[0_0_14px_rgb(var(--success)/0.45)]' : ''
 
   return (
-    <div className="soft-card p-3 shadow-none">
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={`soft-card w-full p-3 text-left shadow-none transition focus:outline-none focus:ring-2 focus:ring-primary/30 ${selected ? 'border-primary/40 bg-primary/5' : 'hover:border-primary/25'}`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -801,7 +820,7 @@ function ServerStatusCard({ node }: { node: Node }) {
           </div>
         </div>
       )}
-    </div>
+    </button>
   )
 }
 

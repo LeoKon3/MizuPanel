@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AIConversation, AIConversationState, AIProvider, AIProviderInput, AISendResult, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, SystemLogsResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AIConversation, AIConversationState, AIProgress, AIProvider, AIProviderInput, AIProviderModel, AIProviderModelInput, AIProviderModelUpdate, AIRouting, AISendResult, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, SystemLogsResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -553,15 +553,65 @@ export function setDefaultAIProvider(id: string): Promise<AIProvider> {
   return request(`/api/ai/providers/${encodeURIComponent(id)}/default`, { method: 'POST' })
 }
 
+export function discoverAIProvider(id: string, signal?: AbortSignal): Promise<{ provider: AIProvider; models: string[] }> {
+  return request(`/api/ai/providers/${encodeURIComponent(id)}/discover`, { method: 'POST', signal })
+}
+
+export function getAIProviderModels(id: string, signal?: AbortSignal): Promise<{ models: AIProviderModel[] }> {
+  return request(`/api/ai/providers/${encodeURIComponent(id)}/models`, signal ? { signal } : undefined)
+}
+
+export function importAIProviderModels(id: string, models: AIProviderModelInput[], enabled = true): Promise<{ models: AIProviderModel[] }> {
+  return request(`/api/ai/providers/${encodeURIComponent(id)}/models`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ models, enabled })
+  })
+}
+
+export function getAIModel(id: string, signal?: AbortSignal): Promise<AIProviderModel> {
+  return request(`/api/ai/models/${encodeURIComponent(id)}`, signal ? { signal } : undefined)
+}
+
+export function updateAIModel(id: string, input: AIProviderModelUpdate): Promise<AIProviderModel> {
+  return request(`/api/ai/models/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  })
+}
+
+export function deleteAIModel(id: string): Promise<void> {
+  return requestVoid(`/api/ai/models/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function testAIModel(id: string, signal?: AbortSignal): Promise<AIProviderModel> {
+  return request(`/api/ai/models/${encodeURIComponent(id)}/test`, { method: 'POST', signal })
+}
+
+export function getAIRouting(signal?: AbortSignal): Promise<AIRouting> {
+  return request('/api/ai/routing', signal ? { signal } : undefined)
+}
+
+export function updateAIRouting(input: AIRouting): Promise<AIRouting> {
+  return request('/api/ai/routing', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  })
+}
+
 export function getAIConversations(limit = 50, signal?: AbortSignal): Promise<{ conversations: AIConversation[] }> {
   return request(`/api/ai/conversations?limit=${encodeURIComponent(String(limit))}`, signal ? { signal } : undefined)
 }
 
-export function createAIConversation(title = ''): Promise<AIConversation> {
+export function createAIConversation(title = '', modelID?: string): Promise<AIConversation> {
+  const body: { title: string; model_id?: string } = { title }
+  if (modelID) body.model_id = modelID
   return request('/api/ai/conversations', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title })
+    body: JSON.stringify(body)
   })
 }
 
@@ -581,24 +631,33 @@ export function getAIConversation(id: string, limit = 50, signal?: AbortSignal):
   return request(`/api/ai/conversations/${encodeURIComponent(id)}?limit=${encodeURIComponent(String(limit))}`, signal ? { signal } : undefined)
 }
 
-export function sendAIMessage(id: string, providerID: string, content: string, signal?: AbortSignal): Promise<AISendResult> {
+export function updateAIConversationModel(id: string, modelID: string | null, signal?: AbortSignal): Promise<AIConversation> {
+  return request(`/api/ai/conversations/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_id: modelID }),
+    signal
+  })
+}
+
+export function sendAIMessage(id: string, content: string, signal?: AbortSignal): Promise<AISendResult> {
   return request(`/api/ai/conversations/${encodeURIComponent(id)}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider_id: providerID, content }),
+    body: JSON.stringify({ content }),
     signal
   })
 }
 
 export async function sendAIMessageStream(
-  id: string, providerID: string, content: string,
+  id: string, content: string,
   signal: AbortSignal | undefined,
-  onProgress: (event: { phase: string; tool_name?: string; target_name?: string }) => void
+  onProgress: (event: AIProgress) => void
 ): Promise<AISendResult> {
   const response = await fetch(`/api/ai/conversations/${encodeURIComponent(id)}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider_id: providerID, content }),
+    body: JSON.stringify({ content }),
     signal
   })
   if (!response.ok) throw new APIError(response.status, await errorMessage(response))

@@ -14,10 +14,9 @@ export function SystemSettingsPage({ settings, about, selectedRetention, saving,
       <div className="soft-panel-header flex flex-wrap items-center justify-between gap-4 px-5 py-4">
         <div className="min-w-0">
           <h2 className="font-display text-2xl font-black text-foreground">系统设置</h2>
-          <p className="mt-1 text-sm font-semibold text-muted-foreground">管理指标数据保留策略和 AI 模型连接。</p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          <span className="text-xs font-semibold text-muted-foreground">当前版本 <strong className="font-mono text-foreground">{about ? `v${about.version}` : '加载中'}</strong></span>
+          <span className="text-xs font-semibold text-muted-foreground">版本 <strong className="font-mono text-foreground">{about ? `v${about.version}` : '加载中'}</strong></span>
           <a
             href={about?.github_url || 'https://github.com/LeoKon3/MizuPanel'}
             target="_blank"
@@ -30,17 +29,14 @@ export function SystemSettingsPage({ settings, about, selectedRetention, saving,
         </div>
       </div>
 
-      <section className="border-b border-border px-4 py-4 sm:px-5" aria-labelledby="metrics-retention-title">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 id="metrics-retention-title" className="text-base font-black text-foreground">指标保留时间</h3>
-              <span className="soft-chip px-2.5 py-1 text-xs font-black text-muted-foreground">当前 {settings ? retentionLabel(settings.metrics_retention) : '加载中'}</span>
-            </div>
-            <p className="mt-1 text-xs font-semibold leading-5 text-muted-foreground">最长保留 7 天。缩短后，下一轮清理会删除超出范围的数据。</p>
+      <section className="border-b border-border bg-surface/35 px-4 py-4 sm:px-5" aria-labelledby="metrics-retention-title">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <h3 id="metrics-retention-title" className="text-base font-black text-foreground">指标保留时间</h3>
+            <span className="soft-chip px-2.5 py-1 text-xs font-black text-muted-foreground">当前 {settings ? retentionLabel(settings.metrics_retention) : '加载中'}</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex flex-wrap gap-1 border border-border bg-surface/70 p-1" role="group" aria-label="指标保留时间">
+            <div className="inline-flex flex-wrap gap-1 border border-border bg-card p-1" role="group" aria-label="指标保留时间">
               {retentionOptions.map((option) => (
                 <button
                   key={option.value}
@@ -62,10 +58,6 @@ export function SystemSettingsPage({ settings, about, selectedRetention, saving,
         {message ? <p className="mt-3 text-sm font-black text-success">{message}</p> : null}
         {error ? <p className="mt-3 text-sm font-black text-danger">{error}</p> : null}
       </section>
-
-      <div className="border-b border-border px-4 py-3 text-xs font-semibold text-muted-foreground sm:px-5">
-        <p>配置文件用于首次启动，后台保存后以数据库设置为准；延长保留时间不会恢复已清理数据。</p>
-      </div>
       <AIProviderSettings />
     </section>
   )
