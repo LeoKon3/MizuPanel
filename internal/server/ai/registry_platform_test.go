@@ -48,6 +48,9 @@ func (platformNodeOperationsStub) ContainerStop(context.Context, string, string)
 func (platformNodeOperationsStub) ContainerRestart(context.Context, string, string) (protocol.ContainerRestartResponse, error) {
 	return protocol.ContainerRestartResponse{}, nil
 }
+func (platformNodeOperationsStub) DockerContainerCreate(context.Context, string, protocol.DockerContainerCreateRequest) (protocol.DockerContainerCreateResponse, error) {
+	return protocol.DockerContainerCreateResponse{Supported: false}, nil
+}
 
 func (platformNodeOperationsStub) DockerComposeList(context.Context, string) (protocol.DockerComposeListResponse, error) {
 	return protocol.DockerComposeListResponse{}, nil

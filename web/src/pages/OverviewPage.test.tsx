@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { getAlertHistory, getAlertRules, getK8sClusters, getNodeMetrics } from '../api/client'
-import type { K8sCluster, Node } from '../types'
+import type { AlertHistory, K8sCluster, Node } from '../types'
 import { OverviewPage } from './OverviewPage'
 
 vi.mock('../api/client', () => ({
@@ -81,7 +81,8 @@ describe('OverviewPage', () => {
   })
 
   test('updates system information when a server status card is selected', async () => {
-    render(<OverviewPage nodes={nodes} onlineNodes={2} onAddServer={vi.fn()} />)
+    const onSelectedNodeChange = vi.fn()
+    render(<OverviewPage nodes={nodes} onlineNodes={2} onAddServer={vi.fn()} onSelectedNodeChange={onSelectedNodeChange} />)
 
     await waitFor(() => expect(screen.getByText('host-a')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /Server B/ }))
@@ -89,5 +90,29 @@ describe('OverviewPage', () => {
     expect(screen.getByText('host-b')).toBeInTheDocument()
     expect(screen.getByText('debian arm64')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Server B/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(onSelectedNodeChange).toHaveBeenLastCalledWith('node-b')
+  })
+
+  test('ignores a null alert history response while rendering valid alerts', async () => {
+    const activeAlert: AlertHistory = {
+      id: 1,
+      rule_id: 1,
+      rule_name: 'CPU 使用率过高',
+      node_id: 'node-b',
+      node_name: 'Server B',
+      metric_field: 'cpu_usage',
+      metric_value: 95,
+      threshold: 80,
+      triggered_at: '2026-08-05T00:00:00Z',
+      notification_sent: false,
+      created_at: '2026-08-05T00:00:00Z',
+    }
+    vi.mocked(getAlertHistory)
+      .mockResolvedValueOnce({ history: null as unknown as AlertHistory[] })
+      .mockResolvedValueOnce({ history: [activeAlert] })
+
+    render(<OverviewPage nodes={nodes} onlineNodes={2} onAddServer={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByText('CPU 使用率过高')).toBeInTheDocument())
   })
 })

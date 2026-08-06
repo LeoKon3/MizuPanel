@@ -48,6 +48,7 @@ type NodeOperations interface {
 	AgentUpgrade(ctx context.Context, nodeID string, targetVersion string) (protocol.AgentUpgradeResponse, error)
 	AgentUpgradeStatus(nodeID string) protocol.AgentUpgradeStatus
 	DockerExec(ctx context.Context, nodeID string, command string) (protocol.DockerExecResponse, error)
+	DockerContainerCreate(ctx context.Context, nodeID string, request protocol.DockerContainerCreateRequest) (protocol.DockerContainerCreateResponse, error)
 	ContainerStart(ctx context.Context, nodeID string, containerID string) (protocol.ContainerStartResponse, error)
 	ContainerStop(ctx context.Context, nodeID string, containerID string) (protocol.ContainerStopResponse, error)
 	ContainerRestart(ctx context.Context, nodeID string, containerID string) (protocol.ContainerRestartResponse, error)

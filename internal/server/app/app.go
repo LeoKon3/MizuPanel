@@ -117,10 +117,12 @@ func NewHandler(deps Dependencies) http.Handler {
 	if deps.AI != nil {
 		registry := serverai.NewRegistry(serverai.RegistryDependencies{Nodes: deps.Nodes, Metrics: deps.Metrics, Processes: deps.ProcessSnapshots, Docker: deps.DockerSnapshots,
 			Alerts: deps.Alerts, Uptime: deps.Uptime, Services: serviceCenter.Facade,
-			ServerLogs: deps.ServerLogs, AgentOps: hub, Automation: taskEngine, Tasks: deps.Tasks, Audit: deps.Audit, Kubernetes: k8sService})
+			ServerLogs: deps.ServerLogs, AgentOps: hub, Automation: taskEngine, Tasks: deps.Tasks, Audit: deps.Audit, Kubernetes: k8sService, KubernetesMutations: k8sService})
 		aiConfig.Service = serverai.NewService(deps.AI, serverai.NewSecretManager(deps.AIKeyFile), registry, nil)
 		if err := aiConfig.Service.Initialize(context.Background()); err != nil {
 			log.Printf("Warning: AI service initialization failed: %s", serverai.SafeErrorMessage(err))
+		} else {
+			go aiConfig.Service.RunAcceptedOperationVerifier(context.Background())
 		}
 	}
 	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, api.AutomationConfig{Store: deps.Tasks, Runner: taskEngine}, serviceCenter, aiConfig, auth, deps.Audit, deps.ServerLogs)

@@ -34,6 +34,9 @@ func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
 		"compose_service_action",
 		"systemd_service_action",
 		"run_saved_script",
+		"create_scheduled_task",
+		"create_docker_container",
+		"create_k8s_deployment",
 	}
 	definitions := registry.Definitions()
 	if len(definitions) != len(want) {

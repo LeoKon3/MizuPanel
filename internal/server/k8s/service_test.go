@@ -14,15 +14,23 @@ import (
 )
 
 type recordingHub struct {
-	online  bool
-	lastMsg interface{}
-	resp    json.RawMessage
+	online    bool
+	lastMsg   interface{}
+	messages  []interface{}
+	resp      json.RawMessage
+	responses []json.RawMessage
 }
 
 func (h *recordingHub) IsNodeOnline(nodeID string) bool { return h.online }
 func (h *recordingHub) SendToNodeWithTimeout(nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error) {
 	h.lastMsg = message
-	return h.resp, nil
+	h.messages = append(h.messages, message)
+	response := h.resp
+	if len(h.responses) > 0 {
+		response = h.responses[0]
+		h.responses = h.responses[1:]
+	}
+	return response, nil
 }
 
 type contextRecordingHub struct {
@@ -141,6 +149,106 @@ func TestGetPodLogsSendsStoredKubeconfigContentAndContext(t *testing.T) {
 	}
 	if req.Context != "ctx-a" {
 		t.Fatalf("expected context ctx-a, got %q", req.Context)
+	}
+}
+
+func TestCreateDeploymentBuildsBoundedDeploymentRequest(t *testing.T) {
+	hub := &recordingHub{online: true, resp: json.RawMessage(`{"success":true,"message":"created"}`)}
+	service := newTestService(t, "apiVersion: v1\nkind: Config\n", "ctx-a", hub)
+	port := int32(8080)
+	result, err := service.CreateDeployment(context.Background(), "cluster-1", CreateDeploymentRequest{
+		Namespace: "default", Name: "web", Image: "nginx:1.27", Replicas: 3, ContainerPort: &port,
+	})
+	if err != nil {
+		t.Fatalf("create deployment: %v", err)
+	}
+	if result == nil || !result.Success || result.Name != "web" || result.Replicas != 3 {
+		t.Fatalf("create deployment result = %+v", result)
+	}
+	req, ok := hub.lastMsg.(protocol.K8sApplyManifestRequest)
+	if !ok {
+		t.Fatalf("expected K8sApplyManifestRequest, got %#v", hub.lastMsg)
+	}
+	if req.DryRun || req.KubeconfigContent != "apiVersion: v1\nkind: Config\n" || req.Context != "ctx-a" || len(hub.messages) != 2 {
+		t.Fatalf("unexpected apply request metadata = %+v", req)
+	}
+	dryRun, ok := hub.messages[0].(protocol.K8sApplyManifestRequest)
+	if !ok || !dryRun.DryRun {
+		t.Fatalf("expected first Deployment request to be dry-run: %#v", hub.messages)
+	}
+	var deployment struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Metadata   struct {
+			Name      string            `json:"name"`
+			Namespace string            `json:"namespace"`
+			Labels    map[string]string `json:"labels"`
+		} `json:"metadata"`
+		Spec struct {
+			Replicas *int32 `json:"replicas"`
+			Selector struct {
+				MatchLabels map[string]string `json:"matchLabels"`
+			} `json:"selector"`
+			Template struct {
+				Metadata struct {
+					Labels map[string]string `json:"labels"`
+				} `json:"metadata"`
+				Spec struct {
+					Containers []struct {
+						Name  string `json:"name"`
+						Image string `json:"image"`
+						Ports []struct {
+							ContainerPort int32 `json:"containerPort"`
+						} `json:"ports"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(req.YAML), &deployment); err != nil {
+		t.Fatalf("decode generated deployment: %v", err)
+	}
+	if deployment.APIVersion != "apps/v1" || deployment.Kind != "Deployment" || deployment.Metadata.Name != "web" || deployment.Metadata.Namespace != "default" || deployment.Metadata.Labels["app"] != "web" || deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 3 || len(deployment.Spec.Template.Spec.Containers) != 1 || deployment.Spec.Template.Spec.Containers[0].Image != "nginx:1.27" || deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort != 8080 {
+		t.Fatalf("generated deployment = %+v", deployment)
+	}
+}
+
+func TestCreateDeploymentStopsAfterDryRunFailure(t *testing.T) {
+	hub := &recordingHub{online: true, responses: []json.RawMessage{json.RawMessage(`{"success":false,"error":"字段校验失败"}`)}}
+	service := newTestService(t, "apiVersion: v1\nkind: Config\n", "ctx-a", hub)
+	_, err := service.CreateDeployment(context.Background(), "cluster-1", CreateDeploymentRequest{
+		Namespace: "default", Name: "web", Image: "nginx:1.27", Replicas: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "预校验失败") {
+		t.Fatalf("dry-run error = %v", err)
+	}
+	if len(hub.messages) != 1 {
+		t.Fatalf("apply requests after dry-run failure = %d, want 1", len(hub.messages))
+	}
+	request, ok := hub.messages[0].(protocol.K8sApplyManifestRequest)
+	if !ok || !request.DryRun {
+		t.Fatalf("first request after dry-run failure = %#v", hub.messages)
+	}
+}
+
+func TestCreateDeploymentRejectsUnsupportedFieldsAndBounds(t *testing.T) {
+	invalidPort := int32(65536)
+	for name, request := range map[string]CreateDeploymentRequest{
+		"invalid namespace": {Namespace: "../default", Name: "web", Image: "nginx", Replicas: 1},
+		"invalid image":     {Namespace: "default", Name: "web", Image: "nginx;id", Replicas: 1},
+		"invalid replicas":  {Namespace: "default", Name: "web", Image: "nginx", Replicas: 21},
+		"invalid port":      {Namespace: "default", Name: "web", Image: "nginx", Replicas: 1, ContainerPort: &invalidPort},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hub := &recordingHub{online: true, resp: json.RawMessage(`{"success":true}`)}
+			service := newTestService(t, "apiVersion: v1\nkind: Config\n", "ctx-a", hub)
+			if _, err := service.CreateDeployment(context.Background(), "cluster-1", request); err == nil {
+				t.Fatal("CreateDeployment succeeded for invalid request")
+			}
+			if hub.lastMsg != nil {
+				t.Fatalf("invalid request reached Agent: %#v", hub.lastMsg)
+			}
+		})
 	}
 }
 

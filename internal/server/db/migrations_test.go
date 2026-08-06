@@ -852,6 +852,13 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 			t.Fatalf("missing AI table %s: %v", table, err)
 		}
 	}
+	var toolCallSchema string
+	if err := database.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_tool_calls'`).Scan(&toolCallSchema); err != nil {
+		t.Fatalf("read AI tool call schema: %v", err)
+	}
+	if !strings.Contains(toolCallSchema, "operation_id") {
+		t.Fatalf("AI tool call schema missing operation_id: %s", toolCallSchema)
+	}
 	var indexCount int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (
 			'uq_ai_providers_default', 'idx_ai_provider_models_provider',
@@ -954,6 +961,7 @@ func TestMySQLMigrationIncludesAISchemaAndSafeWidths(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS ai_tool_calls",
 		"arguments_json LONGTEXT NOT NULL",
 		"target_id VARCHAR(1024) NOT NULL DEFAULT ''",
+		"operation_id VARCHAR(191) NOT NULL DEFAULT ''",
 		"INSERT INTO ai_provider_models",
 		"migration.ai_provider_models_v1",
 		"FOREIGN KEY (provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE",

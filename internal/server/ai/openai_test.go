@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -44,6 +45,86 @@ func TestOpenAIAdapterRequestAndToolResponse(t *testing.T) {
 	}
 	if len(response.ToolCalls) != 1 || response.ToolCalls[0].Name != "list_nodes" || string(response.ToolCalls[0].Arguments) != "{}" {
 		t.Fatalf("tool response = %+v", response)
+	}
+}
+
+func TestOpenAIAdapterStreamsContentAndAssemblesToolCalls(t *testing.T) {
+	adapter := NewOpenAIChatCompletionsAdapter(time.Second)
+	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["stream"] != true {
+			t.Fatalf("stream = %#v, want true", body["stream"])
+		}
+		stream := strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"hello "},"finish_reason":null}]}`,
+			"",
+			`data: {"choices":[{"delta":{"content":"world"},"finish_reason":null}]}`,
+			"",
+			`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"list_","arguments":"{\"li"}}]},"finish_reason":null}]}`,
+			"",
+			`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"nodes","arguments":"mit\":20}"}}]},"finish_reason":"tool_calls"}]}`,
+			"",
+			"data: [DONE]",
+			"",
+		}, "\n")
+		response := jsonResponse(http.StatusOK, stream)
+		response.Header.Set("Content-Type", "text/event-stream")
+		return response, nil
+	})
+
+	var deltas strings.Builder
+	response, err := adapter.CompleteStream(t.Context(), ProviderCredential{BaseURL: "https://model.test/v1", Model: "model-a"}, ChatRequest{}, func(content string) error {
+		deltas.WriteString(content)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CompleteStream: %v", err)
+	}
+	if deltas.String() != "hello world" || response.Content != "hello world" {
+		t.Fatalf("content callback/response = %q/%q", deltas.String(), response.Content)
+	}
+	if len(response.ToolCalls) != 1 || response.ToolCalls[0].ID != "call-1" || response.ToolCalls[0].Name != "list_nodes" || string(response.ToolCalls[0].Arguments) != `{"limit":20}` {
+		t.Fatalf("tool calls = %+v", response.ToolCalls)
+	}
+}
+
+func TestOpenAIAdapterStreamRequiresTerminalAndSanitizesMalformedFrames(t *testing.T) {
+	for _, body := range []string{
+		`data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}` + "\n\n",
+		"data: {not-json}\n\n",
+	} {
+		adapter := NewOpenAIChatCompletionsAdapter(time.Second)
+		adapter.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, body), nil
+		})
+		_, err := adapter.CompleteStream(t.Context(), ProviderCredential{BaseURL: "https://model.test/v1", Model: "model-a"}, ChatRequest{}, nil)
+		var adapterErr *AdapterError
+		if err == nil || !errors.As(err, &adapterErr) || adapterErr.Kind != ErrorProtocol || strings.Contains(err.Error(), "not-json") {
+			t.Fatalf("stream error = %#v", err)
+		}
+	}
+}
+
+func TestOpenAIAdapterStreamRejectsInvalidUTF8AndOversizedMultilineFrame(t *testing.T) {
+	oversizedFrame := strings.Repeat("data: "+strings.Repeat(" ", 64*1024)+"\n", 5) +
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n"
+	invalidUTF8 := append([]byte(`data: {"choices":[{"delta":{"content":"`), 0xff)
+	invalidUTF8 = append(invalidUTF8, []byte(`"},"finish_reason":"stop"}]}`+"\n\n")...)
+
+	for name, body := range map[string][]byte{
+		"invalid UTF-8":           invalidUTF8,
+		"oversized multiline SSE": []byte(oversizedFrame),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseOpenAICompletionStream(t.Context(), bytes.NewReader(body), nil)
+			var adapterErr *AdapterError
+			if err == nil || !errors.As(err, &adapterErr) || adapterErr.Kind != ErrorProtocol {
+				t.Fatalf("stream error = %#v, want protocol error", err)
+			}
+		})
 	}
 }
 

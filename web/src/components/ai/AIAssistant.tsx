@@ -27,7 +27,10 @@ const toolLabels: Record<string, string> = {
   docker_container_action: '变更容器状态',
   compose_service_action: '变更 Compose 状态',
   systemd_service_action: '变更 Systemd 服务',
-  run_saved_script: '运行已有脚本'
+  run_saved_script: '运行已有脚本',
+  create_scheduled_task: '创建计划任务',
+  create_docker_container: '创建 Docker 容器',
+  create_k8s_deployment: '创建 Kubernetes Deployment'
 }
 
 function toolTarget(call: AIToolCall) {
@@ -126,6 +129,14 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               )
             })}
 
+            {activeSending && assistant.streamedContent ? (
+              <article className="flex justify-start" aria-live="polite">
+                <div className="max-w-[88%] min-w-0 border border-border bg-surface px-3 py-2.5 text-sm font-semibold leading-6 text-foreground">
+                  <p className="whitespace-pre-wrap break-words">{assistant.streamedContent}</p>
+                </div>
+              </article>
+            ) : null}
+
             {toolCalls.filter((call) => call.status === 'pending').map((call) => (
               <div key={call.id} className={`border px-3 py-3 ${call.status === 'pending' ? 'border-warning/40 bg-warning/10' : 'border-border bg-surface/70'}`}>
                 <div className="flex min-w-0 items-start justify-between gap-3">
@@ -144,9 +155,16 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
             ))}
 
             {activeSending ? (
-              <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground" role="status">
-                <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
-                {assistant.progress ? progressText(assistant.progress, toolLabels) : '模型正在处理请求'}
+              <div className="space-y-1.5 text-xs font-bold text-muted-foreground" role="status">
+                {(assistant.timeline.length > 0 ? assistant.timeline : assistant.progress ? [assistant.progress] : []).map((event, index, events) => (
+                  <div key={`${event.phase}-${event.tool_name ?? ''}-${event.target_name ?? ''}-${index}`} className={`flex min-w-0 items-center gap-2 ${index === events.length - 1 ? 'text-foreground' : 'opacity-60'}`}>
+                    {index === events.length - 1 ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" /> : <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />}
+                    <span className="min-w-0 break-words">{progressText(event, toolLabels)}</span>
+                  </div>
+                ))}
+                {assistant.timeline.length === 0 && !assistant.progress ? (
+                  <div className="flex items-center gap-2"><LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />模型正在处理请求</div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -203,6 +221,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
                   <p className="font-black">{toolLabels[confirmCall.tool_name] ?? confirmCall.tool_name}</p>
                   <p className="mt-1 break-words font-semibold">目标：{toolTarget(confirmCall)}</p>
                   {confirmCall.node_id ? <p className="mt-1 break-all text-xs font-semibold opacity-80">节点：{confirmCall.node_id}</p> : null}
+                  {confirmCall.result_summary ? <p className="mt-2 break-words text-xs font-semibold opacity-90">{confirmCall.result_summary}</p> : null}
                 </div>
               </div>
               <p className="font-semibold leading-6 text-muted-foreground">执行前 Server 会重新检查目标是否存在、节点是否在线以及 Agent 能力是否仍满足要求。校验失败时不会执行。</p>

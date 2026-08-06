@@ -2,6 +2,73 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.20 - 2026-08-06
+
+### Fixed
+
+- Fixed accepted AI operations stopping verification after one transient error.
+- Fixed Agent upgrade results remaining unresolved after a Server restart when
+  the upgraded Agent reconnects at the current version.
+- Fixed Docker create responses losing the container ID and name when the
+  container was created but inspection or startup failed.
+- Fixed confirmed remote operations being persisted in separate writes; their
+  operation result and assistant Turn now commit atomically, and interrupted
+  running calls are reported as having an unknown outcome that may have run.
+
+## v0.1.19 - 2026-08-06
+
+### Added
+
+- Added confirmation-gated AI tools for creating scheduled tasks from saved
+  scripts, bounded Docker containers, and generated Kubernetes Deployments.
+- Added a typed Docker Engine create/start protocol across Server, Agent, and
+  the WebSocket Hub, with capability detection for older Agents.
+- Added strict Registry, Agent, Kubernetes, and frontend verification for
+  safe parameters, unsupported capabilities, and transient streamed answers.
+
+### Security
+
+- AI creation tools reject shell commands, environment variables, host mounts,
+  privileged flags, arbitrary Kubernetes YAML, and unsupported resource kinds.
+- Task results never expose saved script content; Docker and Kubernetes results
+  return only bounded resource identity and status projections.
+
+## v0.1.18 - 2026-08-05
+
+### Added
+
+- Added real upstream answer streaming for OpenAI-compatible models while
+  preserving buffered adapter compatibility, fallback budgets, cancellation,
+  final message persistence, and confirmation-gated operations.
+- Added strict page and selected-resource context for nodes, Kubernetes
+  clusters, and application services, resolved by the Server together with a
+  bounded platform capability projection.
+- Added a temporary streamed assistant response and compact inline execution
+  timeline in both the global drawer and full AI workspace.
+
+### Changed
+
+- Read-tool and model-round transitions now clear superseded streamed text;
+  only pending state-changing operations remain persistent confirmation cards.
+- The Overview server selected in the Server Status panel now also becomes the
+  selected node context for AI requests.
+- Bumped the Server, Dashboard package metadata, README badges, and
+  Server-bundled Agent release version to 0.1.18.
+
+### Fixed
+
+- Fixed empty alert history responses returning `null` and crashing the
+  Overview alert filter; empty histories now remain safe JSON arrays.
+
+### Security
+
+- Streaming exposes only bounded user-visible answer text and fixed progress
+  metadata. Hidden chain-of-thought, Provider payloads, tool arguments, raw
+  results, and transient platform context are not emitted or persisted.
+- Upstream SSE frames enforce total, per-frame, terminal, and UTF-8 boundaries;
+  oversized capability projections remain complete bounded JSON rather than
+  being truncated mid-document.
+
 ## v0.1.17 - 2026-08-05
 
 ### Fixed

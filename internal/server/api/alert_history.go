@@ -47,6 +47,9 @@ func (s *Server) handleListAlertHistory(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if history == nil {
+		history = make([]store.AlertHistory, 0)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"history": history})
 }

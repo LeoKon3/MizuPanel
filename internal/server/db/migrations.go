@@ -485,6 +485,7 @@ func sqliteMigrationStatements() []string {
 					target_id TEXT NOT NULL DEFAULT '',
 					target_name TEXT NOT NULL DEFAULT '',
 					node_id TEXT NOT NULL DEFAULT '',
+					operation_id TEXT NOT NULL DEFAULT '',
 					result_summary TEXT NOT NULL DEFAULT '',
 					created_at TEXT NOT NULL,
 					updated_at TEXT NOT NULL,
@@ -973,6 +974,7 @@ func mysqlMigrationStatements() []string {
 					target_id VARCHAR(1024) NOT NULL DEFAULT '',
 					target_name VARCHAR(256) NOT NULL DEFAULT '',
 					node_id VARCHAR(191) NOT NULL DEFAULT '',
+					operation_id VARCHAR(191) NOT NULL DEFAULT '',
 					result_summary VARCHAR(512) NOT NULL DEFAULT '',
 					created_at VARCHAR(64) NOT NULL,
 					updated_at VARCHAR(64) NOT NULL,
@@ -1055,6 +1057,7 @@ func aiCompatibilityColumnStatements(dialect Dialect) []string {
 			`ALTER TABLE ai_turns ADD COLUMN requested_model_id VARCHAR(36) NULL`,
 			`ALTER TABLE ai_turns ADD COLUMN requested_model VARCHAR(255) NOT NULL DEFAULT ''`,
 			`ALTER TABLE ai_turns ADD COLUMN fallback_used BOOLEAN NOT NULL DEFAULT 0`,
+			`ALTER TABLE ai_tool_calls ADD COLUMN operation_id VARCHAR(191) NOT NULL DEFAULT ''`,
 		}
 	}
 	return []string{
@@ -1070,6 +1073,7 @@ func aiCompatibilityColumnStatements(dialect Dialect) []string {
 		`ALTER TABLE ai_turns ADD COLUMN requested_model_id TEXT`,
 		`ALTER TABLE ai_turns ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ai_turns ADD COLUMN fallback_used INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE ai_tool_calls ADD COLUMN operation_id TEXT NOT NULL DEFAULT ''`,
 	}
 }
 

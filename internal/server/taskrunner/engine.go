@@ -234,6 +234,13 @@ func (e *Engine) RunManualScript(ctx context.Context, scriptID int64, nodeIDs []
 	return detail.TaskRun, nil
 }
 
+func (e *Engine) GetRun(ctx context.Context, runID int64) (*store.TaskRunDetail, error) {
+	if e == nil || e.store == nil {
+		return nil, ErrUnavailable
+	}
+	return e.store.GetRun(ctx, runID)
+}
+
 func (e *Engine) RunManualTask(ctx context.Context, taskID int64) (store.TaskRun, error) {
 	if e == nil || e.store == nil || e.nodes == nil || e.executor == nil {
 		return store.TaskRun{}, ErrUnavailable

@@ -193,3 +193,39 @@ func (h *OperationsHandler) HandleContainerDelete(ctx context.Context, req proto
 		Success: true,
 	}
 }
+
+func (h *OperationsHandler) HandleDockerContainerCreate(ctx context.Context, req protocol.DockerContainerCreateRequest) protocol.DockerContainerCreateResponse {
+	response := protocol.DockerContainerCreateResponse{
+		Type:      protocol.MessageTypeDockerContainerCreateResponse,
+		RequestID: req.RequestID,
+		Name:      strings.TrimSpace(req.Name),
+	}
+	if h == nil || h.collector == nil {
+		response.Error = "Docker 容器创建未启用"
+		return response
+	}
+	if !h.collector.SupportsContainerCreate() {
+		response.Error = "Docker 容器创建不可用"
+		return response
+	}
+	response.Supported = true
+	created, err := h.collector.CreateContainer(ctx, req)
+	response.Created = strings.TrimSpace(created.ID) != ""
+	response.ContainerID = created.ID
+	if created.Name != "" {
+		response.Name = created.Name
+	}
+	if err != nil {
+		if response.Created {
+			response.Error = "Docker 容器已创建，但后续操作失败"
+		} else {
+			response.Error = "Docker 容器创建失败"
+		}
+		return response
+	}
+	response.Success = true
+	if req.Start {
+		response.Started = true
+	}
+	return response
+}

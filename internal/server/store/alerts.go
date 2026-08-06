@@ -145,7 +145,7 @@ func (s *AlertStore) GetAlertHistory(nodeID string, limit int) ([]AlertHistory, 
 	}
 	defer rows.Close()
 
-	var history []AlertHistory
+	history := make([]AlertHistory, 0)
 	for rows.Next() {
 		var h AlertHistory
 		if err := rows.Scan(&h.ID, &h.RuleID, &h.RuleName, &h.NodeID, &h.NodeName, &h.MetricField, &h.MetricValue, &h.Threshold, &h.TriggeredAt, &h.ResolvedAt, &h.NotificationSent, &h.NotificationError, &h.NotificationAttemptedAt, &h.RecoveryNotificationSent, &h.RecoveryNotificationError, &h.RecoveryNotificationAttemptedAt, &h.CreatedAt); err != nil {

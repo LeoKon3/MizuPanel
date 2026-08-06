@@ -38,8 +38,9 @@ type aiConversationRequest struct {
 }
 
 type aiMessageRequest struct {
-	ProviderID string `json:"provider_id"`
-	Content    string `json:"content"`
+	ProviderID string                   `json:"provider_id"`
+	Content    string                   `json:"content"`
+	Context    *serverai.RequestContext `json:"context,omitempty"`
 }
 
 type aiProviderModelRequest struct {
@@ -576,7 +577,7 @@ func (s *Server) handleAIConversationMessages(w http.ResponseWriter, r *http.Req
 		if !decodeAIRequest(w, r, &request) {
 			return
 		}
-		result, err := s.ai.Send(r.Context(), id, request.ProviderID, request.Content, aiAuditCallback(r))
+		result, err := s.ai.SendWithContext(r.Context(), id, request.ProviderID, request.Content, request.Context, aiAuditCallback(r))
 		if err != nil {
 			writeAIError(w, err)
 			return
@@ -599,6 +600,10 @@ func (s *Server) handleAIConversationMessageStream(w http.ResponseWriter, r *htt
 	if !decodeAIRequest(w, r, &request) {
 		return
 	}
+	if err := s.ai.ValidateRequestContext(r.Context(), request.Context); err != nil {
+		writeAIError(w, err)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusNotImplemented, "streaming response not supported")
@@ -610,35 +615,46 @@ func (s *Server) handleAIConversationMessageStream(w http.ResponseWriter, r *htt
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ctx := r.Context()
-	progress := func(event serverai.ProgressEvent) {
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	writeEvent := func(name string, event any) error {
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
 		data, err := json.Marshal(event)
 		if err != nil {
-			return
+			return err
 		}
-		if _, writeErr := fmt.Fprintf(w, "event: status\ndata: %s\n\n", data); writeErr != nil {
-			return
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data); err != nil {
+			cancel()
+			return context.Canceled
 		}
 		flusher.Flush()
+		return nil
 	}
-	result, err := s.ai.SendWithProgress(ctx, id, request.ProviderID, request.Content, aiAuditCallback(r), progress)
+	progress := func(event serverai.ProgressEvent) {
+		if err := writeEvent("status", event); err != nil {
+			cancel()
+		}
+	}
+	callbacks := serverai.StreamCallbacks{
+		Progress: progress,
+		Delta: func(event serverai.DeltaEvent) error {
+			return writeEvent("delta", event)
+		},
+		Reset: func(event serverai.ResetEvent) error {
+			return writeEvent("reset", event)
+		},
+	}
+	result, err := s.ai.SendWithEvents(ctx, id, request.ProviderID, request.Content, request.Context, aiAuditCallback(r), callbacks)
 	if ctx.Err() != nil {
 		return
 	}
 	if err != nil {
-		payload, _ := json.Marshal(map[string]string{"error": serverai.SafeErrorMessage(err)})
-		fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
-		flusher.Flush()
+		_ = writeEvent("error", map[string]string{"error": serverai.SafeErrorMessage(err)})
 		return
 	}
-	payload, err := json.Marshal(result)
-	if err == nil {
-		fmt.Fprintf(w, "event: result\ndata: %s\n\n", payload)
-		flusher.Flush()
-	}
+	_ = writeEvent("result", result)
 }
 
 func (s *Server) handleAIToolCalls(w http.ResponseWriter, r *http.Request) {

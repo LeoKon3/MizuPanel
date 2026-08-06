@@ -42,6 +42,15 @@ type clientAPI interface {
 	ContainerLogs(ctx context.Context, id string, tail int, follow bool, timestamps bool) (io.ReadCloser, error)
 }
 
+type containerClientAPI interface {
+	CreateContainer(context.Context, protocol.DockerContainerCreateRequest) (containerCreateResult, error)
+}
+
+type containerCreateResult struct {
+	ID   string
+	Name string
+}
+
 func NewCollector() *Collector {
 	return &Collector{socketPath: defaultSocketPath, statsTimeout: defaultStatsTimeout, collectionTimeout: defaultCollectionTimeout, containerLimit: defaultContainerLimit}
 }
@@ -175,6 +184,36 @@ func (c *Collector) ContainerLogs(ctx context.Context, id string, tail int, foll
 	return client.ContainerLogs(ctx, id, tail, follow, timestamps)
 }
 
+func (c *Collector) SupportsContainerCreate() bool {
+	if c == nil {
+		return false
+	}
+	if c.client != nil {
+		_, ok := c.client.(containerClientAPI)
+		return ok
+	}
+	_, err := os.Stat(c.socketPath)
+	return err == nil
+}
+
+func (c *Collector) CreateContainer(ctx context.Context, request protocol.DockerContainerCreateRequest) (containerCreateResult, error) {
+	if c == nil {
+		return containerCreateResult{}, errors.New("Docker container creation unsupported")
+	}
+	client := c.client
+	if client == nil {
+		if _, err := os.Stat(c.socketPath); err != nil {
+			return containerCreateResult{}, fmt.Errorf("Docker socket unavailable: %w", err)
+		}
+		client = newSocketClient(c.socketPath, c.statsTimeout)
+	}
+	containerClient, ok := client.(containerClientAPI)
+	if !ok {
+		return containerCreateResult{}, errors.New("Docker container creation unsupported")
+	}
+	return containerClient.CreateContainer(ctx, request)
+}
+
 type socketClient struct {
 	httpClient          *http.Client
 	httpClientNoTimeout *http.Client
@@ -305,6 +344,7 @@ type containerListItem struct {
 }
 
 type containerInspect struct {
+	Name         string                `json:"Name"`
 	RestartCount int                   `json:"RestartCount"`
 	State        containerInspectState `json:"State"`
 }

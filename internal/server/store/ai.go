@@ -117,6 +117,7 @@ type AIToolCall struct {
 	TargetID       string    `json:"target_id"`
 	TargetName     string    `json:"target_name"`
 	NodeID         string    `json:"node_id"`
+	OperationID    string    `json:"-"`
 	ResultSummary  string    `json:"result_summary"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -878,7 +879,14 @@ func (s *AIStore) finishTurn(ctx context.Context, turn AITurn, status, errorCode
 		return AIMessage{}, err
 	}
 	defer tx.Rollback()
-	now := time.Now().UTC()
+	message, err := s.finishTurnTx(ctx, tx, turn, status, errorCode, content, time.Now().UTC())
+	if err != nil {
+		return AIMessage{}, err
+	}
+	return message, tx.Commit()
+}
+
+func (s *AIStore) finishTurnTx(ctx context.Context, tx *sql.Tx, turn AITurn, status, errorCode, content string, now time.Time) (AIMessage, error) {
 	query := `UPDATE ai_turns SET status = ?, error_code = ?, updated_at = ? WHERE id = ? AND status IN ('running', 'awaiting_confirmation')`
 	if s.dialect == serverdb.DialectMySQL {
 		query = `UPDATE ai_turns SET status = ?, error_code = ?, active_marker = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'awaiting_confirmation')`
@@ -908,7 +916,7 @@ func (s *AIStore) finishTurn(ctx context.Context, turn AITurn, status, errorCode
 	if _, err := tx.ExecContext(ctx, `UPDATE ai_conversations SET updated_at = ? WHERE id = ?`, formatTime(now), turn.ConversationID); err != nil {
 		return AIMessage{}, err
 	}
-	return message, tx.Commit()
+	return message, nil
 }
 
 func (s *AIStore) ListMessages(ctx context.Context, conversationID string, limit int) ([]AIMessage, error) {
@@ -949,10 +957,10 @@ func (s *AIStore) CreateToolCall(ctx context.Context, turn AITurn, call AIToolCa
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO ai_tool_calls
 		(id, turn_id, provider_call_id, tool_name, risk, status, arguments_json, target_type,
-		 target_id, target_name, node_id, result_summary, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, call.ID, call.TurnID,
+		 target_id, target_name, node_id, operation_id, result_summary, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, call.ID, call.TurnID,
 		call.ProviderCallID, call.ToolName, call.Risk, call.Status, call.ArgumentsJSON,
-		call.TargetType, call.TargetID, call.TargetName, call.NodeID, call.ResultSummary,
+		call.TargetType, call.TargetID, call.TargetName, call.NodeID, call.OperationID, call.ResultSummary,
 		formatTime(now), formatTime(now)); err != nil {
 		return AIToolCall{}, err
 	}
@@ -972,8 +980,13 @@ func (s *AIStore) CreateToolCall(ctx context.Context, turn AITurn, call AIToolCa
 }
 
 func (s *AIStore) UpdateToolCallResult(ctx context.Context, id, status, summary string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE ai_tool_calls SET status = ?, result_summary = ?, updated_at = ? WHERE id = ?`,
-		status, summary, formatTime(time.Now().UTC()), id)
+	return s.UpdateToolCallResultWithOperation(ctx, id, status, summary, "")
+}
+
+func (s *AIStore) UpdateToolCallResultWithOperation(ctx context.Context, id, status, summary, operationID string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE ai_tool_calls SET status = ?, result_summary = ?,
+		operation_id = CASE WHEN ? <> '' THEN ? ELSE operation_id END, updated_at = ? WHERE id = ?`,
+		status, summary, operationID, operationID, formatTime(time.Now().UTC()), id)
 	if err != nil {
 		return err
 	}
@@ -987,9 +1000,40 @@ func (s *AIStore) UpdateToolCallResult(ctx context.Context, id, status, summary 
 	return nil
 }
 
+// CompleteToolCallAndTurn persists the outcome of a confirmed operation and
+// its assistant message atomically. The operation itself runs outside the
+// database transaction; if this transaction fails, recovery can mark the
+// running call as having an unknown outcome instead of claiming it did not run.
+func (s *AIStore) CompleteToolCallAndTurn(ctx context.Context, id string, turn AITurn, status, summary, operationID, content string) (AIMessage, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AIMessage{}, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = ?, result_summary = ?,
+		operation_id = CASE WHEN ? <> '' THEN ? ELSE operation_id END, updated_at = ?
+		WHERE id = ? AND status = 'running'`, status, summary, operationID, operationID, formatTime(now), id)
+	if err != nil {
+		return AIMessage{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return AIMessage{}, err
+	}
+	if rows == 0 {
+		return AIMessage{}, ErrAIConflict
+	}
+	message, err := s.finishTurnTx(ctx, tx, turn, "completed", "", content, now)
+	if err != nil {
+		return AIMessage{}, err
+	}
+	return message, tx.Commit()
+}
+
 func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITurn, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT c.id, c.turn_id, c.provider_call_id, c.tool_name, c.risk,
-		c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id,
+		c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
 		c.result_summary, c.created_at, c.updated_at, t.conversation_id, t.model_id, t.provider_id,
 		t.provider_name, t.protocol, t.model, t.requested_provider_id, t.requested_provider_name,
 		t.requested_model_id, t.requested_model, t.fallback_used, t.status, t.error_code, t.created_at, t.updated_at
@@ -1000,7 +1044,7 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 	var callCreated, callUpdated, turnCreated, turnUpdated string
 	err := row.Scan(&call.ID, &call.TurnID, &call.ProviderCallID, &call.ToolName, &call.Risk,
 		&call.Status, &call.ArgumentsJSON, &call.TargetType, &call.TargetID, &call.TargetName,
-		&call.NodeID, &call.ResultSummary, &callCreated, &callUpdated, &turn.ConversationID, &modelID,
+		&call.NodeID, &call.OperationID, &call.ResultSummary, &callCreated, &callUpdated, &turn.ConversationID, &modelID,
 		&turn.ProviderID, &turn.ProviderName, &turn.Protocol, &turn.Model, &turn.RequestedProviderID,
 		&turn.RequestedProviderName, &requestedModelID, &turn.RequestedModel, &turn.FallbackUsed, &turn.Status,
 		&turn.ErrorCode, &turnCreated, &turnUpdated)
@@ -1030,7 +1074,7 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 
 func (s *AIStore) ListToolCalls(ctx context.Context, conversationID string) ([]AIToolCall, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.provider_call_id, c.tool_name,
-		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id,
+		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
 		c.result_summary, c.created_at, c.updated_at FROM ai_tool_calls c
 		JOIN ai_turns t ON t.id = c.turn_id WHERE t.conversation_id = ? ORDER BY c.created_at, c.id`, conversationID)
 	if err != nil {
@@ -1046,6 +1090,72 @@ func (s *AIStore) ListToolCalls(ctx context.Context, conversationID string) ([]A
 		result = append(result, call)
 	}
 	return result, rows.Err()
+}
+
+func (s *AIStore) ListAcceptedToolCalls(ctx context.Context, limit int) ([]AIToolCall, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.provider_call_id, c.tool_name,
+		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
+		c.result_summary, c.created_at, c.updated_at FROM ai_tool_calls c
+		WHERE c.status = 'accepted' ORDER BY c.updated_at, c.id LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]AIToolCall, 0)
+	for rows.Next() {
+		call, err := scanAIToolCall(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, call)
+	}
+	return result, rows.Err()
+}
+
+func (s *AIStore) CompleteAcceptedToolCall(ctx context.Context, id, status, summary, content string) (AIToolCall, AITurn, AIMessage, error) {
+	call, turn, err := s.GetToolCall(ctx, id)
+	if err != nil {
+		return AIToolCall{}, AITurn{}, AIMessage{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AIToolCall{}, AITurn{}, AIMessage{}, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = ?, result_summary = ?, updated_at = ? WHERE id = ? AND status = 'accepted'`,
+		status, summary, formatTime(now), id)
+	if err != nil {
+		return AIToolCall{}, AITurn{}, AIMessage{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return AIToolCall{}, AITurn{}, AIMessage{}, err
+	}
+	if rows == 0 {
+		return AIToolCall{}, AITurn{}, AIMessage{}, ErrAIConflict
+	}
+	message := AIMessage{ID: uuid.NewString(), ConversationID: turn.ConversationID, TurnID: turn.ID,
+		Role: "assistant", Content: content, ProviderName: turn.ProviderName, Model: turn.Model, CreatedAt: now}
+	if strings.TrimSpace(content) != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ai_messages
+			(id, conversation_id, turn_id, role, content, provider_name, model, created_at)
+			VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)`, message.ID, turn.ConversationID, turn.ID,
+			content, turn.ProviderName, turn.Model, formatTime(now)); err != nil {
+			return AIToolCall{}, AITurn{}, AIMessage{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE ai_conversations SET updated_at = ? WHERE id = ?`, formatTime(now), turn.ConversationID); err != nil {
+		return AIToolCall{}, AITurn{}, AIMessage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AIToolCall{}, AITurn{}, AIMessage{}, err
+	}
+	call.Status, call.ResultSummary, call.UpdatedAt = status, summary, now
+	return call, turn, message, nil
 }
 
 func (s *AIStore) ClaimToolCall(ctx context.Context, id string) (AIToolCall, AITurn, error) {
@@ -1078,16 +1188,26 @@ func (s *AIStore) RejectToolCall(ctx context.Context, id string) (AIToolCall, AI
 }
 
 func (s *AIStore) RecoverInterrupted(ctx context.Context) error {
-	now := formatTime(time.Now().UTC())
-	if s.dialect == serverdb.DialectMySQL {
-		if _, err := s.db.ExecContext(ctx, `UPDATE ai_turns SET status = 'interrupted', error_code = 'server_restarted', active_marker = NULL, updated_at = ? WHERE status IN ('running', 'awaiting_confirmation')`, now); err != nil {
-			return err
-		}
-	} else if _, err := s.db.ExecContext(ctx, `UPDATE ai_turns SET status = 'interrupted', error_code = 'server_restarted', updated_at = ? WHERE status IN ('running', 'awaiting_confirmation')`, now); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'interrupted', result_summary = '服务重启，操作未执行', updated_at = ? WHERE status IN ('running', 'pending')`, now)
-	return err
+	defer tx.Rollback()
+	now := formatTime(time.Now().UTC())
+	if s.dialect == serverdb.DialectMySQL {
+		if _, err := tx.ExecContext(ctx, `UPDATE ai_turns SET status = 'interrupted', error_code = 'server_restarted', active_marker = NULL, updated_at = ? WHERE status IN ('running', 'awaiting_confirmation')`, now); err != nil {
+			return err
+		}
+	} else if _, err := tx.ExecContext(ctx, `UPDATE ai_turns SET status = 'interrupted', error_code = 'server_restarted', updated_at = ? WHERE status IN ('running', 'awaiting_confirmation')`, now); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'interrupted',
+		result_summary = CASE WHEN status = 'running' THEN '服务重启，操作结果无法确认，可能已执行' ELSE '服务重启，确认已失效，操作未执行' END,
+		updated_at = ? WHERE status IN ('running', 'pending')`, now)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 const aiProviderSelect = `SELECT id, name, protocol, base_url, model, api_key_ciphertext,
@@ -1223,7 +1343,7 @@ func scanAIToolCall(scanner aiScanner) (AIToolCall, error) {
 	var created, updated string
 	if err := scanner.Scan(&call.ID, &call.TurnID, &call.ProviderCallID, &call.ToolName,
 		&call.Risk, &call.Status, &call.ArgumentsJSON, &call.TargetType, &call.TargetID,
-		&call.TargetName, &call.NodeID, &call.ResultSummary, &created, &updated); err != nil {
+		&call.TargetName, &call.NodeID, &call.OperationID, &call.ResultSummary, &created, &updated); err != nil {
 		return AIToolCall{}, err
 	}
 	var err error

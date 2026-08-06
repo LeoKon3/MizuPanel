@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import * as api from '../../api/client'
-import type { AIConversation, AIMessage, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
+import type { AIConversation, AIConversationState, AIMessage, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
 import { AIAssistantDrawer, AIWorkspacePage } from './AIAssistant'
 import { type AIAssistantState, useAIAssistantState } from './useAIAssistantState'
 
@@ -131,10 +131,14 @@ function assistant(overrides: Partial<AIAssistantState> = {}): AIAssistantState 
     sending: false,
     sendingConversationID: undefined,
     progress: undefined,
+    timeline: [],
+    streamedContent: '',
+    context: { page: 'overview' },
     turnResults: {},
     openDrawer: vi.fn(),
     closeDrawer: vi.fn(),
     setDrawerWidth: vi.fn(),
+    setContext: vi.fn(),
     ensureLoaded: vi.fn(),
     refreshProviders: vi.fn(),
     selectProvider: vi.fn(),
@@ -156,6 +160,7 @@ function SharedStateHarness() {
   return (
     <>
       <button type="button" onClick={state.openDrawer}>Open assistant</button>
+      <button type="button" onClick={() => state.setContext({ page: 'hosts', resource_type: 'node', resource_id: 'node-1' })}>Set node context</button>
       <output data-testid="selected-provider">{state.selectedProviderID}</output>
       <output data-testid="selected-model">{state.selectedModelID}</output>
       <AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />
@@ -401,7 +406,11 @@ describe('AI assistant', () => {
     fireEvent.change(composer, { target: { value: 'check nodes' } })
     fireEvent.keyDown(composer, { key: 'Enter' })
 
-    await waitFor(() => expect(api.sendAIMessageStream).toHaveBeenCalledWith(conversation.id, 'check nodes', expect.any(AbortSignal), expect.any(Function)))
+    await waitFor(() => expect(api.sendAIMessageStream).toHaveBeenCalledWith(conversation.id, 'check nodes', expect.any(AbortSignal), expect.any(Function), expect.objectContaining({
+      context: { page: 'overview' },
+      onDelta: expect.any(Function),
+      onReset: expect.any(Function)
+    })))
     expect(vi.mocked(api.sendAIMessageStream).mock.calls[0]?.[1]).toBe('check nodes')
     expect(JSON.stringify(vi.mocked(api.sendAIMessageStream).mock.calls[0])).not.toContain('provider_id')
     const drawer = screen.getByTestId('ai-drawer-messages')
@@ -429,5 +438,49 @@ describe('AI assistant', () => {
     stream.resolve({ turn: turn() })
     await waitFor(() => expect(api.getAIConversation).toHaveBeenCalled())
     abortSpy.mockRestore()
+  })
+
+  test('sends selected resource context and replaces reset stream content', async () => {
+    const stream = deferred<AISendResult>()
+    const refresh = deferred<AIConversationState>()
+    const finalMessage: AIMessage = {
+      id: 'message-final',
+      conversation_id: conversation.id,
+      turn_id: 'turn-1',
+      role: 'assistant',
+      content: 'live answer',
+      provider_name: 'Primary',
+      model: primaryModel.model_id,
+      created_at: '2026-08-05T00:00:00Z'
+    }
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation)
+      .mockResolvedValueOnce({ conversation, messages: [], tool_calls: [] })
+      .mockImplementation(() => refresh.promise)
+    vi.mocked(api.sendAIMessageStream).mockImplementation((_id, _content, _signal, onProgress, options) => {
+      onProgress({ phase: 'model' })
+      options?.onDelta?.({ content: 'stale' })
+      options?.onReset?.({ reason: 'fallback' })
+      options?.onDelta?.({ content: 'live answer' })
+      return stream.promise
+    })
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Set node context' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    const composer = await screen.findByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })
+    await waitFor(() => expect(composer).not.toBeDisabled())
+    fireEvent.change(composer, { target: { value: 'inspect this node' } })
+    fireEvent.keyDown(composer, { key: 'Enter' })
+
+    const drawer = screen.getByTestId('ai-drawer-messages')
+    expect(await within(drawer).findByText('live answer')).toBeInTheDocument()
+    expect(within(drawer).queryByText('stale')).not.toBeInTheDocument()
+    expect(api.sendAIMessageStream).toHaveBeenCalledWith(conversation.id, 'inspect this node', expect.any(AbortSignal), expect.any(Function), expect.objectContaining({
+      context: { page: 'hosts', resource_type: 'node', resource_id: 'node-1' }
+    }))
+    stream.resolve({ turn: turn(), message: finalMessage })
+    await waitFor(() => expect(within(drawer).queryAllByText('live answer')).toHaveLength(1))
+    refresh.resolve({ conversation, messages: [finalMessage], tool_calls: [] })
+    await waitFor(() => expect(within(drawer).queryByRole('status')).not.toBeInTheDocument())
   })
 })

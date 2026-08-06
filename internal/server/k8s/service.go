@@ -10,6 +10,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mizupanel/mizupanel/internal/protocol"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // Service K8s 业务逻辑层
@@ -467,6 +471,100 @@ type ApplyManifestRequest struct {
 type ApplyManifestResult struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
+}
+
+type CreateDeploymentRequest struct {
+	Namespace     string
+	Name          string
+	Image         string
+	Replicas      int32
+	ContainerPort *int32
+}
+
+type CreateDeploymentResult struct {
+	Success       bool
+	ClusterID     string
+	Namespace     string
+	Name          string
+	Replicas      int32
+	ContainerPort *int32
+	Message       string
+}
+
+const (
+	minAICreateDeploymentReplicas = 1
+	maxAICreateDeploymentReplicas = 20
+	maxAICreateDeploymentImage    = 256
+)
+
+func ValidateCreateDeploymentRequest(req CreateDeploymentRequest) error {
+	if len(validation.IsDNS1123Label(strings.TrimSpace(req.Namespace))) != 0 || len(strings.TrimSpace(req.Namespace)) > 63 {
+		return fmt.Errorf("命名空间名称无效")
+	}
+	if len(validation.IsDNS1123Label(strings.TrimSpace(req.Name))) != 0 || len(strings.TrimSpace(req.Name)) > 63 {
+		return fmt.Errorf("Deployment 名称无效")
+	}
+	image := strings.TrimSpace(req.Image)
+	if image == "" || len(image) > maxAICreateDeploymentImage || strings.ContainsAny(image, " \t\r\n;|&$<>\"'") {
+		return fmt.Errorf("镜像引用无效")
+	}
+	if req.Replicas < minAICreateDeploymentReplicas || req.Replicas > maxAICreateDeploymentReplicas {
+		return fmt.Errorf("副本数超出允许范围")
+	}
+	if req.ContainerPort != nil && (*req.ContainerPort < 1 || *req.ContainerPort > 65535) {
+		return fmt.Errorf("容器端口无效")
+	}
+	return nil
+}
+
+func buildAICreateDeploymentJSON(req CreateDeploymentRequest) ([]byte, error) {
+	if err := ValidateCreateDeploymentRequest(req); err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(req.Name)
+	labels := map[string]string{"app": name}
+	container := corev1.Container{Name: name, Image: strings.TrimSpace(req.Image)}
+	if req.ContainerPort != nil {
+		container.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: *req.ContainerPort, Protocol: corev1.ProtocolTCP}}
+	}
+	deployment := appsv1.Deployment{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: strings.TrimSpace(req.Namespace), Labels: labels},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &req.Replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}}},
+		},
+	}
+	return json.Marshal(deployment)
+}
+
+func (s *Service) CreateDeployment(ctx context.Context, clusterID string, req CreateDeploymentRequest) (*CreateDeploymentResult, error) {
+	if err := ValidateCreateDeploymentRequest(req); err != nil {
+		return nil, err
+	}
+	cluster, err := s.store.GetCluster(clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if !s.hub.IsNodeOnline(cluster.NodeID) {
+		return nil, fmt.Errorf("Agent 节点离线")
+	}
+	if strings.TrimSpace(cluster.KubeconfigContent) == "" {
+		return nil, fmt.Errorf("集群缺少 kubeconfig 内容，请重新连接集群")
+	}
+	body, err := buildAICreateDeploymentJSON(req)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.ApplyManifest(ctx, clusterID, ApplyManifestRequest{YAML: string(body), DryRun: true}); err != nil {
+		return nil, fmt.Errorf("Deployment 预校验失败: %w", err)
+	}
+	result, err := s.ApplyManifest(ctx, clusterID, ApplyManifestRequest{YAML: string(body)})
+	if err != nil {
+		return nil, err
+	}
+	return &CreateDeploymentResult{Success: result.Success, ClusterID: clusterID, Namespace: strings.TrimSpace(req.Namespace), Name: strings.TrimSpace(req.Name), Replicas: req.Replicas, ContainerPort: req.ContainerPort, Message: "Deployment 创建成功"}, nil
 }
 
 func supportedResourceAction(kind, action string) bool {

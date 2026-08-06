@@ -152,7 +152,7 @@ func TestAIStoreTurnConflictClaimRecoveryAndConversationCascade(t *testing.T) {
 	if recoveredCall.Status != "interrupted" || recoveredTurn.Status != "interrupted" || recoveredTurn.ErrorCode != "server_restarted" {
 		t.Fatalf("recovered state = call:%+v turn:%+v", recoveredCall, recoveredTurn)
 	}
-	if recoveredCall.ResultSummary != "服务重启，操作未执行" {
+	if recoveredCall.ResultSummary != "服务重启，操作结果无法确认，可能已执行" {
 		t.Fatalf("recovered summary = %q", recoveredCall.ResultSummary)
 	}
 

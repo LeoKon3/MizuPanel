@@ -29,6 +29,15 @@ type aiAPITestAdapter struct {
 	listModels   func(context.Context, serverai.ProviderCredential) ([]string, error)
 }
 
+type aiAPIStreamingAdapter struct {
+	aiAPITestAdapter
+	stream func(context.Context, serverai.ProviderCredential, serverai.ChatRequest, serverai.ContentCallback) (serverai.ChatResponse, error)
+}
+
+func (a aiAPIStreamingAdapter) CompleteStream(ctx context.Context, provider serverai.ProviderCredential, request serverai.ChatRequest, callback serverai.ContentCallback) (serverai.ChatResponse, error) {
+	return a.stream(ctx, provider, request, callback)
+}
+
 func (a aiAPITestAdapter) Complete(ctx context.Context, provider serverai.ProviderCredential, request serverai.ChatRequest) (serverai.ChatResponse, error) {
 	if a.complete != nil {
 		return a.complete(ctx, provider, request)
@@ -543,6 +552,108 @@ func TestAIConversationMessageStreamEmitsSafeProgressEvents(t *testing.T) {
 	// Secret material must never appear anywhere in the stream.
 	if strings.Contains(body, "stream-key-secret") {
 		t.Fatalf("stream leaked provider api key:\n%s", body)
+	}
+}
+
+func TestAIConversationMessageStreamEmitsDeltaResetAndServerResolvedContext(t *testing.T) {
+	streamCalls := 0
+	adapter := aiAPIStreamingAdapter{
+		aiAPITestAdapter: aiAPITestAdapter{capabilities: serverai.Capabilities{Chat: true, Tools: true}},
+		stream: func(_ context.Context, _ serverai.ProviderCredential, request serverai.ChatRequest, callback serverai.ContentCallback) (serverai.ChatResponse, error) {
+			streamCalls++
+			if streamCalls == 1 {
+				if len(request.Messages) == 0 || request.Messages[0].Role != "system" {
+					t.Fatalf("first model request missing system context: %+v", request.Messages)
+				}
+				system := request.Messages[0].Content
+				for _, want := range []string{`"page":"hosts"`, `"type":"node"`, `"id":"node-context-1"`, `"name":"Server Resolved Name"`, `"route":"/nodes/node-context-1"`} {
+					if !strings.Contains(system, want) {
+						t.Fatalf("system context missing %s:\n%s", want, system)
+					}
+				}
+				if err := callback("checking "); err != nil {
+					return serverai.ChatResponse{}, err
+				}
+				return serverai.ChatResponse{Content: "checking ", ToolCalls: []serverai.ToolCall{{ID: "call-1", Name: "list_nodes", Arguments: json.RawMessage(`{}`)}}}, nil
+			}
+			if err := callback("final answer"); err != nil {
+				return serverai.ChatResponse{}, err
+			}
+			return serverai.ChatResponse{Content: "final answer"}, nil
+		},
+	}
+	fixture := newAIAPIFixture(t, AuthConfig{}, adapter)
+	if err := store.NewNodeStore(fixture.db).Upsert(t.Context(), store.Node{ID: "node-context-1", Name: "Server Resolved Name", Status: "online"}); err != nil {
+		t.Fatalf("upsert context node: %v", err)
+	}
+
+	created := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/providers",
+		`{"name":"Primary","protocol":"openai_chat_completions","base_url":"https://model.test/v1","model":"model-a"}`,
+		"application/json", "http://panel.test")
+	var provider store.AIProvider
+	if created.Code != http.StatusCreated || json.NewDecoder(created.Body).Decode(&provider) != nil {
+		t.Fatalf("create provider = %d %s", created.Code, created.Body.String())
+	}
+	probe := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/providers/"+provider.ID+"/test", "", "", "http://panel.test")
+	if probe.Code != http.StatusOK {
+		t.Fatalf("probe provider = %d %s", probe.Code, probe.Body.String())
+	}
+	conversationResponse := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/conversations", `{"title":"Context stream"}`, "application/json", "http://panel.test")
+	var conversation store.AIConversation
+	if conversationResponse.Code != http.StatusCreated || json.NewDecoder(conversationResponse.Body).Decode(&conversation) != nil {
+		t.Fatalf("create conversation = %d %s", conversationResponse.Code, conversationResponse.Body.String())
+	}
+
+	stream := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/conversations/"+conversation.ID+"/messages/stream",
+		`{"provider_id":"`+provider.ID+`","content":"inspect selected node","context":{"page":"hosts","resource_type":"node","resource_id":"node-context-1"}}`,
+		"application/json", "http://panel.test")
+	if stream.Code != http.StatusOK {
+		t.Fatalf("stream = %d %s", stream.Code, stream.Body.String())
+	}
+	body := stream.Body.String()
+	for _, want := range []string{
+		"event: delta\ndata: {", `"content":"checking "`,
+		"event: reset\ndata: {", `"reason":"tool"`,
+		`"content":"final answer"`, "event: result",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("stream missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Index(body, `"content":"checking "`) > strings.Index(body, `"reason":"tool"`) || strings.Index(body, `"reason":"tool"`) > strings.LastIndex(body, `"content":"final answer"`) {
+		t.Fatalf("delta/reset order is invalid:\n%s", body)
+	}
+	var persisted string
+	if err := fixture.db.QueryRow(`SELECT COALESCE(GROUP_CONCAT(content, ''), '') FROM ai_messages WHERE conversation_id = ?`, conversation.ID).Scan(&persisted); err != nil {
+		t.Fatalf("query persisted messages: %v", err)
+	}
+	if strings.Contains(persisted, "untrusted_platform_context") || strings.Contains(persisted, "Server Resolved Name") {
+		t.Fatalf("transient context was persisted: %s", persisted)
+	}
+}
+
+func TestAIConversationMessageStreamRejectsInvalidContextBeforeSSE(t *testing.T) {
+	adapter := aiAPITestAdapter{capabilities: serverai.Capabilities{Chat: true, Tools: true}, response: serverai.ChatResponse{Content: "unused"}}
+	fixture := newAIAPIFixture(t, AuthConfig{}, adapter)
+	created := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/providers",
+		`{"name":"Primary","protocol":"openai_chat_completions","base_url":"https://model.test/v1","model":"model-a"}`,
+		"application/json", "http://panel.test")
+	var provider store.AIProvider
+	_ = json.NewDecoder(created.Body).Decode(&provider)
+	_ = performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/providers/"+provider.ID+"/test", "", "", "http://panel.test")
+	conversationResponse := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/conversations", `{"title":"Invalid context"}`, "application/json", "http://panel.test")
+	var conversation store.AIConversation
+	_ = json.NewDecoder(conversationResponse.Body).Decode(&conversation)
+
+	response := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/conversations/"+conversation.ID+"/messages/stream",
+		`{"provider_id":"`+provider.ID+`","content":"hello","context":{"page":"hosts","resource_type":"node","resource_id":"missing-node","name":"browser supplied"}}`,
+		"application/json", "http://panel.test")
+	if response.Code != http.StatusBadRequest || strings.Contains(response.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("invalid context = %d content-type=%q body=%s", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+	var turns int
+	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM ai_turns WHERE conversation_id = ?`, conversation.ID).Scan(&turns); err != nil || turns != 0 {
+		t.Fatalf("turns after invalid context = %d err=%v", turns, err)
 	}
 }
 

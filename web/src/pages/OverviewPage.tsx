@@ -9,11 +9,12 @@ type OverviewPageProps = {
   nodes: Node[]
   onlineNodes: number
   onAddServer: () => void
+  onSelectedNodeChange?: (nodeID?: string) => void
 }
 
 type MetricType = 'cpu' | 'memory' | 'disk'
 
-export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPageProps) {
+export function OverviewPage({ nodes, onlineNodes, onAddServer, onSelectedNodeChange }: OverviewPageProps) {
   const [k8sClusters, setK8sClusters] = useState<K8sCluster[]>([])
   const [alertHistory, setAlertHistory] = useState<AlertHistory[]>([])
   const [alertRulesCount, setAlertRulesCount] = useState(0)
@@ -49,8 +50,9 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPagePr
     const nextSelectedNodeID = selectedStillExists ? selectedNodeID : fallbackNode?.id
     if (nextSelectedNodeID !== selectedNodeID) {
       setSelectedNodeID(nextSelectedNodeID)
+      onSelectedNodeChange?.(nextSelectedNodeID)
     }
-  }, [nodes, selectedNodeID])
+  }, [nodes, onSelectedNodeChange, selectedNodeID])
 
   // 加载告警历史（最近的未解决告警）
   const loadAlertHistory = () => {
@@ -62,7 +64,9 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPagePr
         getAlertHistory(node.id, 10).catch(() => ({ history: [] }))
       )
     ).then((results) => {
-      const allHistory = results.flatMap((r) => r.history)
+      const allHistory = results
+        .flatMap((r) => r.history)
+        .filter((history): history is AlertHistory => Boolean(history))
       // 只显示未解决的告警，按触发时间倒序
       const unresolved = allHistory
         .filter((h) => !h.resolved_at)
@@ -291,7 +295,10 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer }: OverviewPagePr
                   key={node.id}
                   node={node}
                   selected={node.id === selectedNodeID}
-                  onSelect={() => setSelectedNodeID(node.id)}
+                  onSelect={() => {
+                    setSelectedNodeID(node.id)
+                    onSelectedNodeChange?.(node.id)
+                  }}
                 />
               ))
             ) : (

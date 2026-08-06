@@ -87,6 +87,7 @@ type ContainerOperationsHandler interface {
 	HandleContainerStop(context.Context, protocol.ContainerStopRequest) protocol.ContainerStopResponse
 	HandleContainerRestart(context.Context, protocol.ContainerRestartRequest) protocol.ContainerRestartResponse
 	HandleContainerDelete(context.Context, protocol.ContainerDeleteRequest) protocol.ContainerDeleteResponse
+	HandleDockerContainerCreate(context.Context, protocol.DockerContainerCreateRequest) protocol.DockerContainerCreateResponse
 	HandleDockerComposeList(context.Context, protocol.DockerComposeListRequest) protocol.DockerComposeListResponse
 	HandleDockerComposeAction(context.Context, protocol.DockerComposeActionRequest) protocol.DockerComposeActionResponse
 	HandleDockerComposeDeployment(context.Context, protocol.DockerComposeDeploymentRequest) protocol.DockerComposeDeploymentResponse
@@ -363,17 +364,17 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 			response.Type = protocol.MessageTypeFileDeleteResponse
 			response.RequestID = request.RequestID
 			_ = writer.writeJSON(response)
-	case protocol.MessageTypeRebootRequest:
-		var request protocol.RebootRequest
-		if err := json.Unmarshal(raw, &request); err != nil {
-			continue
-		}
-		// Acknowledge acceptance before the reboot takes effect so the Server
-		// does not time out and misreport a successful reboot as a failure.
-		response := reboot.Accept(reboot.CurrentOS(), nil, 2*time.Second, nil)
-		response.Type = protocol.MessageTypeRebootResponse
-		response.RequestID = request.RequestID
-		_ = writer.writeJSON(response)
+		case protocol.MessageTypeRebootRequest:
+			var request protocol.RebootRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			// Acknowledge acceptance before the reboot takes effect so the Server
+			// does not time out and misreport a successful reboot as a failure.
+			response := reboot.Accept(reboot.CurrentOS(), nil, 2*time.Second, nil)
+			response.Type = protocol.MessageTypeRebootResponse
+			response.RequestID = request.RequestID
+			_ = writer.writeJSON(response)
 		case protocol.MessageTypeAgentStatusRequest:
 			if c.agentManagementHandler == nil {
 				continue
@@ -546,6 +547,19 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 				continue
 			}
 			response := c.containerOpsHandler.HandleContainerDelete(ctx, request)
+			response.RequestID = request.RequestID
+			if err := writer.writeJSON(response); err != nil {
+				continue
+			}
+		case protocol.MessageTypeDockerContainerCreateRequest:
+			if c.containerOpsHandler == nil {
+				continue
+			}
+			var request protocol.DockerContainerCreateRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				continue
+			}
+			response := c.containerOpsHandler.HandleDockerContainerCreate(ctx, request)
 			response.RequestID = request.RequestID
 			if err := writer.writeJSON(response); err != nil {
 				continue

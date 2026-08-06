@@ -592,21 +592,33 @@ describe('api client', () => {
   test('sendAIMessageStream parses status events and returns the result', async () => {
     const events = [
       'event: status\ndata: {"phase":"model"}\n\n',
+      'event: delta\ndata: {"turn_id":"turn-1","content":"first"}\n\n',
+      'event: reset\ndata: {"turn_id":"turn-1","reason":"fallback"}\n\n',
+      'event: delta\ndata: {"turn_id":"turn-1","content":"second"}\n\n',
       'event: status\ndata: {"phase":"fallback","provider_name":"Backup","model":"model-b"}\n\n',
       'event: status\ndata: {"phase":"tool","tool_name":"reboot_node","target_name":"node-1"}\n\n',
       'event: result\ndata: {"turn":{"id":"turn-1"}}\n\n'
     ]
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse(events))
     const onProgress = vi.fn()
-    const result = await sendAIMessageStream('conv/1', 'reboot', undefined, onProgress)
+    const onDelta = vi.fn()
+    const onReset = vi.fn()
+    const result = await sendAIMessageStream('conv/1', 'reboot', undefined, onProgress, {
+      context: { page: 'hosts', resource_type: 'node', resource_id: 'node-1' },
+      onDelta,
+      onReset
+    })
     expect(result.turn.id).toBe('turn-1')
     expect(onProgress).toHaveBeenCalledTimes(3)
     expect(onProgress).toHaveBeenNthCalledWith(1, { phase: 'model' })
     expect(onProgress).toHaveBeenNthCalledWith(2, { phase: 'fallback', provider_name: 'Backup', model: 'model-b' })
     expect(onProgress).toHaveBeenNthCalledWith(3, { phase: 'tool', tool_name: 'reboot_node', target_name: 'node-1' })
+    expect(onDelta).toHaveBeenNthCalledWith(1, { turn_id: 'turn-1', content: 'first' })
+    expect(onDelta).toHaveBeenNthCalledWith(2, { turn_id: 'turn-1', content: 'second' })
+    expect(onReset).toHaveBeenCalledWith({ turn_id: 'turn-1', reason: 'fallback' })
     expect(fetch).toHaveBeenCalledWith('/api/ai/conversations/conv%2F1/messages/stream', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ content: 'reboot' })
+      body: JSON.stringify({ content: 'reboot', context: { page: 'hosts', resource_type: 'node', resource_id: 'node-1' } })
     }))
   })
 

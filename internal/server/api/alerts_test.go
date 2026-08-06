@@ -739,6 +739,31 @@ func TestListAlertHistoryResolvesAlertsForDisabledRules(t *testing.T) {
 	}
 }
 
+func TestListAlertHistoryReturnsEmptyArrayWhenNoHistoryExists(t *testing.T) {
+	router, _ := testAlertRouter(t)
+
+	req := httptest.NewRequest("GET", "/api/alerts/history?node_id=node-without-history", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var response struct {
+		History []store.AlertHistory `json:"history"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.History == nil {
+		t.Fatal("history = null, want an empty array")
+	}
+	if len(response.History) != 0 {
+		t.Fatalf("history = %+v, want empty history", response.History)
+	}
+}
+
 func TestCreateAlertRuleRejectsInvalidMetricField(t *testing.T) {
 	router, _ := testAlertRouter(t)
 

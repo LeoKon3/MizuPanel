@@ -50,6 +50,15 @@ type serviceTestAdapter struct {
 	models   func(context.Context, ProviderCredential) ([]string, error)
 }
 
+type serviceStreamingAdapter struct {
+	serviceTestAdapter
+	stream func(context.Context, ProviderCredential, ChatRequest, ContentCallback) (ChatResponse, error)
+}
+
+func (a serviceStreamingAdapter) CompleteStream(ctx context.Context, provider ProviderCredential, request ChatRequest, callback ContentCallback) (ChatResponse, error) {
+	return a.stream(ctx, provider, request, callback)
+}
+
 func (a serviceTestAdapter) Complete(ctx context.Context, provider ProviderCredential, request ChatRequest) (ChatResponse, error) {
 	return a.complete(ctx, provider, request)
 }
@@ -265,6 +274,70 @@ func TestServiceRepeatedConfirmationExecutesToolOnce(t *testing.T) {
 	}
 }
 
+func TestServiceConfirmationPersistenceFailureRecoversAsUnknownOutcome(t *testing.T) {
+	var executions atomic.Int32
+	registry := &Registry{tools: make(map[string]registeredTool)}
+	definition := noArgumentDefinition("test_confirm_persistence", "Test persistence failure")
+	registry.add(registeredTool{
+		definition: definition,
+		risk:       RiskConfirm,
+		validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
+			if err := strictArguments(raw, &struct{}{}); err != nil {
+				return nil, ToolTarget{}, ErrInvalidArguments
+			}
+			return json.RawMessage(`{}`), ToolTarget{Type: "node", ID: "node-1", Name: "Node One", NodeID: "node-1"}, nil
+		},
+		execute: func(context.Context, json.RawMessage) (SafeToolResult, error) {
+			executions.Add(1)
+			return SafeToolResult{Summary: "executed"}, nil
+		},
+	})
+	adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+		return ChatResponse{ToolCalls: []ToolCall{{ID: "call-1", Name: definition.Name, Arguments: json.RawMessage(`{}`)}}}, nil
+	}}
+	service, aiStore, database := newServiceTestFixture(t, registry, adapter)
+	provider := createCapableServiceProvider(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "Persistence failure")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	proposal, err := service.Send(t.Context(), conversation.ID, provider.ID, "run it", nil)
+	if err != nil || proposal.ToolCall == nil {
+		t.Fatalf("Send = result:%+v err:%v", proposal, err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER fail_confirm_result BEFORE UPDATE OF status ON ai_tool_calls
+		WHEN NEW.status = 'success' BEGIN SELECT RAISE(FAIL, 'forced tool result persistence failure'); END`); err != nil {
+		t.Fatalf("create persistence trigger: %v", err)
+	}
+	if _, err := service.Confirm(t.Context(), proposal.ToolCall.ID, nil); err == nil {
+		t.Fatal("Confirm succeeded despite persistence failure")
+	}
+	if executions.Load() != 1 {
+		t.Fatalf("tool executions = %d, want 1", executions.Load())
+	}
+	if _, err := database.Exec(`DROP TRIGGER fail_confirm_result`); err != nil {
+		t.Fatalf("drop persistence trigger: %v", err)
+	}
+
+	interrupted, _, err := aiStore.GetToolCall(t.Context(), proposal.ToolCall.ID)
+	if err != nil {
+		t.Fatalf("get running tool call: %v", err)
+	}
+	if interrupted.Status != "running" {
+		t.Fatalf("tool call after failed persistence = %+v, want running before recovery", interrupted)
+	}
+	if err := aiStore.RecoverInterrupted(t.Context()); err != nil {
+		t.Fatalf("recover interrupted operation: %v", err)
+	}
+	interrupted, turn, err := aiStore.GetToolCall(t.Context(), proposal.ToolCall.ID)
+	if err != nil {
+		t.Fatalf("get recovered tool call: %v", err)
+	}
+	if interrupted.Status != "interrupted" || interrupted.ResultSummary != "服务重启，操作结果无法确认，可能已执行" || turn.Status != "interrupted" {
+		t.Fatalf("recovered unknown operation = call:%+v turn:%+v", interrupted, turn)
+	}
+}
+
 func TestServiceConfirmationProjectsAcceptedAndUnsupportedStatuses(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -472,6 +545,56 @@ func TestServiceFallsBackOnceBeforeToolsAndPersistsActualModel(t *testing.T) {
 	if len(audits) != 1 || audits[0].Action != "model_fallback" || !audits[0].FallbackUsed ||
 		audits[0].RequestedModelID != defaultModel.ID || audits[0].ModelID != fallbackModel.ID {
 		t.Fatalf("fallback audits = %+v", audits)
+	}
+}
+
+func TestServiceStreamingFallbackResetsPrimaryContent(t *testing.T) {
+	adapter := serviceStreamingAdapter{
+		serviceTestAdapter: serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+			return ChatResponse{Content: "unused"}, nil
+		}},
+		stream: func(_ context.Context, credential ProviderCredential, _ ChatRequest, callback ContentCallback) (ChatResponse, error) {
+			if credential.Model == "model-a" {
+				if err := callback("primary partial"); err != nil {
+					return ChatResponse{}, err
+				}
+				return ChatResponse{}, &AdapterError{Kind: ErrorUpstream, Message: "upstream unavailable"}
+			}
+			if err := callback("fallback final"); err != nil {
+				return ChatResponse{}, err
+			}
+			return ChatResponse{Content: "fallback final"}, nil
+		},
+	}
+	service, aiStore, _ := newServiceTestFixture(t, nil, adapter)
+	configureFallbackService(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "Streaming fallback")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	var deltas []DeltaEvent
+	var resets []ResetEvent
+	result, err := service.SendWithEvents(t.Context(), conversation.ID, "", "check status", nil, nil, StreamCallbacks{
+		Delta: func(event DeltaEvent) error {
+			deltas = append(deltas, event)
+			return nil
+		},
+		Reset: func(event ResetEvent) error {
+			resets = append(resets, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendWithEvents: %v", err)
+	}
+	if result.Message == nil || result.Message.Content != "fallback final" || !result.Turn.FallbackUsed {
+		t.Fatalf("fallback result = %+v", result)
+	}
+	if len(deltas) != 2 || deltas[0].Content != "primary partial" || deltas[1].Content != "fallback final" {
+		t.Fatalf("deltas = %+v", deltas)
+	}
+	if len(resets) != 1 || resets[0].Reason != "fallback" || resets[0].TurnID == "" {
+		t.Fatalf("resets = %+v", resets)
 	}
 }
 

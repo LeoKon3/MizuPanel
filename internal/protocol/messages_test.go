@@ -511,3 +511,35 @@ func TestK8sApplyManifestMessagesJSON(t *testing.T) {
 		t.Fatalf("unexpected apply result: %#v", gotResult)
 	}
 }
+
+func TestDockerContainerCreateMessagesJSON(t *testing.T) {
+	request := DockerContainerCreateRequest{
+		Type: MessageTypeDockerContainerCreateRequest, RequestID: "req-create", NodeID: "node-1",
+		Image: "nginx:1.27", Name: "web", RestartPolicy: "unless-stopped", NetworkMode: "bridge",
+		Ports: []DockerContainerPort{{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"}}, Start: true,
+	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal Docker create request: %v", err)
+	}
+	var gotRequest DockerContainerCreateRequest
+	if err := json.Unmarshal(data, &gotRequest); err != nil {
+		t.Fatalf("unmarshal Docker create request: %v", err)
+	}
+	if gotRequest.Type != MessageTypeDockerContainerCreateRequest || gotRequest.Image != "nginx:1.27" || gotRequest.Name != "web" || gotRequest.RestartPolicy != "unless-stopped" || len(gotRequest.Ports) != 1 || !gotRequest.Start {
+		t.Fatalf("unexpected Docker create request: %#v", gotRequest)
+	}
+
+	response := DockerContainerCreateResponse{Type: MessageTypeDockerContainerCreateResponse, RequestID: "req-create", Success: true, Supported: true, Created: true, ContainerID: "container-1", Name: "web", Started: true}
+	data, err = json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal Docker create response: %v", err)
+	}
+	var gotResponse DockerContainerCreateResponse
+	if err := json.Unmarshal(data, &gotResponse); err != nil {
+		t.Fatalf("unmarshal Docker create response: %v", err)
+	}
+	if gotResponse.Type != MessageTypeDockerContainerCreateResponse || !gotResponse.Success || !gotResponse.Supported || !gotResponse.Created || gotResponse.ContainerID != "container-1" || !gotResponse.Started {
+		t.Fatalf("unexpected Docker create response: %#v", gotResponse)
+	}
+}

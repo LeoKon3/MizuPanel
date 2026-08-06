@@ -590,6 +590,10 @@ func (f *fakeNodeOperations) DockerExec(ctx context.Context, nodeID string, comm
 	return protocol.DockerExecResponse{Type: protocol.MessageTypeDockerExecResponse, Accepted: true}, nil
 }
 
+func (f *fakeNodeOperations) DockerContainerCreate(ctx context.Context, nodeID string, request protocol.DockerContainerCreateRequest) (protocol.DockerContainerCreateResponse, error) {
+	return protocol.DockerContainerCreateResponse{Type: protocol.MessageTypeDockerContainerCreateResponse, Supported: true, Success: true, ContainerID: "container-created", Name: request.Name, Started: request.Start}, nil
+}
+
 func (f *fakeNodeOperations) ContainerStart(ctx context.Context, nodeID string, containerID string) (protocol.ContainerStartResponse, error) {
 	return protocol.ContainerStartResponse{Type: protocol.MessageTypeContainerStartResponse, Success: true}, nil
 }

@@ -25,7 +25,7 @@ import { TasksPage } from './pages/TasksPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { LogsPage } from './pages/LogsPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
-import type { DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
+import type { AIRequestContext, DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
 function decodeRouteNodeID(value?: string) {
   if (!value) return undefined
@@ -243,6 +243,22 @@ export default function App() {
   const selectedNodeIDRef = useRef<string | undefined>(undefined)
   nodesRef.current = nodes
   selectedNodeIDRef.current = selectedNodeID
+
+  const aiRequestContext = useMemo<AIRequestContext>(() => {
+    if (route.kind === 'service-detail') return { page, resource_type: 'application_service', resource_id: route.serviceID }
+    if (route.kind === 'k8s-cluster-detail') return { page, resource_type: 'k8s_cluster', resource_id: route.clusterID }
+    if (route.kind === 'node-detail' || route.kind === 'node-terminal' || route.kind === 'container-exec') {
+      return { page, resource_type: 'node', resource_id: route.nodeID }
+    }
+    if ((page === 'hosts' || page === 'overview') && selectedNodeID) {
+      return { page, resource_type: 'node', resource_id: selectedNodeID }
+    }
+    return { page }
+  }, [page, route, selectedNodeID])
+
+  useEffect(() => {
+    aiAssistant.setContext(aiRequestContext)
+  }, [aiAssistant.setContext, aiRequestContext])
 
   useEffect(() => {
     const dark = theme === 'dark'
@@ -1251,7 +1267,7 @@ export default function App() {
               {installCommandDialog}
 
               {page === 'overview' ? (
-                <OverviewPage nodes={nodes} onlineNodes={onlineNodes} onAddServer={showInstallCommand} />
+                <OverviewPage nodes={nodes} onlineNodes={onlineNodes} onAddServer={showInstallCommand} onSelectedNodeChange={setSelectedNodeID} />
               ) : page === 'ai' ? (
                 <AIWorkspacePage assistant={aiAssistant} onOpenSettings={openAISettings} />
               ) : page === 'history' ? (

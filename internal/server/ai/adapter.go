@@ -44,6 +44,10 @@ type ChatResponse struct {
 	ToolCalls []ToolCall
 }
 
+// ContentCallback receives bounded, user-visible assistant text only. Returning
+// an error stops the upstream stream immediately.
+type ContentCallback func(string) error
+
 type ToolDefinition struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
@@ -54,6 +58,12 @@ type Adapter interface {
 	Complete(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error)
 	Probe(context.Context, ProviderCredential) (Capabilities, error)
 	ListModels(context.Context, ProviderCredential) ([]string, error)
+}
+
+// StreamingAdapter is an optional capability. Services keep using Complete for
+// adapters that do not implement it.
+type StreamingAdapter interface {
+	CompleteStream(context.Context, ProviderCredential, ChatRequest, ContentCallback) (ChatResponse, error)
 }
 
 type AdapterErrorKind string

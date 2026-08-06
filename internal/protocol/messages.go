@@ -69,6 +69,8 @@ const (
 	MessageTypeContainerRestartResponse        = "container_restart_response"
 	MessageTypeContainerDeleteRequest          = "container_delete_request"
 	MessageTypeContainerDeleteResponse         = "container_delete_response"
+	MessageTypeDockerContainerCreateRequest    = "docker_container_create_request"
+	MessageTypeDockerContainerCreateResponse   = "docker_container_create_response"
 	MessageTypeDockerComposeListRequest        = "docker_compose_list_request"
 	MessageTypeDockerComposeListResponse       = "docker_compose_list_response"
 	MessageTypeDockerComposeActionRequest      = "docker_compose_action_request"
@@ -148,6 +150,7 @@ type HelloMessage struct {
 	DockerComposeServiceActions bool   `json:"docker_compose_service_actions,omitempty"`
 	DockerComposeDeployment     bool   `json:"docker_compose_deployment,omitempty"`
 	DockerResources             bool   `json:"docker_resources,omitempty"`
+	DockerContainerCreate       bool   `json:"docker_container_create,omitempty"`
 	SystemdServices             bool   `json:"systemd_services,omitempty"`
 	TaskRunner                  bool   `json:"task_runner,omitempty"`
 	AgentMode                   string `json:"agent_mode,omitempty"`
@@ -664,6 +667,39 @@ type ContainerDeleteResponse struct {
 	RequestID string `json:"request_id,omitempty"`
 	Success   bool   `json:"success"`
 	Error     string `json:"error,omitempty"`
+}
+
+type DockerContainerPort struct {
+	HostPort      uint16 `json:"host_port"`
+	ContainerPort uint16 `json:"container_port"`
+	Protocol      string `json:"protocol"`
+}
+
+// DockerContainerCreateRequest is a deliberately small Docker Engine API
+// contract. It is not a shell command and must not grow arbitrary argv, env,
+// mount, or host-path fields.
+type DockerContainerCreateRequest struct {
+	Type          string                `json:"type"`
+	RequestID     string                `json:"request_id,omitempty"`
+	NodeID        string                `json:"node_id,omitempty"`
+	Image         string                `json:"image"`
+	Name          string                `json:"name,omitempty"`
+	RestartPolicy string                `json:"restart_policy"`
+	NetworkMode   string                `json:"network_mode"`
+	Ports         []DockerContainerPort `json:"ports,omitempty"`
+	Start         bool                  `json:"start"`
+}
+
+type DockerContainerCreateResponse struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"request_id,omitempty"`
+	Success     bool   `json:"success"`
+	Supported   bool   `json:"supported"`
+	Created     bool   `json:"created"`
+	ContainerID string `json:"container_id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Started     bool   `json:"started"`
+	Error       string `json:"error,omitempty"`
 }
 
 type DockerComposeListRequest struct {

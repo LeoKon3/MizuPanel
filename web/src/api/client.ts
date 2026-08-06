@@ -1,4 +1,4 @@
-import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AIConversation, AIConversationState, AIProgress, AIProvider, AIProviderInput, AIProviderModel, AIProviderModelInput, AIProviderModelUpdate, AIRouting, AISendResult, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, SystemLogsResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
+import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AIConversation, AIConversationState, AIProgress, AIProvider, AIProviderInput, AIProviderModel, AIProviderModelInput, AIProviderModelUpdate, AIRequestContext, AIRouting, AISendResult, AIStreamDelta, AIStreamReset, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, SystemLogsResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
 
 export type SessionTokenResponse = {
   token: string
@@ -652,12 +652,19 @@ export function sendAIMessage(id: string, content: string, signal?: AbortSignal)
 export async function sendAIMessageStream(
   id: string, content: string,
   signal: AbortSignal | undefined,
-  onProgress: (event: AIProgress) => void
+  onProgress: (event: AIProgress) => void,
+  options: {
+    context?: AIRequestContext
+    onDelta?: (event: AIStreamDelta) => void
+    onReset?: (event: AIStreamReset) => void
+  } = {}
 ): Promise<AISendResult> {
+  const body: { content: string, context?: AIRequestContext } = { content }
+  if (options.context) body.context = options.context
   const response = await fetch(`/api/ai/conversations/${encodeURIComponent(id)}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
     signal
   })
   if (!response.ok) throw new APIError(response.status, await errorMessage(response))
@@ -685,6 +692,8 @@ export async function sendAIMessageStream(
         else if (line.startsWith('data: ')) data = line.slice(6)
       }
       if (eventType === 'status' && data) onProgress(JSON.parse(data))
+      else if (eventType === 'delta' && data) options.onDelta?.(JSON.parse(data) as AIStreamDelta)
+      else if (eventType === 'reset' && data) options.onReset?.(JSON.parse(data) as AIStreamReset)
       else if (eventType === 'result' && data) result = JSON.parse(data) as AISendResult
       else if (eventType === 'error' && data) error = (JSON.parse(data) as { error: string }).error
     }

@@ -1328,3 +1328,21 @@ export type AIProgress = {
   provider_name?: string
   model?: string
 }
+
+export type AIPageContext = 'overview' | 'hosts' | 'services' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s' | 'ai'
+
+export type AIRequestContext = {
+  page: AIPageContext
+  resource_type?: 'node' | 'k8s_cluster' | 'application_service'
+  resource_id?: string
+}
+
+export type AIStreamDelta = {
+  turn_id?: string
+  content: string
+}
+
+export type AIStreamReset = {
+  turn_id?: string
+  reason?: string
+}

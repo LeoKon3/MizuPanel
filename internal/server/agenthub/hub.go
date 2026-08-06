@@ -229,6 +229,7 @@ type agentConnection struct {
 	supportsDockerComposeServiceActions bool
 	supportsDockerComposeDeployment     bool
 	supportsDockerResources             bool
+	supportsDockerContainerCreate       bool
 	supportsSystemdServices             bool
 	supportsTaskRunner                  bool
 	sessionMu                           sync.Mutex
@@ -466,7 +467,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.options.InstallAuth.CompleteBootstrap(nodeID, nodeToken)
 	}
 	sessionID := h.startSession(nodeID)
-	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerComposeDeployment: hello.DockerComposeDeployment, supportsDockerResources: hello.DockerResources, supportsSystemdServices: hello.SystemdServices, supportsTaskRunner: hello.TaskRunner, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage), pendingRPCs: make(map[string]chan rpcDelivery), closed: make(chan struct{})}
+	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerComposeDeployment: hello.DockerComposeDeployment, supportsDockerResources: hello.DockerResources, supportsDockerContainerCreate: hello.DockerContainerCreate, supportsSystemdServices: hello.SystemdServices, supportsTaskRunner: hello.TaskRunner, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage), pendingRPCs: make(map[string]chan rpcDelivery), closed: make(chan struct{})}
 	h.recordConnectionEvent(agent, store.ConnectionEventConnected, "")
 	h.registerConnection(agent)
 	h.observeAgentUpgradeReconnect(nodeID, hello.AgentVersion)
@@ -667,6 +668,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			protocol.MessageTypeK8sResourceActionResult,
 			protocol.MessageTypeK8sApplyManifestResult,
 			protocol.MessageTypeK8sGetPodLogsResult,
+			protocol.MessageTypeDockerContainerCreateResponse,
 			protocol.MessageTypeDockerComposeListResponse,
 			protocol.MessageTypeDockerComposeActionResponse,
 			protocol.MessageTypeDockerComposeDeploymentResponse,
@@ -1058,6 +1060,34 @@ func (h *Handler) Reboot(ctx context.Context, nodeID string) (protocol.RebootRes
 	}
 }
 
+// RebootCompletedAfter confirms that the node disconnected and then
+// reconnected after the accepted reboot request. An online check alone is not
+// sufficient because the node may have remained connected throughout.
+func (h *Handler) RebootCompletedAfter(ctx context.Context, nodeID string, after time.Time) (bool, error) {
+	if h == nil || h.events == nil {
+		return false, nil
+	}
+	events, err := h.events.List(ctx, nodeID)
+	if err != nil {
+		return false, err
+	}
+	connected := false
+	for _, event := range events {
+		if event.CreatedAt.Before(after) {
+			break
+		}
+		switch event.Type {
+		case store.ConnectionEventConnected:
+			connected = true
+		case store.ConnectionEventDisconnected:
+			if connected {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func (h *Handler) AgentStatus(ctx context.Context, nodeID string) (protocol.AgentStatusResponse, error) {
 	agent := h.connection(nodeID)
 	if agent == nil {
@@ -1357,6 +1387,38 @@ func (h *Handler) DockerExec(ctx context.Context, nodeID string, command string)
 	case <-ctx.Done():
 		return protocol.DockerExecResponse{}, ctx.Err()
 	}
+}
+
+func (h *Handler) DockerContainerCreate(ctx context.Context, nodeID string, request protocol.DockerContainerCreateRequest) (protocol.DockerContainerCreateResponse, error) {
+	response := protocol.DockerContainerCreateResponse{
+		Type:      protocol.MessageTypeDockerContainerCreateResponse,
+		Supported: false,
+		Name:      request.Name,
+	}
+	agent := h.connection(nodeID)
+	if agent == nil {
+		response.Error = "节点离线"
+		return response, nil
+	}
+	if !agent.supportsDockerContainerCreate {
+		response.Error = "当前 Agent 不支持结构化 Docker 容器创建，请升级 Agent"
+		return response, nil
+	}
+	requestID, err := randomTerminalSessionID()
+	if err != nil {
+		return protocol.DockerContainerCreateResponse{}, err
+	}
+	request.Type = protocol.MessageTypeDockerContainerCreateRequest
+	request.RequestID = requestID
+	request.NodeID = nodeID
+	raw, err := h.SendToNodeWithContext(ctx, nodeID, request, 90*time.Second)
+	if err != nil {
+		return protocol.DockerContainerCreateResponse{}, err
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return protocol.DockerContainerCreateResponse{}, err
+	}
+	return response, nil
 }
 
 func (h *Handler) DockerComposeList(ctx context.Context, nodeID string) (protocol.DockerComposeListResponse, error) {

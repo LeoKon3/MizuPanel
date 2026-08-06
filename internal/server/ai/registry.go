@@ -50,6 +50,7 @@ type NodeOperations interface {
 	ContainerStart(context.Context, string, string) (protocol.ContainerStartResponse, error)
 	ContainerStop(context.Context, string, string) (protocol.ContainerStopResponse, error)
 	ContainerRestart(context.Context, string, string) (protocol.ContainerRestartResponse, error)
+	DockerContainerCreate(context.Context, string, protocol.DockerContainerCreateRequest) (protocol.DockerContainerCreateResponse, error)
 	DockerComposeList(context.Context, string) (protocol.DockerComposeListResponse, error)
 	DockerResourceList(context.Context, string) (protocol.DockerResourceListResponse, error)
 	DockerComposeAction(context.Context, string, string, string, string) (protocol.DockerComposeActionResponse, error)
@@ -80,20 +81,25 @@ type KubernetesClusters interface {
 	GetIngresses(context.Context, string, string) ([]protocol.K8sIngress, error)
 }
 
+type KubernetesMutations interface {
+	CreateDeployment(context.Context, string, k8s.CreateDeploymentRequest) (*k8s.CreateDeploymentResult, error)
+}
+
 type RegistryDependencies struct {
-	Nodes      *store.NodeStore
-	Metrics    *store.MetricStore
-	Processes  *store.ProcessSnapshotStore
-	Docker     *store.DockerSnapshotStore
-	Alerts     *store.AlertStore
-	Uptime     *store.UptimeStore
-	Services   ApplicationServices
-	ServerLogs *logbuffer.Buffer
-	AgentOps   NodeOperations
-	Automation AutomationRunner
-	Tasks      *store.TaskStore
-	Audit      *serveraudit.Store
-	Kubernetes KubernetesClusters
+	Nodes               *store.NodeStore
+	Metrics             *store.MetricStore
+	Processes           *store.ProcessSnapshotStore
+	Docker              *store.DockerSnapshotStore
+	Alerts              *store.AlertStore
+	Uptime              *store.UptimeStore
+	Services            ApplicationServices
+	ServerLogs          *logbuffer.Buffer
+	AgentOps            NodeOperations
+	Automation          AutomationRunner
+	Tasks               *store.TaskStore
+	Audit               *serveraudit.Store
+	Kubernetes          KubernetesClusters
+	KubernetesMutations KubernetesMutations
 }
 
 type ToolTarget struct {
@@ -115,7 +121,8 @@ type SafeToolResult struct {
 	Summary string
 	// Status is the stable operation outcome used by confirmation-gated tools.
 	// Read tools may leave it empty; confirmed operations default to success.
-	Status string
+	Status      string
+	OperationID string
 }
 
 type registeredTool struct {
@@ -135,6 +142,7 @@ func NewRegistry(dependencies RegistryDependencies) *Registry {
 	r := &Registry{dependencies: dependencies, tools: make(map[string]registeredTool)}
 	r.registerReadTools()
 	r.registerConfirmTools()
+	r.registerCreationTools()
 	return r
 }
 
@@ -516,7 +524,7 @@ func (r *Registry) registerConfirmTools() {
 				if err != nil || !ok {
 					return SafeToolResult{}, safeRemoteError(err)
 				}
-				return SafeToolResult{Data: map[string]any{"accepted": true, "status": "accepted"}, Summary: "操作已接受", Status: "accepted"}, nil
+				return SafeToolResult{Data: map[string]any{"accepted": true, "status": "accepted"}, Summary: "操作已接受", Status: "accepted", OperationID: args.NodeID}, nil
 			},
 		})
 	}
@@ -718,7 +726,7 @@ func (r *Registry) registerConfirmTools() {
 			if err != nil {
 				return SafeToolResult{}, safeRemoteError(err)
 			}
-			return SafeToolResult{Data: map[string]any{"run_id": run.ID, "status": run.Status, "operation_status": "accepted"}, Summary: "脚本任务已创建", Status: "accepted"}, nil
+			return SafeToolResult{Data: map[string]any{"run_id": run.ID, "status": run.Status, "operation_status": "accepted"}, Summary: "脚本任务已创建", Status: "accepted", OperationID: strconv.FormatInt(run.ID, 10)}, nil
 		},
 	})
 }

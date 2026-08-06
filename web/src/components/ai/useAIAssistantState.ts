@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { confirmAIToolCall, createAIConversation, deleteAIConversation, getAIConversation, getAIConversations, getAIProviders, rejectAIToolCall, sendAIMessageStream, updateAIConversationModel } from '../../api/client'
-import type { AIConversation, AIConversationState, AIMessage, AIProgress, AIProvider, AIProviderModel, AIToolCall, AITurn } from '../../types'
+import type { AIConversation, AIConversationState, AIMessage, AIProgress, AIProvider, AIProviderModel, AIRequestContext, AIToolCall, AITurn } from '../../types'
 
 export const aiProvidersChangedEvent = 'mizupanel:ai-providers-changed'
 
@@ -24,10 +24,14 @@ export type AIAssistantState = {
   error?: string
   toast?: AIToast
   progress?: AIProgress
+  timeline: AIProgress[]
+  streamedContent: string
+  context: AIRequestContext
   turnResults: Record<string, AITurn>
   openDrawer: () => void
   closeDrawer: () => void
   setDrawerWidth: (width: number) => void
+  setContext: (context: AIRequestContext) => void
   ensureLoaded: () => Promise<void>
   refreshProviders: () => Promise<AIProvider[]>
   selectProvider: (id: string) => void
@@ -94,6 +98,14 @@ function defaultModelID(providers: AIProvider[]) {
   return ''
 }
 
+function sameProgress(left: AIProgress | undefined, right: AIProgress) {
+  return left?.phase === right.phase
+    && left.tool_name === right.tool_name
+    && left.target_name === right.target_name
+    && left.provider_name === right.provider_name
+    && left.model === right.model
+}
+
 export function useAIAssistantState(): AIAssistantState {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerWidth, setDrawerWidthState] = useState(480)
@@ -112,6 +124,9 @@ export function useAIAssistantState(): AIAssistantState {
   const [error, setError] = useState<string>()
   const [toast, setToast] = useState<AIToast>()
   const [progress, setProgress] = useState<AIProgress>()
+  const [timeline, setTimeline] = useState<AIProgress[]>([])
+  const [streamedContent, setStreamedContent] = useState('')
+  const [context, setContextState] = useState<AIRequestContext>({ page: 'overview' })
   const [turnResults, setTurnResults] = useState<Record<string, AITurn>>({})
   const conversationRequest = useRef(0)
   const conversationController = useRef<AbortController | undefined>(undefined)
@@ -122,7 +137,13 @@ export function useAIAssistantState(): AIAssistantState {
   const selectedProviderRef = useRef('')
   const selectedModelRef = useRef('')
   const pendingModelExplicit = useRef(false)
+  const contextRef = useRef<AIRequestContext>({ page: 'overview' })
   const initialized = useRef(false)
+
+  const setContext = useCallback((next: AIRequestContext) => {
+    contextRef.current = next
+    setContextState(next)
+  }, [])
 
   const commitSelectedModel = useCallback((id: string, availableProviders = providersRef.current) => {
     selectedModelRef.current = id
@@ -349,10 +370,25 @@ export function useAIAssistantState(): AIAssistantState {
     setSendingConversationID(conversationID)
     setError(undefined)
     setProgress(undefined)
+    setTimeline([])
+    setStreamedContent('')
     try {
       const result = await sendAIMessageStream(conversationID, trimmed, controller.signal, (event) => {
-        if (activeConversationRef.current === conversationID) setProgress(event)
+        if (activeConversationRef.current !== conversationID) return
+        setProgress(event)
+        setTimeline((current) => sameProgress(current[current.length - 1], event) ? current : [...current, event].slice(-8))
+      }, {
+        context: contextRef.current,
+        onDelta: (event) => {
+          if (activeConversationRef.current === conversationID) {
+            setStreamedContent((current) => `${current}${event.content}`.slice(0, 16 * 1024))
+          }
+        },
+        onReset: () => {
+          if (activeConversationRef.current === conversationID) setStreamedContent('')
+        }
       })
+      setStreamedContent('')
       setTurnResults((current) => ({ ...current, [result.turn.id]: result.turn }))
       if (result.message && activeConversationRef.current === conversationID) {
         setConversation((current) => {
@@ -375,6 +411,8 @@ export function useAIAssistantState(): AIAssistantState {
         setSending(false)
         setSendingConversationID(undefined)
         setProgress(undefined)
+        setTimeline([])
+        setStreamedContent('')
       }
     }
   }, [loadConversation, newConversation, providers, refreshConversations, selectingModel, sending])
@@ -420,6 +458,16 @@ export function useAIAssistantState(): AIAssistantState {
     return () => window.removeEventListener(aiProvidersChangedEvent, handleProvidersChanged)
   }, [loadConversation, refreshProviders])
 
+  useEffect(() => {
+    const conversationID = activeConversationRef.current
+    if (!conversationID || !conversation?.tool_calls.some((call) => call.status === 'accepted')) return
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === 'hidden' || activeConversationRef.current !== conversationID) return
+      void loadConversation(conversationID)
+    }, 2000)
+    return () => window.clearInterval(poll)
+  }, [conversation?.tool_calls, loadConversation])
+
   useEffect(() => () => {
     conversationController.current?.abort()
     modelSelectionController.current?.abort()
@@ -443,10 +491,14 @@ export function useAIAssistantState(): AIAssistantState {
     error,
     toast,
     progress,
+    timeline,
+    streamedContent,
+    context,
     turnResults,
     openDrawer,
     closeDrawer,
     setDrawerWidth,
+    setContext,
     ensureLoaded,
     refreshProviders,
     selectProvider,
@@ -459,5 +511,5 @@ export function useAIAssistantState(): AIAssistantState {
     confirm,
     reject,
     clearToast
-  }), [activeConversationID, clearToast, closeDrawer, confirm, conversation, conversations, deleteConversation, drawerOpen, drawerWidth, ensureLoaded, error, loading, newConversation, openDrawer, operationID, progress, providers, refreshProviders, reject, selectedModelID, selectedProviderID, selectConversation, selectModel, selectProvider, selectingModel, send, sending, sendingConversationID, setDrawerWidth, stop, toast, turnResults])
+  }), [activeConversationID, clearToast, closeDrawer, confirm, context, conversation, conversations, deleteConversation, drawerOpen, drawerWidth, ensureLoaded, error, loading, newConversation, openDrawer, operationID, progress, providers, refreshProviders, reject, selectedModelID, selectedProviderID, selectConversation, selectModel, selectProvider, selectingModel, send, sending, sendingConversationID, setContext, setDrawerWidth, stop, streamedContent, timeline, toast, turnResults])
 }

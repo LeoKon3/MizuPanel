@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,9 +14,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const maxProviderResponseBytes = 4 << 20
+
+const maxProviderStreamFrameBytes = 256 << 10
 
 type OpenAIChatCompletionsAdapter struct {
 	client *http.Client
@@ -36,11 +40,49 @@ func NewOpenAIChatCompletionsAdapter(timeout time.Duration) *OpenAIChatCompletio
 }
 
 func (a *OpenAIChatCompletionsAdapter) Complete(ctx context.Context, provider ProviderCredential, request ChatRequest) (ChatResponse, error) {
+	httpRequest, err := buildOpenAICompletionRequest(ctx, provider, request, false)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	response, err := a.doCompletionRequest(ctx, httpRequest)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	defer response.Body.Close()
+	limited := io.LimitReader(response.Body, maxProviderResponseBytes+1)
+	responseBody, err := io.ReadAll(limited)
+	if err != nil {
+		return ChatResponse{}, adapterError(ErrorProtocol, "模型响应读取失败")
+	}
+	if len(responseBody) > maxProviderResponseBytes {
+		return ChatResponse{}, adapterError(ErrorProtocol, "模型响应过大")
+	}
+	var decoded openAIResponse
+	if err := json.Unmarshal(responseBody, &decoded); err != nil || len(decoded.Choices) == 0 {
+		return ChatResponse{}, adapterError(ErrorProtocol, "模型响应格式无效")
+	}
+	return convertOpenAIMessage(decoded.Choices[0].Message)
+}
+
+func (a *OpenAIChatCompletionsAdapter) CompleteStream(ctx context.Context, provider ProviderCredential, request ChatRequest, callback ContentCallback) (ChatResponse, error) {
+	httpRequest, err := buildOpenAICompletionRequest(ctx, provider, request, true)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	response, err := a.doCompletionRequest(ctx, httpRequest)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	defer response.Body.Close()
+	return parseOpenAICompletionStream(ctx, response.Body, callback)
+}
+
+func buildOpenAICompletionRequest(ctx context.Context, provider ProviderCredential, request ChatRequest, stream bool) (*http.Request, error) {
 	baseURL, err := NormalizeBaseURL(provider.BaseURL)
 	if err != nil || provider.Model == "" {
-		return ChatResponse{}, adapterError(ErrorConfiguration, "模型配置无效")
+		return nil, adapterError(ErrorConfiguration, "模型配置无效")
 	}
-	payload := openAIRequest{Model: provider.Model, Stream: false, ToolChoice: "auto"}
+	payload := openAIRequest{Model: provider.Model, Stream: stream, ToolChoice: "auto"}
 	payload.Messages = make([]openAIMessage, 0, len(request.Messages))
 	for _, message := range request.Messages {
 		converted := openAIMessage{Role: message.Role, Content: message.Content, ToolCallID: message.ToolCallID}
@@ -57,56 +99,180 @@ func (a *OpenAIChatCompletionsAdapter) Complete(ctx context.Context, provider Pr
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return ChatResponse{}, adapterError(ErrorProtocol, "模型请求编码失败")
+		return nil, adapterError(ErrorProtocol, "模型请求编码失败")
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return ChatResponse{}, adapterError(ErrorConfiguration, "模型配置无效")
+		return nil, adapterError(ErrorConfiguration, "模型配置无效")
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	if provider.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	}
+	return httpRequest, nil
+}
+
+func (a *OpenAIChatCompletionsAdapter) doCompletionRequest(ctx context.Context, httpRequest *http.Request) (*http.Response, error) {
 	response, err := a.client.Do(httpRequest)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return ChatResponse{}, err
+			return nil, err
 		}
 		if errors.Is(err, context.DeadlineExceeded) || isNetTimeout(err) {
-			return ChatResponse{}, adapterError(ErrorTimeout, "模型请求超时")
+			return nil, adapterError(ErrorTimeout, "模型请求超时")
 		}
-		return ChatResponse{}, adapterError(ErrorUpstream, "模型服务不可用")
+		return nil, adapterError(ErrorUpstream, "模型服务不可用")
 	}
-	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		response.Body.Close()
 		switch response.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden:
-			return ChatResponse{}, adapterError(ErrorAuthentication, "模型服务拒绝了凭据")
+			return nil, adapterError(ErrorAuthentication, "模型服务拒绝了凭据")
 		case http.StatusTooManyRequests:
-			return ChatResponse{}, adapterError(ErrorRateLimit, "模型服务请求过于频繁")
+			return nil, adapterError(ErrorRateLimit, "模型服务请求过于频繁")
 		default:
-			return ChatResponse{}, adapterError(ErrorUpstream, "模型服务返回异常状态")
+			return nil, adapterError(ErrorUpstream, "模型服务返回异常状态")
 		}
 	}
-	limited := io.LimitReader(response.Body, maxProviderResponseBytes+1)
-	responseBody, err := io.ReadAll(limited)
-	if err != nil {
-		return ChatResponse{}, adapterError(ErrorProtocol, "模型响应读取失败")
-	}
-	if len(responseBody) > maxProviderResponseBytes {
-		return ChatResponse{}, adapterError(ErrorProtocol, "模型响应过大")
-	}
-	var decoded openAIResponse
-	if err := json.Unmarshal(responseBody, &decoded); err != nil || len(decoded.Choices) == 0 {
-		return ChatResponse{}, adapterError(ErrorProtocol, "模型响应格式无效")
-	}
-	message := decoded.Choices[0].Message
+	return response, nil
+}
+
+func convertOpenAIMessage(message openAIMessage) (ChatResponse, error) {
 	result := ChatResponse{Content: message.Content, ToolCalls: make([]ToolCall, 0, len(message.ToolCalls))}
 	for _, call := range message.ToolCalls {
 		if call.ID == "" || call.Function.Name == "" {
 			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用格式无效")
 		}
 		result.ToolCalls = append(result.ToolCalls, ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: json.RawMessage(call.Function.Arguments)})
+	}
+	return result, nil
+}
+
+type openAIStreamToolCall struct {
+	ID        string
+	Name      string
+	Arguments strings.Builder
+}
+
+func parseOpenAICompletionStream(ctx context.Context, reader io.Reader, callback ContentCallback) (ChatResponse, error) {
+	scanner := bufio.NewScanner(io.LimitReader(reader, maxProviderResponseBytes+1))
+	scanner.Buffer(make([]byte, 64*1024), maxProviderStreamFrameBytes)
+	var content strings.Builder
+	toolCalls := make(map[int]*openAIStreamToolCall)
+	order := make([]int, 0)
+	var dataLines []string
+	totalBytes := 0
+	frameBytes := 0
+	terminal := false
+	done := false
+	flush := func() error {
+		if len(dataLines) == 0 {
+			return nil
+		}
+		data := strings.Join(dataLines, "\n")
+		dataLines = dataLines[:0]
+		frameBytes = 0
+		if data == "[DONE]" {
+			done = true
+			return nil
+		}
+		var event openAIStreamResponse
+		if err := json.Unmarshal([]byte(data), &event); err != nil || len(event.Choices) == 0 {
+			return adapterError(ErrorProtocol, "模型流响应格式无效")
+		}
+		choice := event.Choices[0]
+		if choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "" {
+			terminal = true
+		}
+		if choice.Delta.Content != "" {
+			if !utf8.ValidString(choice.Delta.Content) {
+				return adapterError(ErrorProtocol, "模型流响应格式无效")
+			}
+			content.WriteString(choice.Delta.Content)
+			if callback != nil {
+				if err := callback(boundedString(choice.Delta.Content, maxUserMessageBytes)); err != nil {
+					return err
+				}
+			}
+		}
+		for _, delta := range choice.Delta.ToolCalls {
+			call, exists := toolCalls[delta.Index]
+			if !exists {
+				call = &openAIStreamToolCall{}
+				toolCalls[delta.Index] = call
+				order = append(order, delta.Index)
+			}
+			if delta.ID != "" {
+				if call.ID != "" && call.ID != delta.ID {
+					return adapterError(ErrorProtocol, "模型工具调用格式无效")
+				}
+				call.ID = delta.ID
+			}
+			call.Name += delta.Function.Name
+			call.Arguments.WriteString(delta.Function.Arguments)
+			if call.Arguments.Len() > maxProviderStreamFrameBytes {
+				return adapterError(ErrorProtocol, "模型工具调用格式无效")
+			}
+		}
+		return nil
+	}
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return ChatResponse{}, err
+		}
+		line := scanner.Text()
+		totalBytes += len(line) + 1
+		if totalBytes > maxProviderResponseBytes {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型响应过大")
+		}
+		if !utf8.ValidString(line) {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型流响应格式无效")
+		}
+		if line == "" {
+			if err := flush(); err != nil {
+				return ChatResponse{}, err
+			}
+			if done {
+				break
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型流响应格式无效")
+		}
+		data := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+		frameBytes += len(data)
+		if len(dataLines) > 0 {
+			frameBytes++
+		}
+		if frameBytes > maxProviderStreamFrameBytes {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型流响应格式无效")
+		}
+		dataLines = append(dataLines, data)
+	}
+	if err := scanner.Err(); err != nil {
+		return ChatResponse{}, adapterError(ErrorProtocol, "模型响应读取失败")
+	}
+	if !done {
+		if err := flush(); err != nil {
+			return ChatResponse{}, err
+		}
+	}
+	if !done && !terminal {
+		return ChatResponse{}, adapterError(ErrorProtocol, "模型流响应未正常结束")
+	}
+	sort.Ints(order)
+	result := ChatResponse{Content: content.String(), ToolCalls: make([]ToolCall, 0, len(order))}
+	for _, index := range order {
+		call := toolCalls[index]
+		arguments := call.Arguments.String()
+		if call.ID == "" || call.Name == "" || !json.Valid([]byte(arguments)) {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用格式无效")
+		}
+		result.ToolCalls = append(result.ToolCalls, ToolCall{ID: call.ID, Name: call.Name, Arguments: json.RawMessage(arguments)})
 	}
 	return result, nil
 }
@@ -195,6 +361,23 @@ type openAIFunctionCall struct {
 type openAIResponse struct {
 	Choices []struct {
 		Message openAIMessage `json:"message"`
+	} `json:"choices"`
+}
+
+type openAIStreamResponse struct {
+	Choices []struct {
+		Delta struct {
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
 }
 
