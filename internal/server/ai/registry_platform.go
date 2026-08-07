@@ -388,6 +388,7 @@ func (r *Registry) registerPlatformReadTools() {
 		validate: r.validateNodeRead,
 		execute:  r.executeNodeDiagnosis,
 	})
+	r.registerIncidentDiagnosisTool()
 }
 
 func (r *Registry) validateNodeRead(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {

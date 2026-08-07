@@ -28,6 +28,7 @@ func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
 		"list_automation_runs",
 		"list_audit_events",
 		"diagnose_node",
+		"diagnose_incident",
 		"reboot_node",
 		"upgrade_agent",
 		"docker_container_action",

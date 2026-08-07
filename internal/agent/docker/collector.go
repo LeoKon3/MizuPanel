@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	defaultSocketPath        = "/var/run/docker.sock"
-	defaultStatsTimeout      = 5 * time.Second  // 单容器 stats 超时
-	defaultCollectionTimeout = 30 * time.Second // 整体采集超时（支持并发采集多容器）
-	defaultContainerLimit    = 100
-	maxConcurrentStats       = 10 // 最大并发采集容器数
+	defaultSocketPath           = "/var/run/docker.sock"
+	defaultStatsTimeout         = 5 * time.Second  // 单容器 stats 超时
+	defaultCollectionTimeout    = 30 * time.Second // 整体采集超时（支持并发采集多容器）
+	defaultContainerLimit       = 100
+	containerCreateProbeTimeout = 750 * time.Millisecond
+	maxConcurrentStats          = 10 // 最大并发采集容器数
 )
 
 type Collector struct {
@@ -192,8 +193,23 @@ func (c *Collector) SupportsContainerCreate() bool {
 		_, ok := c.client.(containerClientAPI)
 		return ok
 	}
-	_, err := os.Stat(c.socketPath)
-	return err == nil
+	socketPath := c.socketPath
+	if socketPath == "" {
+		socketPath = defaultSocketPath
+	}
+	if _, err := os.Stat(socketPath); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), containerCreateProbeTimeout)
+	defer cancel()
+	return supportsDockerEngine(ctx, newSocketClient(socketPath, containerCreateProbeTimeout))
+}
+
+func supportsDockerEngine(ctx context.Context, client interface {
+	Version(context.Context) (string, error)
+}) bool {
+	version, err := client.Version(ctx)
+	return err == nil && strings.TrimSpace(version) != ""
 }
 
 func (c *Collector) CreateContainer(ctx context.Context, request protocol.DockerContainerCreateRequest) (containerCreateResult, error) {

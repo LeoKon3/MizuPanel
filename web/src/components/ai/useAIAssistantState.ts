@@ -130,6 +130,8 @@ export function useAIAssistantState(): AIAssistantState {
   const [turnResults, setTurnResults] = useState<Record<string, AITurn>>({})
   const conversationRequest = useRef(0)
   const conversationController = useRef<AbortController | undefined>(undefined)
+  const conversationRefreshRequest = useRef(0)
+  const conversationRefreshController = useRef<AbortController | undefined>(undefined)
   const modelSelectionRequest = useRef(0)
   const modelSelectionController = useRef<AbortController | undefined>(undefined)
   const activeModelRequest = useRef<AbortController | undefined>(undefined)
@@ -184,6 +186,8 @@ export function useAIAssistantState(): AIAssistantState {
   }, [])
 
   const loadConversation = useCallback(async (id: string) => {
+    conversationRefreshController.current?.abort()
+    conversationRefreshRequest.current += 1
     conversationController.current?.abort()
     const controller = new AbortController()
     conversationController.current = controller
@@ -211,6 +215,43 @@ export function useAIAssistantState(): AIAssistantState {
       }
     }
   }, [cancelModelSelection, commitSelectedModel])
+
+  const refreshConversation = useCallback(async (id: string) => {
+    conversationRefreshController.current?.abort()
+    const controller = new AbortController()
+    conversationRefreshController.current = controller
+    const requestID = ++conversationRefreshRequest.current
+    const conversationRequestID = conversationRequest.current
+    const modelSelectionRequestID = modelSelectionRequest.current
+
+    try {
+      const response = await getAIConversation(id, 100, controller.signal)
+      if (
+        controller.signal.aborted
+        || requestID !== conversationRefreshRequest.current
+        || conversationRequestID !== conversationRequest.current
+        || activeConversationRef.current !== id
+      ) return
+
+      setConversation((current) => {
+        if (current?.conversation.id !== id) return current
+        const nextConversation = modelSelectionRequestID === modelSelectionRequest.current
+          ? response.conversation
+          : current.conversation
+        return { ...response, conversation: nextConversation }
+      })
+      setConversations((current) => current.map((item) => {
+        if (item.id !== id) return item
+        return modelSelectionRequestID === modelSelectionRequest.current ? response.conversation : item
+      }))
+    } catch (refreshError) {
+      if (controller.signal.aborted || requestID !== conversationRefreshRequest.current) return
+      // Background operation polling must keep the current transcript usable when a refresh fails.
+      void refreshError
+    } finally {
+      if (conversationRefreshController.current === controller) conversationRefreshController.current = undefined
+    }
+  }, [])
 
   const ensureLoaded = useCallback(async () => {
     if (initialized.current) return
@@ -396,7 +437,7 @@ export function useAIAssistantState(): AIAssistantState {
           return { ...current, messages: [...current.messages, result.message as AIMessage] }
         })
       }
-      if (activeConversationRef.current === conversationID) await loadConversation(conversationID)
+      if (activeConversationRef.current === conversationID) await refreshConversation(conversationID)
       await refreshConversations()
     } catch (sendError) {
       if (controller.signal.aborted) {
@@ -404,7 +445,7 @@ export function useAIAssistantState(): AIAssistantState {
       } else {
         setToast({ type: 'error', message: `消息发送失败: ${errorText(sendError, '未知错误')}` })
       }
-      if (activeConversationRef.current === conversationID) await loadConversation(conversationID)
+      if (activeConversationRef.current === conversationID) await refreshConversation(conversationID)
     } finally {
       if (activeModelRequest.current === controller) {
         activeModelRequest.current = undefined
@@ -415,7 +456,7 @@ export function useAIAssistantState(): AIAssistantState {
         setStreamedContent('')
       }
     }
-  }, [loadConversation, newConversation, providers, refreshConversations, selectingModel, sending])
+  }, [newConversation, providers, refreshConversation, refreshConversations, selectingModel, sending])
 
   const stop = useCallback(() => activeModelRequest.current?.abort(), [])
 
@@ -463,13 +504,14 @@ export function useAIAssistantState(): AIAssistantState {
     if (!conversationID || !conversation?.tool_calls.some((call) => call.status === 'accepted')) return
     const poll = window.setInterval(() => {
       if (document.visibilityState === 'hidden' || activeConversationRef.current !== conversationID) return
-      void loadConversation(conversationID)
+      void refreshConversation(conversationID)
     }, 2000)
     return () => window.clearInterval(poll)
-  }, [conversation?.tool_calls, loadConversation])
+  }, [conversation?.tool_calls, refreshConversation])
 
   useEffect(() => () => {
     conversationController.current?.abort()
+    conversationRefreshController.current?.abort()
     modelSelectionController.current?.abort()
     activeModelRequest.current?.abort()
   }, [])

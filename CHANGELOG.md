@@ -2,6 +2,31 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.21 - 2026-08-07
+
+### Added
+
+- Added the read-only `diagnose_incident` AI tool for bounded platform, node,
+  Kubernetes-cluster, and application-service diagnosis with explicit source
+  availability and deterministically ranked evidence.
+
+### Fixed
+
+- Fixed accepted-operation polling clearing the visible AI transcript and
+  interrupting an in-flight conversation model change.
+- Fixed AI conversations losing their bottom position after sending a message;
+  new output now follows the viewport while manual history scrolling remains stable.
+- Fixed Docker container-create capability being reported from a socket path
+  alone; the Agent now requires a bounded successful Docker Engine probe.
+
+### Security
+
+- Incident evidence excludes raw logs, process command lines, environment
+  values, kubeconfig, scripts, and source errors; dynamic labels are redacted
+  before model use, and navigation is represented only by fixed route keys.
+- Missing, stale, timed-out, and partially failed diagnosis sources remain
+  explicit and are never projected as healthy.
+
 ## v0.1.20 - 2026-08-06
 
 ### Fixed

@@ -194,6 +194,8 @@ describe('AI assistant', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
     vi.clearAllMocks()
   })
 
@@ -284,6 +286,55 @@ describe('AI assistant', () => {
     expect(selector).toHaveValue(fallbackModel.id)
   })
 
+  test('refreshes accepted operations without clearing the transcript or aborting model selection', async () => {
+    const pollCallbacks: Array<() => void> = []
+    vi.spyOn(window, 'setInterval').mockImplementation((callback) => {
+      if (typeof callback === 'function') pollCallbacks.push(callback as () => void)
+      return 1
+    })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const selection = deferred<AIConversation>()
+    const priorMessage: AIMessage = {
+      id: 'message-existing',
+      conversation_id: conversation.id,
+      turn_id: 'turn-existing',
+      role: 'assistant',
+      content: '正在等待节点重启结果。',
+      provider_name: 'Primary',
+      model: primaryModel.model_id,
+      created_at: '2026-08-05T00:00:00Z'
+    }
+    const accepted = { ...pendingCall, status: 'accepted' as const, result_summary: '重启请求已提交' }
+    const completed = { ...accepted, status: 'success' as const, result_summary: '节点已重启' }
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation)
+      .mockResolvedValueOnce({ conversation, messages: [priorMessage], tool_calls: [accepted] })
+      .mockResolvedValueOnce({ conversation, messages: [priorMessage], tool_calls: [completed] })
+    vi.mocked(api.updateAIConversationModel).mockReturnValue(selection.promise)
+
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    const selector = await screen.findByLabelText('选择模型', { selector: '#ai-drawer-model' })
+    const drawer = screen.getByTestId('ai-drawer-messages')
+    await waitFor(() => expect(api.getAIConversation).toHaveBeenCalledTimes(1))
+    expect(within(drawer).getByText('正在等待节点重启结果。')).toBeInTheDocument()
+
+    fireEvent.change(selector, { target: { value: secondaryModel.id } })
+    await waitFor(() => expect(api.updateAIConversationModel).toHaveBeenCalledWith(conversation.id, secondaryModel.id, expect.any(AbortSignal)))
+    const selectionSignal = vi.mocked(api.updateAIConversationModel).mock.calls[0]?.[2]
+    expect(selectionSignal?.aborted).toBe(false)
+
+    const poll = pollCallbacks.find((callback) => String(callback).includes('refreshConversation'))
+    expect(poll).toBeDefined()
+    poll?.()
+    await waitFor(() => expect(api.getAIConversation).toHaveBeenCalledTimes(2))
+    expect(within(drawer).getByText('正在等待节点重启结果。')).toBeInTheDocument()
+    expect(selectionSignal?.aborted).toBe(false)
+
+    selection.resolve({ ...conversation, model_id: secondaryModel.id })
+    await waitFor(() => expect(selector).toHaveValue(secondaryModel.id))
+  })
+
   test('new conversations inherit the server default unless a model was explicitly selected', async () => {
     vi.mocked(api.createAIConversation)
       .mockResolvedValueOnce(conversation)
@@ -341,6 +392,47 @@ describe('AI assistant', () => {
     expect(state.setDrawerWidth).toHaveBeenNthCalledWith(4, 720)
     fireEvent.click(screen.getByRole('button', { name: '配置模型' }))
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
+  })
+
+  test('follows new output after send without pulling a manually scrolled transcript down', () => {
+    const send = vi.fn(async () => undefined)
+    const priorMessage: AIMessage = {
+      id: 'message-prior',
+      conversation_id: conversation.id,
+      turn_id: 'turn-prior',
+      role: 'assistant',
+      content: 'Earlier answer',
+      provider_name: 'Primary',
+      model: primaryModel.model_id,
+      created_at: '2026-08-05T00:00:00Z'
+    }
+    const base = assistant({
+      conversation: { conversation, messages: [priorMessage], tool_calls: [] },
+      send
+    })
+    const { rerender } = render(<AIAssistantDrawer assistant={base} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    const viewport = screen.getByTestId('ai-drawer-messages')
+    let scrollHeight = 1000
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 300 })
+
+    viewport.scrollTop = 100
+    fireEvent.scroll(viewport)
+    const composer = screen.getByLabelText('发送给 AI 运维助手')
+    fireEvent.change(composer, { target: { value: 'new question' } })
+    fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(send).toHaveBeenCalledWith('new question')
+
+    const optimisticMessage = { ...priorMessage, id: 'message-local', role: 'user' as const, content: 'new question' }
+    scrollHeight = 1200
+    rerender(<AIAssistantDrawer assistant={{ ...base, conversation: { conversation, messages: [priorMessage, optimisticMessage], tool_calls: [] }, sending: true, sendingConversationID: conversation.id }} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    expect(viewport.scrollTop).toBe(1200)
+
+    viewport.scrollTop = 200
+    fireEvent.scroll(viewport)
+    scrollHeight = 1400
+    rerender(<AIAssistantDrawer assistant={{ ...base, conversation: { conversation, messages: [priorMessage, optimisticMessage], tool_calls: [] }, sending: true, sendingConversationID: conversation.id, streamedContent: 'partial answer' }} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    expect(viewport.scrollTop).toBe(200)
   })
 
   test('renders only pending write-risk cards and uses the custom confirmation dialog', async () => {
@@ -479,7 +571,10 @@ describe('AI assistant', () => {
       context: { page: 'hosts', resource_type: 'node', resource_id: 'node-1' }
     }))
     stream.resolve({ turn: turn(), message: finalMessage })
-    await waitFor(() => expect(within(drawer).queryAllByText('live answer')).toHaveLength(1))
+    await waitFor(() => expect(api.getAIConversation).toHaveBeenCalledTimes(2))
+    expect(within(drawer).getByText('inspect this node')).toBeInTheDocument()
+    expect(within(drawer).getByText('live answer')).toBeInTheDocument()
+    expect(within(drawer).queryByText('正在加载会话')).not.toBeInTheDocument()
     refresh.resolve({ conversation, messages: [finalMessage], tool_calls: [] })
     await waitFor(() => expect(within(drawer).queryByRole('status')).not.toBeInTheDocument())
   })

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, ChevronRight, CircleAlert, LoaderCircle, Maximize2, MessageSquarePlus, PanelRightClose, Plus, Send, Settings2, Square, Trash2, X } from 'lucide-react'
 
 import type { AIProgress, AIToolCall } from '../../types'
@@ -22,6 +22,7 @@ const toolLabels: Record<string, string> = {
   list_uptime_monitors: '查询拨测状态',
   get_log_snapshot: '读取日志快照',
   list_k8s_clusters: '查询 Kubernetes 集群',
+  diagnose_incident: '诊断平台事件',
   reboot_node: '重启主机',
   upgrade_agent: '升级 Agent',
   docker_container_action: '变更容器状态',
@@ -53,6 +54,9 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const confirmButtonRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
+  const messagesViewportRef = useRef<HTMLDivElement>(null)
+  const followLatestRef = useRef(true)
+  const renderedConversationIDRef = useRef<string | undefined>(undefined)
   const messages = assistant.conversation?.messages ?? []
   const toolCalls = assistant.conversation?.tool_calls ?? []
   const selected = findAIModel(assistant.providers, assistant.selectedModelID)
@@ -63,6 +67,15 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
     if (confirmCall) dialogRef.current?.focus()
   }, [confirmCall])
 
+  useLayoutEffect(() => {
+    if (renderedConversationIDRef.current !== assistant.activeConversationID) {
+      renderedConversationIDRef.current = assistant.activeConversationID
+      followLatestRef.current = true
+    }
+    const viewport = messagesViewportRef.current
+    if (viewport && followLatestRef.current) viewport.scrollTop = viewport.scrollHeight
+  }, [activeSending, assistant.activeConversationID, assistant.conversation, assistant.progress, assistant.streamedContent, assistant.timeline])
+
   const closeConfirmation = () => {
     setConfirmCall(undefined)
     requestAnimationFrame(() => confirmButtonRef.current?.focus())
@@ -71,8 +84,15 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   const submit = () => {
     if (!draft.trim() || assistant.sending) return
     const content = draft
+    followLatestRef.current = true
     setDraft('')
     void assistant.send(content)
+  }
+
+  const handleMessagesScroll = () => {
+    const viewport = messagesViewportRef.current
+    if (!viewport) return
+    followLatestRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 96
   }
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -84,7 +104,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4" data-testid={`ai-${mode}-messages`}>
+      <div ref={messagesViewportRef} onScroll={handleMessagesScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4" data-testid={`ai-${mode}-messages`}>
         {assistant.loading && !assistant.conversation ? (
           <div className="flex flex-1 items-center justify-center text-sm font-bold text-muted-foreground">
             <LoaderCircle className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />

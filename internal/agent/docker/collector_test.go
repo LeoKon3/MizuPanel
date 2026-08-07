@@ -3,12 +3,67 @@ package docker
 import (
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
 )
+
+func TestSupportsContainerCreateRequiresReachableDockerEngine(t *testing.T) {
+	t.Run("injected create client", func(t *testing.T) {
+		collector := NewCollector()
+		collector.client = fakeContainerCreateClient{fakeDockerClient: fakeDockerClient{versionErr: errFake("offline")}}
+		if !collector.SupportsContainerCreate() {
+			t.Fatal("SupportsContainerCreate = false for injected create client")
+		}
+	})
+
+	t.Run("missing socket", func(t *testing.T) {
+		collector := NewCollector()
+		collector.socketPath = t.TempDir() + "/missing.sock"
+		if collector.SupportsContainerCreate() {
+			t.Fatal("SupportsContainerCreate = true for missing socket")
+		}
+	})
+
+	t.Run("regular file", func(t *testing.T) {
+		path := t.TempDir() + "/docker.sock"
+		if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
+			t.Fatalf("write stale socket path: %v", err)
+		}
+		collector := NewCollector()
+		collector.socketPath = path
+		if collector.SupportsContainerCreate() {
+			t.Fatal("SupportsContainerCreate = true for non-socket path")
+		}
+	})
+
+	t.Run("stale socket", func(t *testing.T) {
+		if supportsDockerEngine(t.Context(), fakeDockerClient{versionErr: errFake("connection refused")}) {
+			t.Fatal("supportsDockerEngine = true for stale socket")
+		}
+	})
+
+	t.Run("reachable engine", func(t *testing.T) {
+		if !supportsDockerEngine(t.Context(), fakeDockerClient{version: "26.1.0"}) {
+			t.Fatal("supportsDockerEngine = false for reachable Docker Engine")
+		}
+	})
+}
+
+func TestSupportsContainerCreateProbeIsBounded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if supportsDockerEngine(ctx, fakeDockerClient{versionDelay: 2 * time.Second}) {
+		t.Fatal("supportsDockerEngine = true for unresponsive socket")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("capability probe took %s, want bounded response", elapsed)
+	}
+}
 
 func TestCollectorReturnsUnavailableWhenSocketMissing(t *testing.T) {
 	collector := NewCollector()
@@ -123,18 +178,34 @@ func TestCollectorStopsWithinCollectionTimeoutWhenStatsStall(t *testing.T) {
 }
 
 type fakeDockerClient struct {
-	version    string
-	versionErr error
-	containers []containerListItem
-	listErr    error
-	inspect    map[string]containerInspect
-	inspectErr error
-	stats      map[string]containerStats
-	statsErr   error
-	statsDelay time.Duration
+	version      string
+	versionErr   error
+	versionDelay time.Duration
+	containers   []containerListItem
+	listErr      error
+	inspect      map[string]containerInspect
+	inspectErr   error
+	stats        map[string]containerStats
+	statsErr     error
+	statsDelay   time.Duration
+}
+
+type fakeContainerCreateClient struct {
+	fakeDockerClient
+}
+
+func (fakeContainerCreateClient) CreateContainer(context.Context, protocol.DockerContainerCreateRequest) (containerCreateResult, error) {
+	return containerCreateResult{}, nil
 }
 
 func (c fakeDockerClient) Version(ctx context.Context) (string, error) {
+	if c.versionDelay > 0 {
+		select {
+		case <-time.After(c.versionDelay):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 	return c.version, c.versionErr
 }
 func (c fakeDockerClient) ListContainers(ctx context.Context, limit int) ([]containerListItem, error) {
