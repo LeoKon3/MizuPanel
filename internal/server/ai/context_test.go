@@ -3,11 +3,13 @@ package ai
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/mizupanel/mizupanel/internal/protocol"
 	serverdb "github.com/mizupanel/mizupanel/internal/server/db"
 	serverk8s "github.com/mizupanel/mizupanel/internal/server/k8s"
 	"github.com/mizupanel/mizupanel/internal/server/store"
@@ -47,17 +49,144 @@ func TestOperationalContextProjectsResolvedResourceInventoryAndUnavailableSource
 	for _, want := range []string{
 		`"selected_resource":{"type":"k8s_cluster","id":"cluster-1","name":"Production Cluster","route":"/k8s/clusters/cluster-1","available":true`,
 		`"nodes":{"available":true,"count":1,"unavailable_count":1`,
+		`{"arch":"arm64","available":false,"id":"node-offline","name":"Offline Node","os":"linux","status":"offline"}`,
 		`"kubernetes_clusters":{"available":true,"count":1`,
 		`"docker":{"available":false,"reason":"source_unavailable"`,
 		`"application_services":{"available":false,"reason":"source_unavailable"`,
+		`"operations":[`,
+		`"name":"list_nodes","risk":"read","available":true`,
+		`"name":"reboot_node","risk":"confirm","available":false,"reason":"source_unavailable"`,
+		`"max_plan_steps":5`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("operational context missing %s:\n%s", want, content)
 		}
 	}
-	if strings.Contains(content, "kubeconfig") {
-		t.Fatalf("operational context exposed kubeconfig data: %s", content)
+	for _, forbidden := range []string{"kubeconfig", "arguments_json", "operation_id", "api_key", "authorization"} {
+		if strings.Contains(strings.ToLower(content), forbidden) {
+			t.Fatalf("operational context exposed forbidden field %q: %s", forbidden, content)
+		}
 	}
+}
+
+func TestOperationalContextFiltersUnavailableToolDefinitions(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+	nodes := store.NewNodeStore(database)
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Node One", Status: "online"}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	registry := NewRegistry(RegistryDependencies{Nodes: nodes})
+
+	content, definitions, err := registry.OperationalContextWithTools(t.Context(), &RequestContext{Page: "overview"})
+	if err != nil {
+		t.Fatalf("OperationalContextWithTools: %v", err)
+	}
+	available := make(map[string]bool, len(definitions))
+	for _, definition := range definitions {
+		available[definition.Name] = true
+	}
+	if !available["list_nodes"] || !available["diagnose_incident"] {
+		t.Fatalf("available definitions = %v, want node and incident reads", available)
+	}
+	for _, unavailable := range []string{"reboot_node", "create_docker_container", "create_k8s_deployment"} {
+		if available[unavailable] {
+			t.Fatalf("unavailable tool %q was exposed to model", unavailable)
+		}
+		if !strings.Contains(content, `"name":"`+unavailable+`"`) || !strings.Contains(content, `"available":false`) {
+			t.Fatalf("context did not explain unavailable tool %q: %s", unavailable, content)
+		}
+	}
+}
+
+func TestOperationalContextRequiresAgentDockerCreateCapability(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+	nodes := store.NewNodeStore(database)
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Node One", Status: "online"}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	docker := store.NewDockerSnapshotStore(database)
+	if err := docker.Upsert(t.Context(), "node-1", protocol.DockerSnapshot{Available: true, Version: "20.10.24"}); err != nil {
+		t.Fatalf("upsert Docker snapshot: %v", err)
+	}
+
+	legacy := NewRegistry(RegistryDependencies{Nodes: nodes, Docker: docker, AgentOps: platformNodeOperationsStub{}})
+	_, definitions, err := legacy.OperationalContextWithTools(t.Context(), &RequestContext{Page: "overview"})
+	if err != nil {
+		t.Fatalf("legacy OperationalContextWithTools: %v", err)
+	}
+	if hasToolDefinition(definitions, "create_docker_container") {
+		t.Fatal("Docker create was advertised for a legacy Agent")
+	}
+	if _, err := legacy.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:latest"}`)); !errors.Is(err, ErrUnsupportedTool) {
+		t.Fatalf("legacy Docker create validation error = %v, want unsupported", err)
+	}
+
+	capable := NewRegistry(RegistryDependencies{Nodes: nodes, Docker: docker, AgentOps: platformNodeOperationsStub{dockerCreateSupported: true}})
+	_, definitions, err = capable.OperationalContextWithTools(t.Context(), &RequestContext{Page: "overview"})
+	if err != nil {
+		t.Fatalf("capable OperationalContextWithTools: %v", err)
+	}
+	if !hasToolDefinition(definitions, "create_docker_container") {
+		t.Fatal("Docker create was hidden for a capable Agent")
+	}
+}
+
+func TestOperationalContextAdvertisesMetricsOnlyWhenANodeIsRegistered(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+	nodes := store.NewNodeStore(database)
+	registry := NewRegistry(RegistryDependencies{Nodes: nodes, Metrics: store.NewMetricStore(database)})
+
+	_, definitions, err := registry.OperationalContextWithTools(t.Context(), &RequestContext{Page: "overview"})
+	if err != nil {
+		t.Fatalf("empty OperationalContextWithTools: %v", err)
+	}
+	if hasToolDefinition(definitions, "get_node_metrics") {
+		t.Fatal("get_node_metrics was advertised without any registered node")
+	}
+
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-offline", Name: "Offline Node", Status: "offline"}); err != nil {
+		t.Fatalf("upsert offline node: %v", err)
+	}
+	_, definitions, err = registry.OperationalContextWithTools(t.Context(), &RequestContext{Page: "overview"})
+	if err != nil {
+		t.Fatalf("offline OperationalContextWithTools: %v", err)
+	}
+	if !hasToolDefinition(definitions, "get_node_metrics") {
+		t.Fatal("get_node_metrics was hidden for a registered offline node")
+	}
+}
+
+func hasToolDefinition(definitions []ToolDefinition, name string) bool {
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOperationalContextRejectsMismatchedOrMissingResources(t *testing.T) {

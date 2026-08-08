@@ -20,6 +20,8 @@ const (
 	maxContextMessages     = 20
 	maxModelCalls          = 4
 	maxReadToolCalls       = 8
+	maxOperationPlanSteps  = 5
+	maxOperationPlanBytes  = 4 * 1024
 )
 
 var (
@@ -87,12 +89,88 @@ type ConversationState struct {
 	Conversation store.AIConversation `json:"conversation"`
 	Messages     []store.AIMessage    `json:"messages"`
 	ToolCalls    []store.AIToolCall   `json:"tool_calls"`
+	Plans        []OperationPlan      `json:"plans"`
+}
+
+type OperationPlan struct {
+	ID          string             `json:"id"`
+	TurnID      string             `json:"turn_id"`
+	Status      string             `json:"status"`
+	CurrentStep int                `json:"current_step"`
+	Steps       []store.AIToolCall `json:"steps"`
 }
 
 type SendResult struct {
 	Turn     store.AITurn      `json:"turn"`
 	Message  *store.AIMessage  `json:"message,omitempty"`
 	ToolCall *store.AIToolCall `json:"tool_call,omitempty"`
+	Plan     *OperationPlan    `json:"plan,omitempty"`
+}
+
+func operationPlans(calls []store.AIToolCall) []OperationPlan {
+	plans := make([]OperationPlan, 0)
+	indexes := make(map[string]int)
+	for _, call := range calls {
+		if call.StepIndex < 0 {
+			continue
+		}
+		index, ok := indexes[call.TurnID]
+		if !ok {
+			index = len(plans)
+			indexes[call.TurnID] = index
+			plans = append(plans, OperationPlan{ID: call.TurnID, TurnID: call.TurnID, CurrentStep: -1})
+		}
+		plans[index].Steps = append(plans[index].Steps, call)
+	}
+	for index := range plans {
+		plans[index].Status, plans[index].CurrentStep = aggregatePlanStatus(plans[index].Steps)
+	}
+	return plans
+}
+
+func aggregatePlanStatus(steps []store.AIToolCall) (string, int) {
+	current := -1
+	allSuccess := len(steps) > 0
+	allRejected := len(steps) > 0
+	allInterrupted := len(steps) > 0
+	for index, step := range steps {
+		switch step.Status {
+		case "pending":
+			return "pending", -1
+		case "queued", "running", "accepted":
+			if current < 0 {
+				current = index
+			}
+		}
+		if step.Status != "success" {
+			allSuccess = false
+		}
+		if step.Status != "rejected" {
+			allRejected = false
+		}
+		if step.Status != "interrupted" {
+			allInterrupted = false
+		}
+	}
+	if current >= 0 {
+		return "running", current
+	}
+	if allSuccess {
+		return "success", -1
+	}
+	if allRejected {
+		return "rejected", -1
+	}
+	if allInterrupted {
+		return "interrupted", -1
+	}
+	return "partial", -1
+}
+
+func planFromSteps(turnID string, steps []store.AIToolCall) OperationPlan {
+	plan := OperationPlan{ID: turnID, TurnID: turnID, Steps: append([]store.AIToolCall(nil), steps...)}
+	plan.Status, plan.CurrentStep = aggregatePlanStatus(plan.Steps)
+	return plan
 }
 
 type ProgressPhase string
@@ -468,7 +546,7 @@ func (s *Service) ConversationState(ctx context.Context, id string, limit int) (
 	if err != nil {
 		return ConversationState{}, err
 	}
-	return ConversationState{Conversation: conversation, Messages: messages, ToolCalls: calls}, nil
+	return ConversationState{Conversation: conversation, Messages: messages, ToolCalls: calls, Plans: operationPlans(calls)}, nil
 }
 
 func (s *Service) Send(ctx context.Context, conversationID, providerID, content string, audit AuditCallback) (result SendResult, err error) {
@@ -540,7 +618,7 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 	}
 	provider, model := resolved.Provider, resolved.Model
 	credential, adapter := resolved.Credential, resolved.Adapter
-	operationalContext, err := s.registry.OperationalContext(ctx, requestContext)
+	operationalContext, toolDefinitions, err := s.registry.OperationalContextWithTools(ctx, requestContext)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -572,7 +650,7 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 			}
 		}
 		s.emitProgress(callbacks.Progress, ProgressEvent{Phase: ProgressModel})
-		response, callErr, streamed := s.completeModel(ctx, adapter, credential, ChatRequest{Messages: messages, Tools: s.registry.Definitions()}, turn.ID, callbacks.Delta)
+		response, callErr, streamed := s.completeModel(ctx, adapter, credential, ChatRequest{Messages: messages, Tools: toolDefinitions}, turn.ID, callbacks.Delta)
 		if callErr != nil {
 			if modelCall != 0 || !isFallbackEligible(ctx, callErr) {
 				return result, callErr
@@ -604,7 +682,7 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 					FallbackUsed: true, Status: "success"})
 			}
 			modelCall++
-			response, callErr, _ = s.completeModel(ctx, adapter, credential, ChatRequest{Messages: messages, Tools: s.registry.Definitions()}, turn.ID, callbacks.Delta)
+			response, callErr, _ = s.completeModel(ctx, adapter, credential, ChatRequest{Messages: messages, Tools: toolDefinitions}, turn.ID, callbacks.Delta)
 			if callErr != nil {
 				return result, callErr
 			}
@@ -655,22 +733,61 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 			result.Message, result.Turn.Status = &message, "completed"
 			return result, nil
 		}
-		if confirmCount > 1 {
-			if audit != nil {
-				for _, call := range validated {
-					if call.Risk == RiskConfirm {
+		if confirmCount > 0 {
+			planError := ""
+			if len(validated) != confirmCount {
+				planError = "请先完成查询，再单独提出变更计划。"
+			} else if len(validated) > maxOperationPlanSteps {
+				planError = "变更计划最多包含五个步骤。"
+			}
+			storedCalls := make([]store.AIToolCall, 0, len(validated))
+			seen := make(map[string]struct{}, len(validated))
+			summaryBytes := 0
+			for index, call := range validated {
+				arguments := string(call.Arguments)
+				key := call.Definition.Name + "\x00" + arguments
+				if _, exists := seen[key]; exists {
+					planError = "变更计划包含重复步骤。"
+				}
+				seen[key] = struct{}{}
+				summary := toolPlanSummary(call)
+				summaryBytes += len(summary)
+				if summaryBytes > maxOperationPlanBytes {
+					planError = "变更计划摘要过大。"
+				}
+				proposed := response.ToolCalls[index]
+				storedCalls = append(storedCalls, store.AIToolCall{ProviderCallID: proposed.ID, ToolName: call.Definition.Name,
+					Risk: string(call.Risk), Status: "pending", ArgumentsJSON: arguments, TargetType: call.Target.Type,
+					TargetID: call.Target.ID, TargetName: call.Target.Name, NodeID: call.Target.NodeID, ResultSummary: summary})
+			}
+			if planError != "" {
+				if audit != nil {
+					for _, call := range validated {
 						audit(AuditEvent{Action: "tool_propose", ProviderID: provider.ID, ModelID: model.ID, Model: model.ModelID,
 							ToolCall: store.AIToolCall{ToolName: call.Definition.Name, Risk: string(call.Risk),
 								TargetType: call.Target.Type, TargetID: call.Target.ID, TargetName: call.Target.Name,
 								NodeID: call.Target.NodeID}, Status: "failure"})
 					}
 				}
+				message, finishErr := s.store.CompleteTurn(ctx, turn, planError)
+				if finishErr != nil {
+					return result, finishErr
+				}
+				result.Message, result.Turn.Status = &message, "completed"
+				return result, nil
 			}
-			message, finishErr := s.store.CompleteTurn(ctx, turn, "请一次只执行一个变更操作。")
-			if finishErr != nil {
-				return result, finishErr
+			created, createErr := s.store.CreateToolPlan(ctx, turn, storedCalls)
+			if createErr != nil {
+				return result, createErr
 			}
-			result.Message, result.Turn.Status = &message, "completed"
+			plan := planFromSteps(turn.ID, created)
+			s.emitProgress(callbacks.Progress, ProgressEvent{Phase: ProgressAwaitingConfirmation, ToolName: "operation_plan", TargetName: fmt.Sprintf("%d 个步骤", len(created))})
+			if audit != nil {
+				for _, call := range created {
+					audit(AuditEvent{Action: "tool_propose", ProviderID: provider.ID, ModelID: model.ID, Model: model.ModelID, ToolCall: call, Status: "pending"})
+				}
+			}
+			result.Plan, result.Turn.Status = &plan, "awaiting_confirmation"
 			return result, nil
 		}
 		messages = append(messages, ChatMessage{Role: "assistant", Content: response.Content, ToolCalls: response.ToolCalls})
@@ -679,20 +796,6 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 			storedCall := store.AIToolCall{ProviderCallID: proposed.ID, ToolName: call.Definition.Name,
 				Risk: string(call.Risk), ArgumentsJSON: string(call.Arguments), TargetType: call.Target.Type,
 				TargetID: call.Target.ID, TargetName: call.Target.Name, NodeID: call.Target.NodeID}
-			if call.Risk == RiskConfirm {
-				storedCall.Status = "pending"
-				storedCall.ResultSummary = toolPlanSummary(call)
-				created, createErr := s.store.CreateToolCall(ctx, turn, storedCall)
-				if createErr != nil {
-					return result, createErr
-				}
-				s.emitProgress(callbacks.Progress, ProgressEvent{Phase: ProgressAwaitingConfirmation, ToolName: call.Definition.Name, TargetName: call.Target.Name})
-				if audit != nil {
-					audit(AuditEvent{Action: "tool_propose", ProviderID: provider.ID, ModelID: model.ID, Model: model.ModelID, ToolCall: created, Status: "pending"})
-				}
-				result.ToolCall, result.Turn.Status = &created, "awaiting_confirmation"
-				return result, nil
-			}
 			readCount++
 			if readCount > maxReadToolCalls {
 				return result, ErrModelRoundsExceeded
@@ -767,6 +870,13 @@ func (s *Service) emitProgress(progress ProgressCallback, event ProgressEvent) {
 }
 
 func (s *Service) Confirm(ctx context.Context, id string, audit AuditCallback) (SendResult, error) {
+	existing, _, err := s.store.GetToolCall(ctx, id)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if existing.StepIndex >= 0 {
+		return SendResult{}, store.ErrAIConflict
+	}
 	call, turn, err := s.store.ClaimToolCall(ctx, id)
 	if err != nil {
 		return SendResult{}, err
@@ -824,6 +934,13 @@ func (s *Service) Confirm(ctx context.Context, id string, audit AuditCallback) (
 }
 
 func (s *Service) Reject(ctx context.Context, id string, audit AuditCallback) (SendResult, error) {
+	existing, _, err := s.store.GetToolCall(ctx, id)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if existing.StepIndex >= 0 {
+		return SendResult{}, store.ErrAIConflict
+	}
 	call, turn, err := s.store.RejectToolCall(ctx, id)
 	if err != nil {
 		return SendResult{}, err
@@ -839,6 +956,215 @@ func (s *Service) Reject(ctx context.Context, id string, audit AuditCallback) (S
 			FallbackUsed: turn.FallbackUsed, ToolCall: call, Status: "rejected"})
 	}
 	return SendResult{Turn: turn, Message: &message, ToolCall: &call}, nil
+}
+
+func (s *Service) ConfirmPlan(ctx context.Context, turnID string, audit AuditCallback) (SendResult, error) {
+	steps, turn, err := s.store.ClaimToolPlan(ctx, turnID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if audit != nil {
+		audit(planAuditEvent("plan_confirm", turn, steps[0], "running"))
+	}
+	for _, step := range steps {
+		if _, validateErr := s.revalidatePlanStep(ctx, step); validateErr != nil {
+			status, summary := planValidationFailure(validateErr)
+			step.Status, step.ResultSummary = status, summary
+			if audit != nil {
+				audit(planAuditEvent("tool_execute", turn, step, status))
+			}
+			return s.completePlanStep(context.WithoutCancel(ctx), turn.ID, step.ID, "queued", status, summary, "")
+		}
+	}
+	return s.advancePlan(ctx, turn, audit)
+}
+
+func (s *Service) RejectPlan(ctx context.Context, turnID string, audit AuditCallback) (SendResult, error) {
+	steps, turn, message, err := s.store.RejectToolPlan(ctx, turnID, "变更计划已取消，未执行任何步骤。")
+	if err != nil {
+		return SendResult{}, err
+	}
+	if audit != nil {
+		audit(planAuditEvent("plan_reject", turn, steps[0], "rejected"))
+	}
+	plan := planFromSteps(turnID, steps)
+	return SendResult{Turn: turn, Message: &message, Plan: &plan}, nil
+}
+
+func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit AuditCallback) (SendResult, error) {
+	for {
+		steps, err := s.store.ListPlanSteps(ctx, turn.ID)
+		if err != nil {
+			return SendResult{}, err
+		}
+		var next *store.AIToolCall
+		for index := range steps {
+			switch steps[index].Status {
+			case "success":
+				continue
+			case "accepted":
+				plan := planFromSteps(turn.ID, steps)
+				turn.Status = "running"
+				return SendResult{Turn: turn, Plan: &plan}, nil
+			case "queued":
+				next = &steps[index]
+			case "running":
+				return s.completePlanStep(context.WithoutCancel(ctx), turn.ID, steps[index].ID, "running", "interrupted", "步骤状态不确定，未自动重试", "")
+			default:
+				return s.finishPlan(context.WithoutCancel(ctx), turn.ID)
+			}
+			break
+		}
+		if next == nil {
+			return s.finishPlan(context.WithoutCancel(ctx), turn.ID)
+		}
+
+		validated, validateErr := s.revalidatePlanStep(ctx, *next)
+		if validateErr != nil {
+			status, summary := planValidationFailure(validateErr)
+			next.Status, next.ResultSummary = status, summary
+			if audit != nil {
+				audit(planAuditEvent("tool_execute", turn, *next, status))
+			}
+			return s.completePlanStep(context.WithoutCancel(ctx), turn.ID, next.ID, "queued", status, summary, "")
+		}
+		if err := s.store.TransitionToolPlanStep(ctx, next.ID, "queued", "running", next.ResultSummary, ""); err != nil {
+			return SendResult{}, err
+		}
+		started := s.now()
+		toolResult, executeErr := s.registry.Execute(ctx, validated)
+		status, summary := toolResult.Status, toolResult.Summary
+		if status == "" {
+			status = "success"
+		}
+		if executeErr != nil {
+			status, summary = "failure", "步骤执行失败"
+			if errors.Is(executeErr, ErrUnsupportedTool) {
+				status, summary = "unsupported", "当前步骤不受支持"
+			} else if ctx.Err() != nil {
+				status, summary = "interrupted", "步骤执行被中断，结果未确认"
+			}
+		}
+		if status != "success" && status != "accepted" && status != "failure" && status != "unsupported" && status != "interrupted" {
+			status, summary = "failure", "步骤返回了无效状态"
+		}
+		if strings.TrimSpace(summary) == "" {
+			summary = map[string]string{"success": "步骤执行成功", "accepted": "步骤已接受，等待结果确认"}[status]
+			if summary == "" {
+				summary = "步骤未成功"
+			}
+		}
+		summary = boundedString(summary, 512)
+		next.Status, next.ResultSummary, next.OperationID = status, summary, toolResult.OperationID
+		if audit != nil {
+			event := planAuditEvent("tool_execute", turn, *next, status)
+			event.Duration = s.now().Sub(started)
+			audit(event)
+		}
+		if status == "success" && next.StepIndex < len(steps)-1 {
+			if err := s.store.TransitionToolPlanStep(context.WithoutCancel(ctx), next.ID, "running", status, summary, toolResult.OperationID); err != nil {
+				return SendResult{}, err
+			}
+			continue
+		}
+		if status == "accepted" {
+			if err := s.store.TransitionToolPlanStep(context.WithoutCancel(ctx), next.ID, "running", status, summary, toolResult.OperationID); err != nil {
+				return SendResult{}, err
+			}
+			steps, err = s.store.ListPlanSteps(context.WithoutCancel(ctx), turn.ID)
+			if err != nil {
+				return SendResult{}, err
+			}
+			plan := planFromSteps(turn.ID, steps)
+			turn.Status = "running"
+			return SendResult{Turn: turn, Plan: &plan}, nil
+		}
+		return s.completePlanStep(context.WithoutCancel(ctx), turn.ID, next.ID, "running", status, summary, toolResult.OperationID)
+	}
+}
+
+func (s *Service) revalidatePlanStep(ctx context.Context, step store.AIToolCall) (ValidatedToolCall, error) {
+	validated, err := s.registry.Validate(ctx, step.ToolName, json.RawMessage(step.ArgumentsJSON))
+	if err != nil {
+		return ValidatedToolCall{}, err
+	}
+	if validated.Risk != RiskConfirm || string(validated.Arguments) != step.ArgumentsJSON ||
+		validated.Target.Type != step.TargetType || validated.Target.ID != step.TargetID || validated.Target.NodeID != step.NodeID {
+		return ValidatedToolCall{}, store.ErrAIConflict
+	}
+	return validated, nil
+}
+
+func (s *Service) finishPlan(ctx context.Context, turnID string) (SendResult, error) {
+	steps, err := s.store.ListPlanSteps(ctx, turnID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	projected := append([]store.AIToolCall(nil), steps...)
+	for index := range projected {
+		if projected[index].Status == "queued" {
+			projected[index].Status = "skipped"
+		}
+	}
+	steps, turn, message, err := s.store.FinishToolPlan(ctx, turnID, planResultMessage(projected))
+	if err != nil {
+		return SendResult{}, err
+	}
+	plan := planFromSteps(turnID, steps)
+	return SendResult{Turn: turn, Message: &message, Plan: &plan}, nil
+}
+
+func (s *Service) completePlanStep(ctx context.Context, turnID, stepID, fromStatus, status, summary, operationID string) (SendResult, error) {
+	steps, err := s.store.ListPlanSteps(ctx, turnID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	projected := append([]store.AIToolCall(nil), steps...)
+	for index := range projected {
+		if projected[index].ID == stepID {
+			projected[index].Status = status
+			projected[index].ResultSummary = summary
+		} else if projected[index].Status == "queued" {
+			projected[index].Status = "skipped"
+		}
+	}
+	steps, turn, message, err := s.store.CompleteToolPlan(ctx, turnID, stepID, fromStatus, status, summary, operationID, planResultMessage(projected))
+	if err != nil {
+		return SendResult{}, err
+	}
+	plan := planFromSteps(turnID, steps)
+	return SendResult{Turn: turn, Message: &message, Plan: &plan}, nil
+}
+
+func planValidationFailure(err error) (string, string) {
+	if errors.Is(err, ErrUnsupportedTool) {
+		return "unsupported", "当前步骤不受支持"
+	}
+	return "failure", "目标或能力已变化，计划未执行"
+}
+
+func planResultMessage(steps []store.AIToolCall) string {
+	success, failed, skipped := 0, 0, 0
+	for _, step := range steps {
+		switch step.Status {
+		case "success":
+			success++
+		case "skipped", "rejected":
+			skipped++
+		default:
+			failed++
+		}
+	}
+	if success == len(steps) {
+		return fmt.Sprintf("变更计划执行完成：%d 个步骤全部成功。", success)
+	}
+	return fmt.Sprintf("变更计划执行结束：成功 %d，失败 %d，跳过 %d。", success, failed, skipped)
+}
+
+func planAuditEvent(action string, turn store.AITurn, call store.AIToolCall, status string) AuditEvent {
+	return AuditEvent{Action: action, ProviderID: turn.ProviderID, ModelID: pointerString(turn.ModelID), Model: turn.Model,
+		RequestedProviderID: turn.RequestedProviderID, RequestedModelID: pointerString(turn.RequestedModelID),
+		RequestedModel: turn.RequestedModel, FallbackUsed: turn.FallbackUsed, ToolCall: call, Status: status}
 }
 
 func (s *Service) ResolveConversationModel(ctx context.Context, conversationID string) (ResolvedModel, error) {

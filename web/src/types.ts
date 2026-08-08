@@ -1297,9 +1297,10 @@ export type AITurn = {
 export type AIToolCall = {
   id: string
   turn_id: string
+  step_index?: number
   tool_name: string
   risk: 'read' | 'confirm'
-  status: 'running' | 'success' | 'failure' | 'accepted' | 'unsupported' | 'pending' | 'rejected' | 'interrupted'
+  status: 'queued' | 'running' | 'success' | 'failure' | 'accepted' | 'unsupported' | 'pending' | 'rejected' | 'interrupted' | 'skipped'
   target_type: string
   target_id: string
   target_name: string
@@ -1309,16 +1310,28 @@ export type AIToolCall = {
   updated_at: string
 }
 
+export type AIOperationPlanStep = AIToolCall & { step_index: number }
+
+export type AIOperationPlan = {
+  id: string
+  turn_id: string
+  status: 'pending' | 'running' | 'success' | 'partial' | 'rejected' | 'interrupted'
+  current_step: number
+  steps: AIOperationPlanStep[]
+}
+
 export type AIConversationState = {
   conversation: AIConversation
   messages: AIMessage[]
   tool_calls: AIToolCall[]
+  plans?: AIOperationPlan[]
 }
 
 export type AISendResult = {
   turn: AITurn
   message?: AIMessage
   tool_call?: AIToolCall
+  plan?: AIOperationPlan
 }
 
 export type AIProgress = {

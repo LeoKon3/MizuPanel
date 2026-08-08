@@ -689,10 +689,42 @@ func (s *Server) handleAIToolCalls(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleAIPlans(w http.ResponseWriter, r *http.Request) {
+	if s.ai == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI 服务不可用")
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/ai/plans"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || (parts[1] != "confirm" && parts[1] != "reject") {
+		writeError(w, http.StatusNotFound, "AI 变更计划不存在")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if !authorizeAIMutation(w, r, false) {
+		return
+	}
+	var result any
+	var err error
+	if parts[1] == "confirm" {
+		result, err = s.ai.ConfirmPlan(r.Context(), parts[0], aiAuditCallback(r))
+	} else {
+		result, err = s.ai.RejectPlan(r.Context(), parts[0], aiAuditCallback(r))
+	}
+	if err != nil {
+		writeAIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func aiAuditCallback(r *http.Request) serverai.AuditCallback {
 	return func(event serverai.AuditEvent) {
 		result := serveraudit.ResultSuccess
-		if event.Status == "failure" {
+		if event.Status == "failure" || event.Status == "unsupported" || event.Status == "interrupted" || event.Status == "partial" {
 			result = serveraudit.ResultFailure
 		} else if event.Status == "pending" || event.Status == "running" || event.Status == "accepted" {
 			result = serveraudit.ResultAccepted

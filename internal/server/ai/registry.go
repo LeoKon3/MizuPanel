@@ -25,6 +25,8 @@ import (
 
 type Risk string
 
+type operationCapability string
+
 var (
 	modelSensitiveHeaderPattern = regexp.MustCompile(`(?im)^(authorization|proxy-authorization|cookie|set-cookie)[ \t]*:[^\r\n]*`)
 	modelNamedSecretPattern     = regexp.MustCompile(`(?i)\b(authorization|cookie|api[_-]?key|token|access[_-]?token|refresh[_-]?token|session[_-]?token|auth[_-]?token|password|passwd|secret|client[_-]?secret|webhook(?:_url)?)[ \t]*[:=][ \t]*("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)`)
@@ -35,6 +37,28 @@ var (
 const (
 	RiskRead    Risk = "read"
 	RiskConfirm Risk = "confirm"
+
+	capabilityNodes               operationCapability = "nodes"
+	capabilityNodeMetrics         operationCapability = "node_metrics"
+	capabilityAlerts              operationCapability = "alerts"
+	capabilityApplicationServices operationCapability = "application_services"
+	capabilityUptime              operationCapability = "uptime"
+	capabilityLogs                operationCapability = "logs"
+	capabilityKubernetes          operationCapability = "kubernetes"
+	capabilityKubernetesTarget    operationCapability = "kubernetes_target"
+	capabilityDocker              operationCapability = "docker"
+	capabilityDockerAgent         operationCapability = "docker_agent"
+	capabilityCompose             operationCapability = "compose"
+	capabilityProcesses           operationCapability = "processes"
+	capabilitySystemd             operationCapability = "systemd"
+	capabilityTaskHistory         operationCapability = "task_history"
+	capabilityAudit               operationCapability = "audit"
+	capabilityIncidentDiagnosis   operationCapability = "incident_diagnosis"
+	capabilityOnlineNode          operationCapability = "online_node"
+	capabilityAgentNode           operationCapability = "agent_node"
+	capabilityAutomation          operationCapability = "automation"
+	capabilityTaskCreation        operationCapability = "task_creation"
+	capabilityKubernetesMutation  operationCapability = "kubernetes_mutation"
 )
 
 var (
@@ -56,6 +80,7 @@ type NodeOperations interface {
 	DockerComposeAction(context.Context, string, string, string, string) (protocol.DockerComposeActionResponse, error)
 	SystemdServiceList(context.Context, string) (protocol.SystemdServiceListResponse, error)
 	SystemdServiceAction(context.Context, string, string, string, int) (protocol.SystemdServiceActionResponse, error)
+	DockerContainerCreateSupported(string) bool
 	TaskRunnerSupported(string) bool
 }
 
@@ -128,6 +153,7 @@ type SafeToolResult struct {
 type registeredTool struct {
 	definition ToolDefinition
 	risk       Risk
+	capability operationCapability
 	validate   func(context.Context, json.RawMessage) (json.RawMessage, ToolTarget, error)
 	execute    func(context.Context, json.RawMessage) (SafeToolResult, error)
 }
@@ -179,6 +205,7 @@ func (r *Registry) registerReadTools() {
 	r.add(registeredTool{
 		definition: noArgumentDefinition("get_operational_overview", "Get a bounded overview of nodes, active alerts, uptime monitors, and application services."),
 		risk:       RiskRead,
+		capability: capabilityNodes,
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			nodesStore, err := r.requireNodes()
@@ -220,6 +247,7 @@ func (r *Registry) registerReadTools() {
 	r.add(registeredTool{
 		definition: noArgumentDefinition("list_nodes", "List nodes with safe identity, online state, platform, Agent version, and latest metrics."),
 		risk:       RiskRead,
+		capability: capabilityNodes,
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			nodesStore, err := r.requireNodes()
@@ -258,7 +286,8 @@ func (r *Registry) registerReadTools() {
 			"node_id":       map[string]any{"type": "string", "maxLength": 191},
 			"range_minutes": map[string]any{"type": "integer", "minimum": 1, "maximum": 1440},
 		}, []string{"node_id"}),
-		risk: RiskRead,
+		risk:       RiskRead,
+		capability: capabilityNodeMetrics,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args metricsArguments
 			if err := strictArguments(raw, &args); err != nil || args.RangeMinutes < 0 || args.RangeMinutes > 1440 {
@@ -297,7 +326,8 @@ func (r *Registry) registerReadTools() {
 			"status": map[string]any{"type": "string", "enum": []string{"active", "recent"}},
 			"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
 		}, nil),
-		risk: RiskRead,
+		risk:       RiskRead,
+		capability: capabilityAlerts,
 		validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args alertsArguments
 			if err := strictArguments(raw, &args); err != nil {
@@ -347,6 +377,7 @@ func (r *Registry) registerReadTools() {
 	r.add(registeredTool{
 		definition: noArgumentDefinition("list_application_services", "List logical application services and their bounded health projection."),
 		risk:       RiskRead,
+		capability: capabilityApplicationServices,
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			if r.dependencies.Services == nil {
@@ -367,6 +398,7 @@ func (r *Registry) registerReadTools() {
 	r.add(registeredTool{
 		definition: noArgumentDefinition("list_uptime_monitors", "List bounded HTTP and TCP uptime monitor status."),
 		risk:       RiskRead,
+		capability: capabilityUptime,
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			if r.dependencies.Uptime == nil {
@@ -397,7 +429,8 @@ func (r *Registry) registerReadTools() {
 			"service_name": map[string]any{"type": "string", "maxLength": 255},
 			"lines":        map[string]any{"type": "integer", "minimum": 20, "maximum": 200},
 		}, []string{"source"}),
-		risk: RiskRead,
+		risk:       RiskRead,
+		capability: capabilityLogs,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args logsArguments
 			if err := strictArguments(raw, &args); err != nil {
@@ -471,6 +504,7 @@ func (r *Registry) registerReadTools() {
 	r.add(registeredTool{
 		definition: noArgumentDefinition("list_k8s_clusters", "List Kubernetes clusters with safe identity, online state, node count, and version."),
 		risk:       RiskRead,
+		capability: capabilityKubernetes,
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			if r.dependencies.Kubernetes == nil {
@@ -506,6 +540,7 @@ func (r *Registry) registerConfirmTools() {
 	addNodeOperation := func(name, description string, execute func(context.Context, string) (bool, error)) {
 		r.add(registeredTool{
 			definition: objectDefinition(name, description, map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}}, []string{"node_id"}), risk: RiskConfirm,
+			capability: capabilityAgentNode,
 			validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 				var args nodeArguments
 				if err := strictArguments(raw, &args); err != nil {
@@ -550,6 +585,7 @@ func (r *Registry) registerConfirmTools() {
 	}
 	r.add(registeredTool{
 		definition: objectDefinition("docker_container_action", "Start, stop, or restart one existing Docker container after confirmation.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "container_id": map[string]any{"type": "string", "maxLength": 191}, "action": map[string]any{"type": "string", "enum": []string{"start", "stop", "restart"}}}, []string{"node_id", "container_id", "action"}), risk: RiskConfirm,
+		capability: capabilityDockerAgent,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args containerArguments
 			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ContainerID, 191) || !oneOf(args.Action, "start", "stop", "restart") {
@@ -609,6 +645,7 @@ func (r *Registry) registerConfirmTools() {
 	}
 	r.add(registeredTool{
 		definition: objectDefinition("compose_service_action", "Start, stop, or restart one Compose project or service after confirmation. Delete, pull, build, and logs are unavailable.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "project_name": map[string]any{"type": "string", "maxLength": 191}, "service_name": map[string]any{"type": "string", "maxLength": 191}, "action": map[string]any{"type": "string", "enum": []string{"up", "stop", "restart"}}}, []string{"node_id", "project_name", "action"}), risk: RiskConfirm,
+		capability: capabilityCompose,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args composeArguments
 			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ProjectName, 191) || (args.ServiceName != "" && !validIdentifier(args.ServiceName, 191)) || !oneOf(args.Action, "up", "stop", "restart") {
@@ -649,6 +686,7 @@ func (r *Registry) registerConfirmTools() {
 	}
 	r.add(registeredTool{
 		definition: objectDefinition("systemd_service_action", "Start, stop, or restart one Systemd service after confirmation.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "service_name": map[string]any{"type": "string", "maxLength": 255}, "action": map[string]any{"type": "string", "enum": []string{"start", "stop", "restart"}}}, []string{"node_id", "service_name", "action"}), risk: RiskConfirm,
+		capability: capabilitySystemd,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args systemdArguments
 			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ServiceName, 255) || !oneOf(args.Action, "start", "stop", "restart") {
@@ -684,6 +722,7 @@ func (r *Registry) registerConfirmTools() {
 	}
 	r.add(registeredTool{
 		definition: objectDefinition("run_saved_script", "Run an existing saved script on 1 to 100 explicit nodes after confirmation. Script text and arguments cannot be supplied.", map[string]any{"script_id": map[string]any{"type": "integer", "minimum": 1}, "node_ids": map[string]any{"type": "array", "minItems": 1, "maxItems": 100, "items": map[string]any{"type": "string", "maxLength": 191}, "uniqueItems": true}}, []string{"script_id", "node_ids"}), risk: RiskConfirm,
+		capability: capabilityAutomation,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args scriptArguments
 			if err := strictArguments(raw, &args); err != nil || args.ScriptID <= 0 || len(args.NodeIDs) < 1 || len(args.NodeIDs) > store.MaxTaskNodes {

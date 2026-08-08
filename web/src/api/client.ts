@@ -711,6 +711,14 @@ export function rejectAIToolCall(id: string): Promise<AISendResult> {
   return request(`/api/ai/tool-calls/${encodeURIComponent(id)}/reject`, { method: 'POST' })
 }
 
+export function confirmAIPlan(id: string): Promise<AISendResult> {
+  return request(`/api/ai/plans/${encodeURIComponent(id)}/confirm`, { method: 'POST' })
+}
+
+export function rejectAIPlan(id: string): Promise<AISendResult> {
+  return request(`/api/ai/plans/${encodeURIComponent(id)}/reject`, { method: 'POST' })
+}
+
 export async function listAIProviderModels(baseURL: string, apiKey: string, providerID?: string): Promise<string[]> {
   const response = await request<{ models: string[] }>('/api/ai/providers/models', {
     method: 'POST',

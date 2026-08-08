@@ -2,6 +2,36 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.22 - 2026-08-08
+
+### Added
+
+- Added a bounded runtime AI operation catalog derived from registered tools,
+  injected services, and current platform capabilities; models receive callable
+  definitions only for operations that are currently available.
+- Added confirmation-gated AI operation plans with up to five ordered write
+  steps, one complete-plan review, strict sequential execution, accepted-step
+  verification, and restart-safe recovery without operation replay.
+- Added Turn-level plan projections and plan confirm/reject APIs, with a single
+  compact plan surface shared by the AI drawer and full workspace.
+
+### Fixed
+
+- Fixed OpenAI-compatible multi-tool streams being rejected when a provider
+  reused or omitted tool-call indexes; assembly now prioritizes stable call IDs
+  while preserving strict final validation.
+- Fixed structured Docker container creation being exposed to AI for online
+  legacy Agents that did not advertise the capability in their live handshake.
+
+### Security
+
+- Write plans are fully validated before persistence and execution, reject
+  mixed read/write batches and duplicate steps, and stop after the first failed
+  step while preserving an explicit partial result.
+- Plan APIs expose only bounded targets, summaries, order, and status; raw tool
+  arguments and operation IDs remain Server-internal, and atomic claiming
+  prevents repeated or concurrent confirmation from replaying a mutation.
+
 ## v0.1.21 - 2026-08-07
 
 ### Added

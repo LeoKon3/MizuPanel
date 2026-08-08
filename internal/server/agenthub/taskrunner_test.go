@@ -32,6 +32,19 @@ func TestTaskRunnerSupportedRequiresOnlineCapableAgent(t *testing.T) {
 	}
 }
 
+func TestDockerContainerCreateSupportedRequiresOnlineCapableAgent(t *testing.T) {
+	handler := &Handler{connections: map[string]*agentConnection{
+		"capable": {supportsDockerContainerCreate: true},
+		"legacy":  {supportsDockerContainerCreate: false},
+	}}
+	if !handler.DockerContainerCreateSupported("capable") {
+		t.Fatal("capable online Agent should support structured Docker container creation")
+	}
+	if handler.DockerContainerCreateSupported("legacy") || handler.DockerContainerCreateSupported("offline") {
+		t.Fatal("legacy or offline Agent reported structured Docker container creation support")
+	}
+}
+
 func TestRunScriptReturnsStableOfflineAndUnsupportedResults(t *testing.T) {
 	handler := &Handler{connections: make(map[string]*agentConnection)}
 	request := protocol.ScriptExecutionRequest{ExecutionID: 41, Script: "true", TimeoutSeconds: 5}

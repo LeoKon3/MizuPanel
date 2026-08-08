@@ -277,6 +277,7 @@ func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...
 		mux.HandleFunc("/api/ai/routing", server.requireAuth(server.handleAIRouting))
 		mux.HandleFunc("/api/ai/conversations", server.requireAuth(server.handleAIConversations))
 		mux.HandleFunc("/api/ai/conversations/", server.requireAuth(server.handleAIConversations))
+		mux.HandleFunc("/api/ai/plans/", server.requireAuth(server.handleAIPlans))
 		mux.HandleFunc("/api/ai/tool-calls/", server.requireAuth(server.handleAIToolCalls))
 	}
 	return mux

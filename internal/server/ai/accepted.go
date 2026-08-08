@@ -133,7 +133,35 @@ func (s *Service) verifyAcceptedOperation(ctx context.Context, call store.AITool
 }
 
 func (s *Service) completeAcceptedOperation(ctx context.Context, id, status, summary, assistant string) error {
-	_, _, _, err := s.store.CompleteAcceptedToolCall(ctx, id, status, summary, assistant)
+	call, turn, err := s.store.GetToolCall(ctx, id)
+	if err != nil {
+		if err == store.ErrAIConflict || err == store.ErrAINotFound {
+			return nil
+		}
+		return err
+	}
+	if call.StepIndex >= 0 {
+		steps, listErr := s.store.ListPlanSteps(ctx, turn.ID)
+		if listErr != nil {
+			return listErr
+		}
+		if status == "success" && call.StepIndex < len(steps)-1 {
+			if err := s.store.TransitionToolPlanStep(ctx, id, "accepted", status, summary, ""); err != nil {
+				if err == store.ErrAIConflict || err == store.ErrAINotFound {
+					return nil
+				}
+				return err
+			}
+			_, err = s.advancePlan(ctx, turn, nil)
+		} else {
+			_, err = s.completePlanStep(ctx, turn.ID, id, "accepted", status, summary, "")
+		}
+		if err == store.ErrAIConflict || err == store.ErrAINotFound {
+			return nil
+		}
+		return err
+	}
+	_, _, _, err = s.store.CompleteAcceptedToolCall(ctx, id, status, summary, assistant)
 	if err == store.ErrAIConflict || err == store.ErrAINotFound {
 		return nil
 	}

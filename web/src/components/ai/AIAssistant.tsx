@@ -1,7 +1,7 @@
 import { type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Bot, ChevronRight, CircleAlert, LoaderCircle, Maximize2, MessageSquarePlus, PanelRightClose, Plus, Send, Settings2, Square, Trash2, X } from 'lucide-react'
+import { Bot, CheckCircle2, ChevronRight, Circle, CircleAlert, CircleX, Clock3, LoaderCircle, Maximize2, MessageSquarePlus, PanelRightClose, Plus, Send, Settings2, Square, Trash2, X } from 'lucide-react'
 
-import type { AIProgress, AIToolCall } from '../../types'
+import type { AIOperationPlan, AIProgress, AIToolCall } from '../../types'
 import { Toast } from '../Toast'
 import { AIModelSelector } from './AIModelSelector'
 import type { AIAssistantState } from './useAIAssistantState'
@@ -38,6 +38,35 @@ function toolTarget(call: AIToolCall) {
   return call.target_name || call.target_id || call.node_id || '当前运维环境'
 }
 
+function planStatusText(plan: AIOperationPlan) {
+  if (plan.status === 'pending') return '等待确认'
+  if (plan.status === 'running') return plan.current_step >= 0 ? `执行第 ${plan.current_step + 1} 步` : '执行中'
+  if (plan.status === 'success') return '全部成功'
+  if (plan.status === 'rejected') return '已拒绝'
+  if (plan.status === 'interrupted') return '已中断'
+  return '部分完成'
+}
+
+function PlanStepIcon({ status }: { status: AIToolCall['status'] }) {
+  if (status === 'success') return <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
+  if (status === 'failure' || status === 'unsupported' || status === 'interrupted') return <CircleX className="h-4 w-4 text-danger" aria-hidden="true" />
+  if (status === 'running' || status === 'accepted') return <Clock3 className="h-4 w-4 text-primary" aria-hidden="true" />
+  return <Circle className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+}
+
+function planStepStatusText(status: AIToolCall['status']) {
+  if (status === 'pending') return '待确认'
+  if (status === 'queued') return '待执行'
+  if (status === 'running') return '执行中'
+  if (status === 'accepted') return '验证中'
+  if (status === 'success') return '成功'
+  if (status === 'skipped') return '已跳过'
+  if (status === 'rejected') return '已拒绝'
+  if (status === 'unsupported') return '不支持'
+  if (status === 'interrupted') return '已中断'
+  return '失败'
+}
+
 function progressText(progress: AIProgress, labels: Record<string, string>) {
   if (progress.phase === 'model') return '思考中...'
   if (progress.phase === 'fallback') return `当前请求模型暂时不可用，切换到 ${[progress.provider_name, progress.model].filter(Boolean).join(' / ') || '回退模型'}...`
@@ -51,6 +80,7 @@ function progressText(progress: AIProgress, labels: Record<string, string>) {
 function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPanelProps) {
   const [draft, setDraft] = useState('')
   const [confirmCall, setConfirmCall] = useState<AIToolCall>()
+  const [confirmPlan, setConfirmPlan] = useState<AIOperationPlan>()
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const confirmButtonRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -59,13 +89,14 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   const renderedConversationIDRef = useRef<string | undefined>(undefined)
   const messages = assistant.conversation?.messages ?? []
   const toolCalls = assistant.conversation?.tool_calls ?? []
+  const plans = assistant.conversation?.plans ?? []
   const selected = findAIModel(assistant.providers, assistant.selectedModelID)
   const canSend = selected?.provider.id === assistant.selectedProviderID && isAIModelUsable(selected.provider, selected.model)
   const activeSending = assistant.sending && assistant.sendingConversationID === assistant.activeConversationID
 
   useEffect(() => {
-    if (confirmCall) dialogRef.current?.focus()
-  }, [confirmCall])
+    if (confirmCall || confirmPlan) dialogRef.current?.focus()
+  }, [confirmCall, confirmPlan])
 
   useLayoutEffect(() => {
     if (renderedConversationIDRef.current !== assistant.activeConversationID) {
@@ -78,6 +109,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
 
   const closeConfirmation = () => {
     setConfirmCall(undefined)
+    setConfirmPlan(undefined)
     requestAnimationFrame(() => confirmButtonRef.current?.focus())
   }
 
@@ -124,7 +156,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               配置模型
             </button>
           </div>
-        ) : messages.length === 0 && toolCalls.length === 0 ? (
+        ) : messages.length === 0 && toolCalls.length === 0 && plans.length === 0 ? (
           <div className="m-auto max-w-md text-center">
             <MessageSquarePlus className="mx-auto h-9 w-9 text-primary" aria-hidden="true" />
             <h3 className="mt-3 text-base font-black text-foreground">开始一次运维对话</h3>
@@ -157,7 +189,40 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               </article>
             ) : null}
 
-            {toolCalls.filter((call) => call.status === 'pending').map((call) => (
+            {plans.map((plan) => (
+              <section key={plan.id} aria-label="AI 变更计划" className={`border px-3 py-3 ${plan.status === 'pending' ? 'border-warning/40 bg-warning/10' : 'border-border bg-surface/70'}`}>
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-foreground">变更计划 · {plan.steps.length} 步</p>
+                    <p className="mt-1 text-xs font-semibold text-muted-foreground">按顺序执行，任一步失败后停止</p>
+                  </div>
+                  <span className={`shrink-0 text-xs font-black ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
+                </div>
+                <ol className="mt-3 border-t border-border/70">
+                  {plan.steps.map((step, index) => (
+                    <li key={step.id} className="flex min-w-0 gap-2 border-b border-border/70 py-2 last:border-b-0">
+                      <span className="mt-0.5 shrink-0"><PlanStepIcon status={step.status} /></span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-start justify-between gap-2">
+                          <p className="min-w-0 break-words text-xs font-black text-foreground">{index + 1}. {toolLabels[step.tool_name] ?? step.tool_name}</p>
+                          <span className="shrink-0 text-[11px] font-bold text-muted-foreground">{planStepStatusText(step.status)}</span>
+                        </div>
+                        <p className="mt-0.5 break-words text-xs font-semibold text-muted-foreground">{toolTarget(step)}</p>
+                        {step.result_summary ? <p className="mt-0.5 break-words text-xs font-semibold text-muted-foreground">{step.result_summary}</p> : null}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                {plan.status === 'pending' ? (
+                  <div className="mt-3 flex flex-wrap justify-end gap-2">
+                    <button type="button" disabled={assistant.operationID === plan.id} onClick={() => void assistant.rejectPlan(plan)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
+                    <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmPlan(plan)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
+                  </div>
+                ) : null}
+              </section>
+            ))}
+
+            {toolCalls.filter((call) => call.status === 'pending' && (call.step_index ?? -1) < 0).map((call) => (
               <div key={call.id} className={`border px-3 py-3 ${call.status === 'pending' ? 'border-warning/40 bg-warning/10' : 'border-border bg-surface/70'}`}>
                 <div className="flex min-w-0 items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -220,6 +285,45 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
           )}
         </div>
       </div>
+
+      {confirmPlan ? (
+        <div className="soft-modal-overlay fixed inset-0 z-[80] flex items-center justify-center p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeConfirmation() }}>
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="ai-plan-confirm-title" tabIndex={-1} className="soft-modal-shell flex max-h-[min(720px,calc(100vh-32px))] w-full max-w-lg flex-col text-left outline-none" onKeyDown={(event) => { if (event.key === 'Escape') closeConfirmation() }}>
+            <div className="soft-modal-header flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3">
+              <div className="min-w-0">
+                <p id="ai-plan-confirm-title" className="text-base font-black text-foreground">确认 AI 变更计划</p>
+                <p className="mt-1 text-xs font-semibold text-muted-foreground">确认一次后，Server 将按顺序执行全部步骤。</p>
+              </div>
+              <button type="button" onClick={closeConfirmation} title="关闭确认窗口" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground">
+                <X size={16} aria-hidden="true" />
+                <span className="sr-only">关闭确认窗口</span>
+              </button>
+            </div>
+            <div className="min-h-0 space-y-3 overflow-y-auto px-4 py-4 text-sm">
+              <div className="flex gap-3 border border-warning/30 bg-warning/10 px-3 py-3 text-warning">
+                <CircleAlert className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                <p className="font-semibold leading-6">前一步失败后将停止，尚未开始的步骤会跳过；已经成功的步骤不会自动回滚。</p>
+              </div>
+              <ol className="border-y border-border">
+                {confirmPlan.steps.map((step, index) => (
+                  <li key={step.id} className="border-b border-border py-3 last:border-b-0">
+                    <p className="break-words font-black text-foreground">{index + 1}. {toolLabels[step.tool_name] ?? step.tool_name}</p>
+                    <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">目标：{toolTarget(step)}</p>
+                    {step.result_summary ? <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">{step.result_summary}</p> : null}
+                  </li>
+                ))}
+              </ol>
+              <p className="font-semibold leading-6 text-muted-foreground">执行每一步前，Server 都会重新检查目标和当前能力；校验失败时不会继续后续步骤。</p>
+            </div>
+            <div className="soft-modal-footer flex shrink-0 justify-end gap-2 border-t px-4 py-3">
+              <button type="button" onClick={closeConfirmation} className="soft-button min-h-10 border border-border bg-card px-4 text-sm font-black text-muted-foreground hover:text-foreground">取消</button>
+              <button type="button" disabled={Boolean(assistant.operationID)} onClick={() => { const plan = confirmPlan; closeConfirmation(); void assistant.confirmPlan(plan) }} className="soft-button min-h-10 bg-danger px-4 text-sm font-black text-white hover:brightness-95 disabled:opacity-60">
+                {assistant.operationID ? '执行中...' : '确认执行计划'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {confirmCall ? (
         <div className="soft-modal-overlay fixed inset-0 z-[80] flex items-center justify-center p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeConfirmation() }}>

@@ -91,6 +91,31 @@ func TestOpenAIAdapterStreamsContentAndAssemblesToolCalls(t *testing.T) {
 	}
 }
 
+func TestOpenAIAdapterStreamSeparatesCollidingToolIndexesByID(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"create_docker_container","arguments":"{\"node_id\":\"master\""}},{"index":0,"id":"call-2","function":{"name":"create_k8s_deployment","arguments":"{\"cluster_id\":\"cluster-1\""}}]},"finish_reason":null}]}`,
+		"",
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\"name\":\"web\"}"}},{"index":0,"function":{"arguments":",\"name\":\"web\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+
+	response, err := parseOpenAICompletionStream(t.Context(), strings.NewReader(stream), nil)
+	if err != nil {
+		t.Fatalf("parseOpenAICompletionStream: %v", err)
+	}
+	if len(response.ToolCalls) != 2 {
+		t.Fatalf("tool calls = %+v, want 2", response.ToolCalls)
+	}
+	if response.ToolCalls[0].ID != "call-1" || response.ToolCalls[0].Name != "create_docker_container" || string(response.ToolCalls[0].Arguments) != `{"node_id":"master","name":"web"}` {
+		t.Fatalf("first tool call = %+v", response.ToolCalls[0])
+	}
+	if response.ToolCalls[1].ID != "call-2" || response.ToolCalls[1].Name != "create_k8s_deployment" || string(response.ToolCalls[1].Arguments) != `{"cluster_id":"cluster-1","name":"web"}` {
+		t.Fatalf("second tool call = %+v", response.ToolCalls[1])
+	}
+}
+
 func TestOpenAIAdapterStreamRequiresTerminalAndSanitizesMalformedFrames(t *testing.T) {
 	for _, body := range []string{
 		`data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}` + "\n\n",

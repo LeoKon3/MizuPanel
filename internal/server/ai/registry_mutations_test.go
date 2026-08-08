@@ -30,6 +30,8 @@ func (s *mutationNodeOperationsStub) DockerContainerCreate(_ context.Context, no
 	return s.dockerResponse, nil
 }
 
+func (*mutationNodeOperationsStub) DockerContainerCreateSupported(string) bool { return true }
+
 func (s *mutationNodeOperationsStub) TaskRunnerSupported(string) bool { return s.taskRunner }
 
 type mutationKubernetesStub struct {

@@ -451,6 +451,54 @@ func TestAIErrorStatusMappingIsStableAndSanitized(t *testing.T) {
 		})
 	}
 }
+
+func TestAIPlanAPIRejectsWholePlanAndBlocksLegacyStepBypass(t *testing.T) {
+	fixture := newAIAPIFixture(t, AuthConfig{}, aiAPITestAdapter{capabilities: serverai.Capabilities{Chat: true, Tools: true}})
+	repo := store.NewAIStore(fixture.db, serverdb.DialectSQLite)
+	provider, err := repo.CreateProvider(t.Context(), store.AIProvider{ID: "provider-plan-api", Name: "Plan API",
+		Protocol: serverai.ProtocolOpenAIChatCompletions, BaseURL: "https://model.test/v1", Model: "model-a", Enabled: true})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	conversation, err := repo.CreateConversation(t.Context(), "Plan API")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	turn, _, err := repo.StartTurn(t.Context(), conversation.ID, provider, "plan request")
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+	steps, err := repo.CreateToolPlan(t.Context(), turn, []store.AIToolCall{
+		{ToolName: "reboot_node", Risk: "confirm", ArgumentsJSON: `{"node_id":"node-1"}`, TargetType: "node", TargetID: "node-1", NodeID: "node-1", ResultSummary: "restart node"},
+		{ToolName: "upgrade_agent", Risk: "confirm", ArgumentsJSON: `{"node_id":"node-1"}`, TargetType: "node", TargetID: "node-1", NodeID: "node-1", ResultSummary: "upgrade agent"},
+	})
+	if err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+
+	legacy := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/tool-calls/"+steps[0].ID+"/confirm", "", "", "http://panel.test")
+	if legacy.Code != http.StatusConflict {
+		t.Fatalf("legacy plan-step confirm = %d %s", legacy.Code, legacy.Body.String())
+	}
+	method := performAIRawRequest(fixture.handler, http.MethodGet, "/api/ai/plans/"+turn.ID+"/reject", "", "", "")
+	if method.Code != http.StatusMethodNotAllowed || method.Header().Get("Allow") != http.MethodPost {
+		t.Fatalf("plan method = %d Allow=%q", method.Code, method.Header().Get("Allow"))
+	}
+	forbidden := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/plans/"+turn.ID+"/reject", "", "", "http://other.test")
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin plan reject = %d %s", forbidden.Code, forbidden.Body.String())
+	}
+	rejected := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/plans/"+turn.ID+"/reject", "", "", "http://panel.test")
+	if rejected.Code != http.StatusOK || strings.Contains(rejected.Body.String(), "arguments_json") ||
+		strings.Contains(rejected.Body.String(), "operation_id") || strings.Count(rejected.Body.String(), `"step_index"`) != 2 {
+		t.Fatalf("plan reject = %d %s", rejected.Code, rejected.Body.String())
+	}
+	repeated := performAIRawRequest(fixture.handler, http.MethodPost, "/api/ai/plans/"+turn.ID+"/reject", "", "", "http://panel.test")
+	if repeated.Code != http.StatusConflict {
+		t.Fatalf("repeated plan reject = %d %s", repeated.Code, repeated.Body.String())
+	}
+}
+
 func TestAIConversationMessageStreamEmitsSafeProgressEvents(t *testing.T) {
 	completeCalls := 0
 	adapter := aiAPITestAdapter{

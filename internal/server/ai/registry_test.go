@@ -47,6 +47,9 @@ func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
 		if definition.Name != want[index] {
 			t.Fatalf("definition[%d] = %q, want %q", index, definition.Name, want[index])
 		}
+		if registry.tools[definition.Name].capability == "" {
+			t.Fatalf("definition[%d] %q has no capability metadata", index, definition.Name)
+		}
 		if additional, ok := definition.Parameters["additionalProperties"].(bool); !ok || additional {
 			t.Fatalf("tool %q permits additional properties: %#v", definition.Name, definition.Parameters)
 		}

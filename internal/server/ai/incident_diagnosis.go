@@ -55,9 +55,10 @@ func (r *Registry) registerIncidentDiagnosisTool() {
 			"scope_id":       map[string]any{"type": "string", "maxLength": 191},
 			"window_minutes": map[string]any{"type": "integer", "minimum": minIncidentWindowMinutes, "maximum": maxIncidentWindowMinutes},
 		}, []string{"scope_type"}),
-		risk:     RiskRead,
-		validate: r.validateIncidentDiagnosis,
-		execute:  r.executeIncidentDiagnosis,
+		risk:       RiskRead,
+		capability: capabilityIncidentDiagnosis,
+		validate:   r.validateIncidentDiagnosis,
+		execute:    r.executeIncidentDiagnosis,
 	})
 }
 

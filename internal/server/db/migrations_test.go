@@ -856,8 +856,8 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 	if err := database.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_tool_calls'`).Scan(&toolCallSchema); err != nil {
 		t.Fatalf("read AI tool call schema: %v", err)
 	}
-	if !strings.Contains(toolCallSchema, "operation_id") {
-		t.Fatalf("AI tool call schema missing operation_id: %s", toolCallSchema)
+	if !strings.Contains(toolCallSchema, "operation_id") || !strings.Contains(toolCallSchema, "step_index") || !strings.Contains(toolCallSchema, "DEFAULT -1") {
+		t.Fatalf("AI tool call schema missing plan columns: %s", toolCallSchema)
 	}
 	var indexCount int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN (
@@ -865,12 +865,13 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 			'uq_ai_provider_models_default', 'uq_ai_provider_models_fallback',
 			'idx_ai_conversations_updated', 'idx_ai_conversations_model', 'idx_ai_turns_model',
 			'idx_ai_turns_conversation_created', 'uq_ai_turns_active',
-			'idx_ai_messages_conversation_created', 'idx_ai_tool_calls_turn_created'
+			'idx_ai_messages_conversation_created', 'idx_ai_tool_calls_turn_created',
+			'uq_ai_tool_calls_turn_step'
 		)`).Scan(&indexCount); err != nil {
 		t.Fatalf("query AI indexes: %v", err)
 	}
-	if indexCount != 11 {
-		t.Fatalf("AI index count = %d, want 11", indexCount)
+	if indexCount != 12 {
+		t.Fatalf("AI index count = %d, want 12", indexCount)
 	}
 
 	now := "2026-07-31T12:00:00Z"
@@ -962,6 +963,8 @@ func TestMySQLMigrationIncludesAISchemaAndSafeWidths(t *testing.T) {
 		"arguments_json LONGTEXT NOT NULL",
 		"target_id VARCHAR(1024) NOT NULL DEFAULT ''",
 		"operation_id VARCHAR(191) NOT NULL DEFAULT ''",
+		"step_index INT NOT NULL DEFAULT -1",
+		"INDEX idx_ai_tool_calls_turn_step (turn_id, step_index)",
 		"INSERT INTO ai_provider_models",
 		"migration.ai_provider_models_v1",
 		"FOREIGN KEY (provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE",

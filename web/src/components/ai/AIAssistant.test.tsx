@@ -2,17 +2,19 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import * as api from '../../api/client'
-import type { AIConversation, AIConversationState, AIMessage, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
+import type { AIConversation, AIConversationState, AIMessage, AIOperationPlan, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
 import { AIAssistantDrawer, AIWorkspacePage } from './AIAssistant'
 import { type AIAssistantState, useAIAssistantState } from './useAIAssistantState'
 
 vi.mock('../../api/client', () => ({
+  confirmAIPlan: vi.fn(),
   confirmAIToolCall: vi.fn(),
   createAIConversation: vi.fn(),
   deleteAIConversation: vi.fn(),
   getAIConversation: vi.fn(),
   getAIConversations: vi.fn(),
   getAIProviders: vi.fn(),
+  rejectAIPlan: vi.fn(),
   rejectAIToolCall: vi.fn(),
   sendAIMessageStream: vi.fn(),
   updateAIConversationModel: vi.fn()
@@ -150,6 +152,8 @@ function assistant(overrides: Partial<AIAssistantState> = {}): AIAssistantState 
     stop: vi.fn(),
     confirm: vi.fn(),
     reject: vi.fn(),
+    confirmPlan: vi.fn(),
+    rejectPlan: vi.fn(),
     clearToast: vi.fn(),
     ...overrides
   }
@@ -176,6 +180,19 @@ function ToolDecisionHarness({ call }: { call: AIToolCall }) {
       <button type="button" onClick={state.openDrawer}>Open assistant</button>
       <button type="button" onClick={() => void state.confirm(call)}>Confirm tool</button>
       {state.toast ? <output data-testid="tool-decision-toast">{state.toast.type}:{state.toast.message}</output> : null}
+      <AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />
+    </>
+  )
+}
+
+function PlanDecisionHarness({ plan }: { plan: AIOperationPlan }) {
+  const state = useAIAssistantState()
+  return (
+    <>
+      <button type="button" onClick={state.openDrawer}>Open assistant</button>
+      <button type="button" onClick={() => void state.confirmPlan(plan)}>Confirm plan</button>
+      {state.toast ? <output data-testid="plan-decision-toast">{state.toast.type}:{state.toast.message}</output> : null}
+      <AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />
     </>
   )
 }
@@ -335,6 +352,58 @@ describe('AI assistant', () => {
     await waitFor(() => expect(selector).toHaveValue(secondaryModel.id))
   })
 
+  test('confirms a plan through non-destructive conversation refresh', async () => {
+    const priorMessage: AIMessage = {
+      id: 'message-plan', conversation_id: conversation.id, turn_id: 'turn-plan', role: 'assistant',
+      content: '计划准备完成。', provider_name: 'Primary', model: primaryModel.model_id, created_at: '2026-08-05T00:00:00Z'
+    }
+    const step = { ...pendingCall, turn_id: 'turn-plan', step_index: 0, result_summary: '重启节点' }
+    const plan: AIOperationPlan = { id: 'turn-plan', turn_id: 'turn-plan', status: 'pending', current_step: -1, steps: [step] }
+    const completedPlan: AIOperationPlan = { ...plan, status: 'success', steps: [{ ...step, status: 'success', result_summary: '节点已重启' }] }
+    const refresh = deferred<AIConversationState>()
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation)
+      .mockResolvedValueOnce({ conversation, messages: [priorMessage], tool_calls: [step], plans: [plan] })
+      .mockReturnValueOnce(refresh.promise)
+    vi.mocked(api.confirmAIPlan).mockResolvedValue({ turn: turn(), plan: completedPlan })
+
+    render(<PlanDecisionHarness plan={plan} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    expect(await screen.findByText('计划准备完成。')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm plan' }))
+    await waitFor(() => expect(api.confirmAIPlan).toHaveBeenCalledWith(plan.id))
+    expect(screen.getByText('计划准备完成。')).toBeInTheDocument()
+
+    refresh.resolve({ conversation, messages: [priorMessage], tool_calls: completedPlan.steps, plans: [completedPlan] })
+    await waitFor(() => expect(screen.getByTestId('plan-decision-toast')).toHaveTextContent('success:AI 变更计划执行成功'))
+    expect(screen.getByText('计划准备完成。')).toBeInTheDocument()
+  })
+
+  test('confirms a historical tool call without unmounting the transcript', async () => {
+    const priorMessage: AIMessage = {
+      id: 'message-tool', conversation_id: conversation.id, turn_id: 'turn-tool', role: 'assistant',
+      content: '历史单操作等待确认。', provider_name: 'Primary', model: primaryModel.model_id, created_at: '2026-08-05T00:00:00Z'
+    }
+    const completedCall = { ...pendingCall, status: 'success' as const, result_summary: '节点已重启' }
+    const refresh = deferred<AIConversationState>()
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation)
+      .mockResolvedValueOnce({ conversation, messages: [priorMessage], tool_calls: [pendingCall] })
+      .mockReturnValueOnce(refresh.promise)
+    vi.mocked(api.confirmAIToolCall).mockResolvedValue({ turn: turn(), tool_call: completedCall })
+
+    render(<ToolDecisionHarness call={pendingCall} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    expect(await screen.findByText('历史单操作等待确认。')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm tool' }))
+    await waitFor(() => expect(api.confirmAIToolCall).toHaveBeenCalledWith(pendingCall.id))
+    expect(screen.getByText('历史单操作等待确认。')).toBeInTheDocument()
+
+    refresh.resolve({ conversation, messages: [priorMessage], tool_calls: [completedCall] })
+    await waitFor(() => expect(screen.getByTestId('tool-decision-toast')).toHaveTextContent('success:AI 运维操作执行成功'))
+    expect(screen.getByText('历史单操作等待确认。')).toBeInTheDocument()
+  })
+
   test('new conversations inherit the server default unless a model was explicitly selected', async () => {
     vi.mocked(api.createAIConversation)
       .mockResolvedValueOnce(conversation)
@@ -450,6 +519,33 @@ describe('AI assistant', () => {
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
     expect(nativeConfirm).not.toHaveBeenCalled()
     nativeConfirm.mockRestore()
+  })
+
+  test('renders one ordered plan surface and confirms the complete plan once', async () => {
+    const confirmPlan = vi.fn(async () => undefined)
+    const first = { ...pendingCall, step_index: 0, result_summary: '重启节点' }
+    const second = { ...pendingCall, id: 'tool-2', step_index: 1, tool_name: 'upgrade_agent', result_summary: '升级 Agent' }
+    const plan: AIOperationPlan = {
+      id: pendingCall.turn_id,
+      turn_id: pendingCall.turn_id,
+      status: 'pending',
+      current_step: -1,
+      steps: [first, second]
+    }
+    const state = assistant({
+      conversation: { conversation, messages: [], tool_calls: [first, second], plans: [plan] },
+      confirmPlan
+    })
+    render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+
+    expect(screen.getAllByRole('region', { name: 'AI 变更计划' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: '检查并确认' })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: '检查并确认' }))
+    const dialog = screen.getByRole('dialog', { name: '确认 AI 变更计划' })
+    expect(within(dialog).getByText('1. 变更 Systemd 服务')).toBeInTheDocument()
+    expect(within(dialog).getByText('2. 升级 Agent')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认执行计划' }))
+    await waitFor(() => expect(confirmPlan).toHaveBeenCalledWith(plan))
   })
 
   test.each([

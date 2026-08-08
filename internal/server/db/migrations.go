@@ -476,6 +476,7 @@ func sqliteMigrationStatements() []string {
 		`CREATE TABLE IF NOT EXISTS ai_tool_calls (
 					id TEXT PRIMARY KEY,
 					turn_id TEXT NOT NULL,
+					step_index INTEGER NOT NULL DEFAULT -1,
 					provider_call_id TEXT NOT NULL DEFAULT '',
 					tool_name TEXT NOT NULL,
 					risk TEXT NOT NULL,
@@ -965,6 +966,7 @@ func mysqlMigrationStatements() []string {
 		`CREATE TABLE IF NOT EXISTS ai_tool_calls (
 					id VARCHAR(36) PRIMARY KEY,
 					turn_id VARCHAR(36) NOT NULL,
+					step_index INT NOT NULL DEFAULT -1,
 					provider_call_id VARCHAR(191) NOT NULL DEFAULT '',
 					tool_name VARCHAR(64) NOT NULL,
 					risk VARCHAR(16) NOT NULL,
@@ -979,6 +981,7 @@ func mysqlMigrationStatements() []string {
 					created_at VARCHAR(64) NOT NULL,
 					updated_at VARCHAR(64) NOT NULL,
 					INDEX idx_ai_tool_calls_turn_created (turn_id, created_at, id),
+					INDEX idx_ai_tool_calls_turn_step (turn_id, step_index),
 					FOREIGN KEY (turn_id) REFERENCES ai_turns(id) ON DELETE CASCADE
 				);`,
 	}
@@ -1033,6 +1036,11 @@ func migrateStatements(db *sql.DB, dialect Dialect, statements []string) error {
 			return err
 		}
 	}
+	for _, statement := range aiPlanIndexStatements(dialect) {
+		if _, err := db.Exec(statement); err != nil && !isIgnorableMigrationError(err) {
+			return err
+		}
+	}
 	for _, statement := range aiUpgradeStatements(dialect) {
 		if _, err := db.Exec(statement); err != nil && !isIgnorableMigrationError(err) {
 			return err
@@ -1040,6 +1048,13 @@ func migrateStatements(db *sql.DB, dialect Dialect, statements []string) error {
 	}
 	_, err := db.Exec(`UPDATE nodes SET agent_mode = COALESCE(NULLIF(agent_mode, ''), 'normal'), agent_user = COALESCE(agent_user, '')`)
 	return err
+}
+
+func aiPlanIndexStatements(dialect Dialect) []string {
+	if dialect == DialectMySQL {
+		return []string{`CREATE INDEX idx_ai_tool_calls_turn_step ON ai_tool_calls(turn_id, step_index)`}
+	}
+	return []string{`CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_tool_calls_turn_step ON ai_tool_calls(turn_id, step_index) WHERE step_index >= 0`}
 }
 
 func aiCompatibilityColumnStatements(dialect Dialect) []string {
@@ -1058,6 +1073,7 @@ func aiCompatibilityColumnStatements(dialect Dialect) []string {
 			`ALTER TABLE ai_turns ADD COLUMN requested_model VARCHAR(255) NOT NULL DEFAULT ''`,
 			`ALTER TABLE ai_turns ADD COLUMN fallback_used BOOLEAN NOT NULL DEFAULT 0`,
 			`ALTER TABLE ai_tool_calls ADD COLUMN operation_id VARCHAR(191) NOT NULL DEFAULT ''`,
+			`ALTER TABLE ai_tool_calls ADD COLUMN step_index INT NOT NULL DEFAULT -1`,
 		}
 	}
 	return []string{
@@ -1074,6 +1090,7 @@ func aiCompatibilityColumnStatements(dialect Dialect) []string {
 		`ALTER TABLE ai_turns ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ai_turns ADD COLUMN fallback_used INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE ai_tool_calls ADD COLUMN operation_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_tool_calls ADD COLUMN step_index INTEGER NOT NULL DEFAULT -1`,
 	}
 }
 

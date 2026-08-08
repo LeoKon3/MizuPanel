@@ -1421,6 +1421,11 @@ func (h *Handler) DockerContainerCreate(ctx context.Context, nodeID string, requ
 	return response, nil
 }
 
+func (h *Handler) DockerContainerCreateSupported(nodeID string) bool {
+	agent := h.connection(nodeID)
+	return agent != nil && agent.supportsDockerContainerCreate
+}
+
 func (h *Handler) DockerComposeList(ctx context.Context, nodeID string) (protocol.DockerComposeListResponse, error) {
 	agent := h.connection(nodeID)
 	if agent == nil {

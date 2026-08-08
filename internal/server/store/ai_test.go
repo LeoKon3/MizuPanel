@@ -192,6 +192,93 @@ func TestAIStoreTurnConflictClaimRecoveryAndConversationCascade(t *testing.T) {
 	}
 }
 
+func TestAIStoreToolPlanCreationClaimRejectAndRecoveryAreAtomic(t *testing.T) {
+	database := openTestDB(t)
+	database.SetMaxOpenConns(1)
+	repo := NewAIStore(database, serverdb.DialectSQLite)
+	provider, err := repo.CreateProvider(t.Context(), testAIProvider("provider-plan", "Plan Model"))
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	conversation, err := repo.CreateConversation(t.Context(), "Plan")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	turn, _, err := repo.StartTurn(t.Context(), conversation.ID, provider, "plan request")
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+	step := func(id, name string) AIToolCall {
+		return AIToolCall{ID: id, ProviderCallID: id, ToolName: name, Risk: "confirm", Status: "pending",
+			ArgumentsJSON: `{}`, TargetType: "node", TargetID: name, TargetName: name, NodeID: name, ResultSummary: "planned"}
+	}
+	if _, err := repo.CreateToolPlan(t.Context(), turn, []AIToolCall{step("duplicate", "one"), step("duplicate", "two")}); err == nil {
+		t.Fatal("duplicate step IDs did not roll back plan creation")
+	}
+	var callCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM ai_tool_calls WHERE turn_id = ?`, turn.ID).Scan(&callCount); err != nil || callCount != 0 {
+		t.Fatalf("tool rows after failed plan = %d err=%v", callCount, err)
+	}
+	currentTurn, err := repo.GetTurn(t.Context(), turn.ID)
+	if err != nil || currentTurn.Status != "running" {
+		t.Fatalf("turn after failed plan = %+v err=%v", currentTurn, err)
+	}
+
+	created, err := repo.CreateToolPlan(t.Context(), turn, []AIToolCall{step("step-1", "one"), step("step-2", "two")})
+	if err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+	if len(created) != 2 || created[0].StepIndex != 0 || created[1].StepIndex != 1 {
+		t.Fatalf("created plan steps = %+v", created)
+	}
+	claimed, claimedTurn, err := repo.ClaimToolPlan(t.Context(), turn.ID)
+	if err != nil {
+		t.Fatalf("claim plan: %v", err)
+	}
+	if claimedTurn.Status != "running" || claimed[0].Status != "queued" || claimed[1].Status != "queued" {
+		t.Fatalf("claimed plan = turn:%+v steps:%+v", claimedTurn, claimed)
+	}
+	if _, _, err := repo.ClaimToolPlan(t.Context(), turn.ID); !errors.Is(err, ErrAIConflict) {
+		t.Fatalf("repeat plan claim error = %v, want conflict", err)
+	}
+	if err := repo.TransitionToolPlanStep(t.Context(), created[0].ID, "queued", "running", "started", ""); err != nil {
+		t.Fatalf("start first step: %v", err)
+	}
+	if err := repo.TransitionToolPlanStep(t.Context(), created[0].ID, "running", "accepted", "waiting", "operation-1"); err != nil {
+		t.Fatalf("accept first step: %v", err)
+	}
+	if err := repo.RecoverInterrupted(t.Context()); err != nil {
+		t.Fatalf("recover accepted plan: %v", err)
+	}
+	recovered, err := repo.ListPlanSteps(t.Context(), turn.ID)
+	if err != nil {
+		t.Fatalf("list recovered plan: %v", err)
+	}
+	recoveredTurn, err := repo.GetTurn(t.Context(), turn.ID)
+	if err != nil || recoveredTurn.Status != "running" || recovered[0].Status != "accepted" || recovered[1].Status != "queued" {
+		t.Fatalf("accepted recovery replay boundary = turn:%+v steps:%+v err=%v", recoveredTurn, recovered, err)
+	}
+
+	rejectConversation, err := repo.CreateConversation(t.Context(), "Reject plan")
+	if err != nil {
+		t.Fatalf("create reject conversation: %v", err)
+	}
+	rejectTurn, _, err := repo.StartTurn(t.Context(), rejectConversation.ID, provider, "reject request")
+	if err != nil {
+		t.Fatalf("start reject turn: %v", err)
+	}
+	if _, err := repo.CreateToolPlan(t.Context(), rejectTurn, []AIToolCall{step("reject-1", "reject-one"), step("reject-2", "reject-two")}); err != nil {
+		t.Fatalf("create rejected plan: %v", err)
+	}
+	rejected, rejectedTurn, message, err := repo.RejectToolPlan(t.Context(), rejectTurn.ID, "cancelled")
+	if err != nil {
+		t.Fatalf("reject plan: %v", err)
+	}
+	if rejectedTurn.Status != "completed" || message.Content != "cancelled" || rejected[0].Status != "rejected" || rejected[1].Status != "rejected" {
+		t.Fatalf("rejected plan = turn:%+v message:%+v steps:%+v", rejectedTurn, message, rejected)
+	}
+}
+
 func TestAIStoreProviderModelsRoutingAndAtomicFallback(t *testing.T) {
 	database := openTestDB(t)
 	database.SetMaxOpenConns(1)

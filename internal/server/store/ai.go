@@ -19,6 +19,8 @@ var (
 	ErrAIConflict = errors.New("AI resource conflict")
 )
 
+const maxAIToolPlanSteps = 5
+
 type AIProvider struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name"`
@@ -108,6 +110,7 @@ type AIMessage struct {
 type AIToolCall struct {
 	ID             string    `json:"id"`
 	TurnID         string    `json:"turn_id"`
+	StepIndex      int       `json:"step_index"`
 	ProviderCallID string    `json:"-"`
 	ToolName       string    `json:"tool_name"`
 	Risk           string    `json:"risk"`
@@ -948,6 +951,7 @@ func (s *AIStore) CreateToolCall(ctx context.Context, turn AITurn, call AIToolCa
 	}
 	now := time.Now().UTC()
 	call.TurnID = turn.ID
+	call.StepIndex = -1
 	call.CreatedAt = now
 	call.UpdatedAt = now
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -955,28 +959,87 @@ func (s *AIStore) CreateToolCall(ctx context.Context, turn AITurn, call AIToolCa
 		return AIToolCall{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO ai_tool_calls
-		(id, turn_id, provider_call_id, tool_name, risk, status, arguments_json, target_type,
-		 target_id, target_name, node_id, operation_id, result_summary, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, call.ID, call.TurnID,
-		call.ProviderCallID, call.ToolName, call.Risk, call.Status, call.ArgumentsJSON,
-		call.TargetType, call.TargetID, call.TargetName, call.NodeID, call.OperationID, call.ResultSummary,
-		formatTime(now), formatTime(now)); err != nil {
+	if err := insertAIToolCallTx(ctx, tx, call); err != nil {
 		return AIToolCall{}, err
 	}
 	if call.Status == "pending" {
 		query := `UPDATE ai_turns SET status = 'awaiting_confirmation', updated_at = ? WHERE id = ? AND status = 'running'`
+		var result sql.Result
 		if s.dialect == serverdb.DialectMySQL {
 			query = `UPDATE ai_turns SET status = 'awaiting_confirmation', active_marker = ?, updated_at = ? WHERE id = ? AND status = 'running'`
-			_, err = tx.ExecContext(ctx, query, "1", formatTime(now), turn.ID)
+			result, err = tx.ExecContext(ctx, query, "1", formatTime(now), turn.ID)
 		} else {
-			_, err = tx.ExecContext(ctx, query, formatTime(now), turn.ID)
+			result, err = tx.ExecContext(ctx, query, formatTime(now), turn.ID)
 		}
 		if err != nil {
 			return AIToolCall{}, err
 		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return AIToolCall{}, err
+		}
+		if rows == 0 {
+			return AIToolCall{}, ErrAIConflict
+		}
 	}
 	return call, tx.Commit()
+}
+
+func (s *AIStore) CreateToolPlan(ctx context.Context, turn AITurn, calls []AIToolCall) ([]AIToolCall, error) {
+	if len(calls) == 0 || len(calls) > maxAIToolPlanSteps {
+		return nil, ErrAIInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	created := make([]AIToolCall, len(calls))
+	for index, call := range calls {
+		if call.ID == "" {
+			call.ID = uuid.NewString()
+		}
+		call.TurnID = turn.ID
+		call.StepIndex = index
+		call.Status = "pending"
+		call.CreatedAt = now
+		call.UpdatedAt = now
+		if err := insertAIToolCallTx(ctx, tx, call); err != nil {
+			return nil, err
+		}
+		created[index] = call
+	}
+	query := `UPDATE ai_turns SET status = 'awaiting_confirmation', updated_at = ? WHERE id = ? AND status = 'running'`
+	var result sql.Result
+	if s.dialect == serverdb.DialectMySQL {
+		query = `UPDATE ai_turns SET status = 'awaiting_confirmation', active_marker = ?, updated_at = ? WHERE id = ? AND status = 'running'`
+		result, err = tx.ExecContext(ctx, query, "1", formatTime(now), turn.ID)
+	} else {
+		result, err = tx.ExecContext(ctx, query, formatTime(now), turn.ID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rows == 0 {
+		return nil, ErrAIConflict
+	}
+	return created, tx.Commit()
+}
+
+func insertAIToolCallTx(ctx context.Context, tx *sql.Tx, call AIToolCall) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO ai_tool_calls
+		(id, turn_id, step_index, provider_call_id, tool_name, risk, status, arguments_json, target_type,
+		 target_id, target_name, node_id, operation_id, result_summary, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, call.ID, call.TurnID, call.StepIndex,
+		call.ProviderCallID, call.ToolName, call.Risk, call.Status, call.ArgumentsJSON,
+		call.TargetType, call.TargetID, call.TargetName, call.NodeID, call.OperationID, call.ResultSummary,
+		formatTime(call.CreatedAt), formatTime(call.UpdatedAt))
+	return err
 }
 
 func (s *AIStore) UpdateToolCallResult(ctx context.Context, id, status, summary string) error {
@@ -1032,7 +1095,7 @@ func (s *AIStore) CompleteToolCallAndTurn(ctx context.Context, id string, turn A
 }
 
 func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITurn, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT c.id, c.turn_id, c.provider_call_id, c.tool_name, c.risk,
+	row := s.db.QueryRowContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name, c.risk,
 		c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
 		c.result_summary, c.created_at, c.updated_at, t.conversation_id, t.model_id, t.provider_id,
 		t.provider_name, t.protocol, t.model, t.requested_provider_id, t.requested_provider_name,
@@ -1042,7 +1105,7 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 	var turn AITurn
 	var modelID, requestedModelID sql.NullString
 	var callCreated, callUpdated, turnCreated, turnUpdated string
-	err := row.Scan(&call.ID, &call.TurnID, &call.ProviderCallID, &call.ToolName, &call.Risk,
+	err := row.Scan(&call.ID, &call.TurnID, &call.StepIndex, &call.ProviderCallID, &call.ToolName, &call.Risk,
 		&call.Status, &call.ArgumentsJSON, &call.TargetType, &call.TargetID, &call.TargetName,
 		&call.NodeID, &call.OperationID, &call.ResultSummary, &callCreated, &callUpdated, &turn.ConversationID, &modelID,
 		&turn.ProviderID, &turn.ProviderName, &turn.Protocol, &turn.Model, &turn.RequestedProviderID,
@@ -1073,10 +1136,291 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 }
 
 func (s *AIStore) ListToolCalls(ctx context.Context, conversationID string) ([]AIToolCall, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.provider_call_id, c.tool_name,
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name,
 		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
 		c.result_summary, c.created_at, c.updated_at FROM ai_tool_calls c
-		JOIN ai_turns t ON t.id = c.turn_id WHERE t.conversation_id = ? ORDER BY c.created_at, c.id`, conversationID)
+		JOIN ai_turns t ON t.id = c.turn_id WHERE t.conversation_id = ? ORDER BY c.created_at, c.step_index, c.id`, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]AIToolCall, 0)
+	for rows.Next() {
+		call, err := scanAIToolCall(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, call)
+	}
+	return result, rows.Err()
+}
+
+func (s *AIStore) ListPlanSteps(ctx context.Context, turnID string) ([]AIToolCall, error) {
+	return listPlanSteps(ctx, s.db, turnID)
+}
+
+func (s *AIStore) ClaimToolPlan(ctx context.Context, turnID string) ([]AIToolCall, AITurn, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, AITurn{}, err
+	}
+	defer tx.Rollback()
+	turn, err := scanAITurn(tx.QueryRowContext(ctx, aiTurnSelect+` WHERE id = ?`, turnID))
+	if err != nil {
+		return nil, AITurn{}, err
+	}
+	steps, err := listPlanSteps(ctx, tx, turnID)
+	if err != nil {
+		return nil, AITurn{}, err
+	}
+	if err := validatePendingPlan(turn, steps); err != nil {
+		return nil, AITurn{}, err
+	}
+	now := time.Now().UTC()
+	query := `UPDATE ai_turns SET status = 'running', updated_at = ? WHERE id = ? AND status = 'awaiting_confirmation'`
+	if s.dialect == serverdb.DialectMySQL {
+		query = `UPDATE ai_turns SET status = 'running', active_marker = ?, updated_at = ? WHERE id = ? AND status = 'awaiting_confirmation'`
+	}
+	var result sql.Result
+	if s.dialect == serverdb.DialectMySQL {
+		result, err = tx.ExecContext(ctx, query, "1", formatTime(now), turnID)
+	} else {
+		result, err = tx.ExecContext(ctx, query, formatTime(now), turnID)
+	}
+	if err != nil {
+		return nil, AITurn{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, AITurn{}, err
+	}
+	if rows != 1 {
+		return nil, AITurn{}, ErrAIConflict
+	}
+	result, err = tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'queued', updated_at = ?
+		WHERE turn_id = ? AND step_index >= 0 AND status = 'pending'`, formatTime(now), turnID)
+	if err != nil {
+		return nil, AITurn{}, err
+	}
+	rows, err = result.RowsAffected()
+	if err != nil {
+		return nil, AITurn{}, err
+	}
+	if rows != int64(len(steps)) {
+		return nil, AITurn{}, ErrAIConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, AITurn{}, err
+	}
+	turn.Status = "running"
+	turn.UpdatedAt = now
+	for index := range steps {
+		steps[index].Status = "queued"
+		steps[index].UpdatedAt = now
+	}
+	return steps, turn, nil
+}
+
+func (s *AIStore) RejectToolPlan(ctx context.Context, turnID, content string) ([]AIToolCall, AITurn, AIMessage, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	defer tx.Rollback()
+	turn, err := scanAITurn(tx.QueryRowContext(ctx, aiTurnSelect+` WHERE id = ?`, turnID))
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	steps, err := listPlanSteps(ctx, tx, turnID)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	if err := validatePendingPlan(turn, steps); err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	now := time.Now().UTC()
+	message, err := s.finishTurnTx(ctx, tx, turn, "completed", "", content, now)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'rejected', result_summary = '计划已取消', updated_at = ?
+		WHERE turn_id = ? AND step_index >= 0 AND status = 'pending'`, formatTime(now), turnID)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	if rows != int64(len(steps)) {
+		return nil, AITurn{}, AIMessage{}, ErrAIConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	turn.Status = "completed"
+	turn.UpdatedAt = now
+	for index := range steps {
+		steps[index].Status = "rejected"
+		steps[index].ResultSummary = "计划已取消"
+		steps[index].UpdatedAt = now
+	}
+	return steps, turn, message, nil
+}
+
+func (s *AIStore) TransitionToolPlanStep(ctx context.Context, id, fromStatus, status, summary, operationID string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE ai_tool_calls SET status = ?, result_summary = ?,
+		operation_id = CASE WHEN ? <> '' THEN ? ELSE operation_id END, updated_at = ?
+		WHERE id = ? AND step_index >= 0 AND status = ?`, status, summary, operationID, operationID,
+		formatTime(time.Now().UTC()), id, fromStatus)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrAIConflict
+	}
+	return nil
+}
+
+func (s *AIStore) CompleteToolPlan(ctx context.Context, turnID, stepID, fromStatus, status, summary, operationID, content string) ([]AIToolCall, AITurn, AIMessage, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	defer tx.Rollback()
+	turn, err := scanAITurn(tx.QueryRowContext(ctx, aiTurnSelect+` WHERE id = ?`, turnID))
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	steps, err := listPlanSteps(ctx, tx, turnID)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	if len(steps) == 0 || turn.Status != "running" {
+		return nil, AITurn{}, AIMessage{}, ErrAIConflict
+	}
+	found := false
+	for _, step := range steps {
+		if step.ID == stepID {
+			found = step.Status == fromStatus
+			continue
+		}
+		if step.Status == "running" || step.Status == "accepted" || step.Status == "pending" {
+			return nil, AITurn{}, AIMessage{}, ErrAIConflict
+		}
+	}
+	if !found {
+		return nil, AITurn{}, AIMessage{}, ErrAIConflict
+	}
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = ?, result_summary = ?,
+		operation_id = CASE WHEN ? <> '' THEN ? ELSE operation_id END, updated_at = ?
+		WHERE id = ? AND turn_id = ? AND step_index >= 0 AND status = ?`, status, summary,
+		operationID, operationID, formatTime(now), stepID, turnID, fromStatus)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	if rows != 1 {
+		return nil, AITurn{}, AIMessage{}, ErrAIConflict
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'skipped', result_summary = '前序步骤未成功，已跳过', updated_at = ?
+		WHERE turn_id = ? AND step_index >= 0 AND status = 'queued'`, formatTime(now), turnID); err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	message, err := s.finishTurnTx(ctx, tx, turn, "completed", "", content, now)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	steps, err = listPlanSteps(ctx, tx, turnID)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	turn.Status = "completed"
+	turn.UpdatedAt = now
+	return steps, turn, message, nil
+}
+
+func (s *AIStore) FinishToolPlan(ctx context.Context, turnID, content string) ([]AIToolCall, AITurn, AIMessage, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	defer tx.Rollback()
+	turn, err := scanAITurn(tx.QueryRowContext(ctx, aiTurnSelect+` WHERE id = ?`, turnID))
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	steps, err := listPlanSteps(ctx, tx, turnID)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	if len(steps) == 0 || turn.Status != "running" {
+		return nil, AITurn{}, AIMessage{}, ErrAIConflict
+	}
+	for _, step := range steps {
+		if step.Status == "pending" || step.Status == "running" || step.Status == "accepted" {
+			return nil, AITurn{}, AIMessage{}, ErrAIConflict
+		}
+	}
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'skipped', result_summary = '前序步骤未成功，已跳过', updated_at = ?
+		WHERE turn_id = ? AND step_index >= 0 AND status = 'queued'`, formatTime(now), turnID); err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	message, err := s.finishTurnTx(ctx, tx, turn, "completed", "", content, now)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	steps, err = listPlanSteps(ctx, tx, turnID)
+	if err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, AITurn{}, AIMessage{}, err
+	}
+	turn.Status = "completed"
+	turn.UpdatedAt = now
+	return steps, turn, message, nil
+}
+
+func validatePendingPlan(turn AITurn, steps []AIToolCall) error {
+	if turn.Status != "awaiting_confirmation" {
+		return ErrAIConflict
+	}
+	if len(steps) == 0 {
+		return ErrAINotFound
+	}
+	if len(steps) > maxAIToolPlanSteps {
+		return ErrAIConflict
+	}
+	for index, step := range steps {
+		if step.StepIndex != index || step.Status != "pending" {
+			return ErrAIConflict
+		}
+	}
+	return nil
+}
+
+type aiQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listPlanSteps(ctx context.Context, queryer aiQueryer, turnID string) ([]AIToolCall, error) {
+	rows, err := queryer.QueryContext(ctx, `SELECT id, turn_id, step_index, provider_call_id, tool_name,
+		risk, status, arguments_json, target_type, target_id, target_name, node_id, operation_id,
+		result_summary, created_at, updated_at FROM ai_tool_calls
+		WHERE turn_id = ? AND step_index >= 0 ORDER BY step_index`, turnID)
 	if err != nil {
 		return nil, err
 	}
@@ -1096,7 +1440,7 @@ func (s *AIStore) ListAcceptedToolCalls(ctx context.Context, limit int) ([]AIToo
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.provider_call_id, c.tool_name,
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name,
 		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
 		c.result_summary, c.created_at, c.updated_at FROM ai_tool_calls c
 		WHERE c.status = 'accepted' ORDER BY c.updated_at, c.id LIMIT ?`, limit)
@@ -1194,17 +1538,39 @@ func (s *AIStore) RecoverInterrupted(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 	now := formatTime(time.Now().UTC())
-	if s.dialect == serverdb.DialectMySQL {
-		if _, err := tx.ExecContext(ctx, `UPDATE ai_turns SET status = 'interrupted', error_code = 'server_restarted', active_marker = NULL, updated_at = ? WHERE status IN ('running', 'awaiting_confirmation')`, now); err != nil {
-			return err
-		}
-	} else if _, err := tx.ExecContext(ctx, `UPDATE ai_turns SET status = 'interrupted', error_code = 'server_restarted', updated_at = ? WHERE status IN ('running', 'awaiting_confirmation')`, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'interrupted',
+		result_summary = CASE WHEN status = 'running' THEN '服务重启，操作结果无法确认，可能已执行' ELSE '服务重启，确认已失效，操作未执行' END,
+		updated_at = ? WHERE step_index < 0 AND status IN ('running', 'pending')`, now); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'interrupted',
-		result_summary = CASE WHEN status = 'running' THEN '服务重启，操作结果无法确认，可能已执行' ELSE '服务重启，确认已失效，操作未执行' END,
-		updated_at = ? WHERE status IN ('running', 'pending')`, now)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'interrupted',
+		result_summary = CASE WHEN status = 'running' THEN '服务重启，步骤结果无法确认，可能已执行' ELSE '服务重启，计划确认已失效，步骤未执行' END,
+		updated_at = ? WHERE step_index >= 0 AND status IN ('running', 'pending')`, now); err != nil {
+		return err
+	}
+	queuedRecoveryQuery := `UPDATE ai_tool_calls SET status = 'skipped',
+		result_summary = '服务重启，前序步骤未确认成功，已跳过', updated_at = ?
+		WHERE step_index >= 0 AND status = 'queued'
+		AND NOT EXISTS (SELECT 1 FROM ai_tool_calls accepted
+			WHERE accepted.turn_id = ai_tool_calls.turn_id AND accepted.step_index >= 0 AND accepted.status = 'accepted')`
+	if s.dialect == serverdb.DialectMySQL {
+		queuedRecoveryQuery = `UPDATE ai_tool_calls SET status = 'skipped',
+			result_summary = '服务重启，前序步骤未确认成功，已跳过', updated_at = ?
+			WHERE step_index >= 0 AND status = 'queued' AND turn_id NOT IN
+				(SELECT turn_id FROM (SELECT DISTINCT turn_id FROM ai_tool_calls
+					WHERE step_index >= 0 AND status = 'accepted') accepted_turns)`
+	}
+	if _, err := tx.ExecContext(ctx, queuedRecoveryQuery, now); err != nil {
+		return err
+	}
+	activeWithoutAcceptedPlan := `status IN ('running', 'awaiting_confirmation')
+		AND NOT EXISTS (SELECT 1 FROM ai_tool_calls accepted
+			WHERE accepted.turn_id = ai_turns.id AND accepted.step_index >= 0 AND accepted.status = 'accepted')`
+	if s.dialect == serverdb.DialectMySQL {
+		if _, err := tx.ExecContext(ctx, `UPDATE ai_turns SET status = 'interrupted', error_code = 'server_restarted', active_marker = NULL, updated_at = ? WHERE `+activeWithoutAcceptedPlan, now); err != nil {
+			return err
+		}
+	} else if _, err := tx.ExecContext(ctx, `UPDATE ai_turns SET status = 'interrupted', error_code = 'server_restarted', updated_at = ? WHERE `+activeWithoutAcceptedPlan, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1341,7 +1707,7 @@ func scanAIMessage(scanner aiScanner) (AIMessage, error) {
 func scanAIToolCall(scanner aiScanner) (AIToolCall, error) {
 	var call AIToolCall
 	var created, updated string
-	if err := scanner.Scan(&call.ID, &call.TurnID, &call.ProviderCallID, &call.ToolName,
+	if err := scanner.Scan(&call.ID, &call.TurnID, &call.StepIndex, &call.ProviderCallID, &call.ToolName,
 		&call.Risk, &call.Status, &call.ArgumentsJSON, &call.TargetType, &call.TargetID,
 		&call.TargetName, &call.NodeID, &call.OperationID, &call.ResultSummary, &created, &updated); err != nil {
 		return AIToolCall{}, err

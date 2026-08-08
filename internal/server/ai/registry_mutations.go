@@ -66,7 +66,8 @@ func (r *Registry) registerCreationTools() {
 			"timeout_seconds":     map[string]any{"type": "integer", "minimum": 0, "maximum": store.MaxTaskTimeoutSeconds},
 			"notification_policy": map[string]any{"type": "string", "enum": []string{store.NotificationPolicyNever, store.NotificationPolicyFailure, store.NotificationPolicyAlways}},
 		}, []string{"name", "script_id", "node_ids", "cron_expression", "timezone"}),
-		risk: RiskConfirm,
+		risk:       RiskConfirm,
+		capability: capabilityTaskCreation,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createScheduledTaskArguments
 			if err := strictArguments(raw, &args); err != nil || args.ScriptID <= 0 || len(args.NodeIDs) < 1 || len(args.NodeIDs) > store.MaxTaskNodes {
@@ -134,7 +135,8 @@ func (r *Registry) registerCreationTools() {
 			"ports":          map[string]any{"type": "array", "maxItems": maxAICreatePorts, "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"host_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "container_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}}}, "required": []string{"host_port", "container_port", "protocol"}}},
 			"start":          map[string]any{"type": "boolean"},
 		}, []string{"node_id", "image"}),
-		risk: RiskConfirm,
+		risk:       RiskConfirm,
+		capability: capabilityDockerAgent,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createDockerContainerArguments
 			if err := strictArguments(raw, &args); err != nil || !validDockerImage(args.Image) || len(args.Ports) > maxAICreatePorts || (args.Name != "" && !dockerContainerNamePattern.MatchString(args.Name)) || !oneOfDefault(args.RestartPolicy, "no") || !oneOfDefault(args.NetworkMode, "bridge") {
@@ -157,6 +159,9 @@ func (r *Registry) registerCreationTools() {
 			}
 			if _, err := r.onlineNode(ctx, args.NodeID, true); err != nil {
 				return nil, ToolTarget{}, err
+			}
+			if !r.dependencies.AgentOps.DockerContainerCreateSupported(args.NodeID) {
+				return nil, ToolTarget{}, ErrUnsupportedTool
 			}
 			name := args.Name
 			if name == "" {
@@ -205,7 +210,8 @@ func (r *Registry) registerCreationTools() {
 			"replicas":       map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
 			"container_port": map[string]any{"type": "integer", "minimum": 0, "maximum": 65535},
 		}, []string{"cluster_id", "namespace", "name", "image"}),
-		risk: RiskConfirm,
+		risk:       RiskConfirm,
+		capability: capabilityKubernetesMutation,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createK8sDeploymentArguments
 			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ClusterID, 191) || args.Replicas < 0 || args.ContainerPort < 0 || args.ContainerPort > 65535 || !validDockerImage(args.Image) {

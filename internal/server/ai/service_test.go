@@ -224,7 +224,7 @@ func TestServiceConnectionUpdateInvalidatesCapabilitiesAndDefault(t *testing.T) 
 	}
 }
 
-func TestServiceRepeatedConfirmationExecutesToolOnce(t *testing.T) {
+func TestServiceConcurrentPlanConfirmationExecutesToolOnce(t *testing.T) {
 	var executions atomic.Int32
 	registry := &Registry{tools: make(map[string]registeredTool)}
 	definition := noArgumentDefinition("test_confirm", "Test confirmation")
@@ -256,18 +256,40 @@ func TestServiceRepeatedConfirmationExecutesToolOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if proposal.ToolCall == nil || proposal.ToolCall.Status != "pending" {
-		t.Fatalf("proposal = %+v, want pending tool call", proposal)
+	if proposal.Plan == nil || proposal.Plan.Status != "pending" || len(proposal.Plan.Steps) != 1 {
+		t.Fatalf("proposal = %+v, want one pending plan step", proposal)
 	}
-	confirmed, err := service.Confirm(t.Context(), proposal.ToolCall.ID, nil)
-	if err != nil {
-		t.Fatalf("first Confirm: %v", err)
+	type confirmResult struct {
+		result SendResult
+		err    error
 	}
-	if confirmed.ToolCall == nil || confirmed.ToolCall.Status != "success" {
-		t.Fatalf("confirmed result = %+v", confirmed)
+	start := make(chan struct{})
+	results := make(chan confirmResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			result, confirmErr := service.ConfirmPlan(t.Context(), proposal.Plan.ID, nil)
+			results <- confirmResult{result: result, err: confirmErr}
+		}()
 	}
-	if _, err := service.Confirm(t.Context(), proposal.ToolCall.ID, nil); !errors.Is(err, store.ErrAIConflict) {
-		t.Fatalf("second Confirm error = %v, want ErrAIConflict", err)
+	close(start)
+	successes, conflicts := 0, 0
+	for range 2 {
+		confirmed := <-results
+		switch {
+		case confirmed.err == nil:
+			successes++
+			if confirmed.result.Plan == nil || confirmed.result.Plan.Status != "success" || confirmed.result.Plan.Steps[0].Status != "success" {
+				t.Fatalf("confirmed result = %+v", confirmed.result)
+			}
+		case errors.Is(confirmed.err, store.ErrAIConflict):
+			conflicts++
+		default:
+			t.Fatalf("concurrent ConfirmPlan error = %v", confirmed.err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent confirmation outcomes = success:%d conflict:%d", successes, conflicts)
 	}
 	if executions.Load() != 1 {
 		t.Fatalf("tool executions = %d, want 1", executions.Load())
@@ -302,15 +324,16 @@ func TestServiceConfirmationPersistenceFailureRecoversAsUnknownOutcome(t *testin
 		t.Fatalf("create conversation: %v", err)
 	}
 	proposal, err := service.Send(t.Context(), conversation.ID, provider.ID, "run it", nil)
-	if err != nil || proposal.ToolCall == nil {
+	if err != nil || proposal.Plan == nil || len(proposal.Plan.Steps) != 1 {
 		t.Fatalf("Send = result:%+v err:%v", proposal, err)
 	}
+	stepID := proposal.Plan.Steps[0].ID
 	if _, err := database.Exec(`CREATE TRIGGER fail_confirm_result BEFORE UPDATE OF status ON ai_tool_calls
 		WHEN NEW.status = 'success' BEGIN SELECT RAISE(FAIL, 'forced tool result persistence failure'); END`); err != nil {
 		t.Fatalf("create persistence trigger: %v", err)
 	}
-	if _, err := service.Confirm(t.Context(), proposal.ToolCall.ID, nil); err == nil {
-		t.Fatal("Confirm succeeded despite persistence failure")
+	if _, err := service.ConfirmPlan(t.Context(), proposal.Plan.ID, nil); err == nil {
+		t.Fatal("ConfirmPlan succeeded despite persistence failure")
 	}
 	if executions.Load() != 1 {
 		t.Fatalf("tool executions = %d, want 1", executions.Load())
@@ -319,7 +342,7 @@ func TestServiceConfirmationPersistenceFailureRecoversAsUnknownOutcome(t *testin
 		t.Fatalf("drop persistence trigger: %v", err)
 	}
 
-	interrupted, _, err := aiStore.GetToolCall(t.Context(), proposal.ToolCall.ID)
+	interrupted, _, err := aiStore.GetToolCall(t.Context(), stepID)
 	if err != nil {
 		t.Fatalf("get running tool call: %v", err)
 	}
@@ -329,11 +352,11 @@ func TestServiceConfirmationPersistenceFailureRecoversAsUnknownOutcome(t *testin
 	if err := aiStore.RecoverInterrupted(t.Context()); err != nil {
 		t.Fatalf("recover interrupted operation: %v", err)
 	}
-	interrupted, turn, err := aiStore.GetToolCall(t.Context(), proposal.ToolCall.ID)
+	interrupted, turn, err := aiStore.GetToolCall(t.Context(), stepID)
 	if err != nil {
 		t.Fatalf("get recovered tool call: %v", err)
 	}
-	if interrupted.Status != "interrupted" || interrupted.ResultSummary != "服务重启，操作结果无法确认，可能已执行" || turn.Status != "interrupted" {
+	if interrupted.Status != "interrupted" || interrupted.ResultSummary != "服务重启，步骤结果无法确认，可能已执行" || turn.Status != "interrupted" {
 		t.Fatalf("recovered unknown operation = call:%+v turn:%+v", interrupted, turn)
 	}
 }
@@ -345,9 +368,10 @@ func TestServiceConfirmationProjectsAcceptedAndUnsupportedStatuses(t *testing.T)
 		executeErr      error
 		wantStatus      string
 		wantMessagePart string
+		wantMessage     bool
 	}{
-		{name: "accepted", result: SafeToolResult{Summary: "queued", Status: "accepted"}, wantStatus: "accepted", wantMessagePart: "操作已接受，正在处理中。"},
-		{name: "unsupported", executeErr: ErrUnsupportedTool, wantStatus: "unsupported", wantMessagePart: "当前操作不受支持，未执行。"},
+		{name: "accepted", result: SafeToolResult{Summary: "queued", Status: "accepted"}, wantStatus: "accepted"},
+		{name: "unsupported", executeErr: ErrUnsupportedTool, wantStatus: "unsupported", wantMessage: true, wantMessagePart: "失败 1"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -376,20 +400,223 @@ func TestServiceConfirmationProjectsAcceptedAndUnsupportedStatuses(t *testing.T)
 				t.Fatalf("create conversation: %v", err)
 			}
 			proposal, err := service.Send(t.Context(), conversation.ID, provider.ID, "run it", nil)
-			if err != nil || proposal.ToolCall == nil {
+			if err != nil || proposal.Plan == nil {
 				t.Fatalf("Send = result:%+v err:%v", proposal, err)
 			}
-			confirmed, err := service.Confirm(t.Context(), proposal.ToolCall.ID, nil)
+			confirmed, err := service.ConfirmPlan(t.Context(), proposal.Plan.ID, nil)
 			if err != nil {
-				t.Fatalf("Confirm: %v", err)
+				t.Fatalf("ConfirmPlan: %v", err)
 			}
-			if confirmed.ToolCall == nil || confirmed.ToolCall.Status != test.wantStatus {
-				t.Fatalf("confirmed tool call = %+v, want status %q", confirmed.ToolCall, test.wantStatus)
+			if confirmed.Plan == nil || len(confirmed.Plan.Steps) != 1 || confirmed.Plan.Steps[0].Status != test.wantStatus {
+				t.Fatalf("confirmed plan = %+v, want step status %q", confirmed.Plan, test.wantStatus)
 			}
-			if confirmed.Message == nil || !strings.Contains(confirmed.Message.Content, test.wantMessagePart) {
+			if test.wantMessage && (confirmed.Message == nil || !strings.Contains(confirmed.Message.Content, test.wantMessagePart)) {
 				t.Fatalf("confirmed message = %+v, want %q", confirmed.Message, test.wantMessagePart)
 			}
+			if !test.wantMessage && confirmed.Message != nil {
+				t.Fatalf("accepted plan produced premature message: %+v", confirmed.Message)
+			}
 		})
+	}
+}
+
+func TestServiceToolPlanPrevalidatesAllStepsAndStopsAfterFailure(t *testing.T) {
+	var secondValidations atomic.Int32
+	var firstExecutions, secondExecutions atomic.Int32
+	registry := &Registry{tools: make(map[string]registeredTool)}
+	addPlanTool := func(name string, validations *atomic.Int32, execute func() (SafeToolResult, error)) {
+		registry.add(registeredTool{
+			definition: noArgumentDefinition(name, "Plan step"),
+			risk:       RiskConfirm,
+			validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
+				if validations != nil {
+					validations.Add(1)
+				}
+				if err := strictArguments(raw, &struct{}{}); err != nil {
+					return nil, ToolTarget{}, ErrInvalidArguments
+				}
+				return json.RawMessage(`{}`), ToolTarget{Type: "node", ID: name, Name: name, NodeID: name}, nil
+			},
+			execute: func(context.Context, json.RawMessage) (SafeToolResult, error) { return execute() },
+		})
+	}
+	addPlanTool("plan_first", nil, func() (SafeToolResult, error) {
+		firstExecutions.Add(1)
+		if secondValidations.Load() < 2 {
+			t.Fatalf("second step was not prevalidated before first execution: validations=%d", secondValidations.Load())
+		}
+		return SafeToolResult{}, errors.New("forced failure")
+	})
+	addPlanTool("plan_second", &secondValidations, func() (SafeToolResult, error) {
+		secondExecutions.Add(1)
+		return SafeToolResult{Summary: "unexpected"}, nil
+	})
+	adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+		return ChatResponse{ToolCalls: []ToolCall{
+			{ID: "call-1", Name: "plan_first", Arguments: json.RawMessage(`{}`)},
+			{ID: "call-2", Name: "plan_second", Arguments: json.RawMessage(`{}`)},
+		}}, nil
+	}}
+	service, aiStore, _ := newServiceTestFixture(t, registry, adapter)
+	provider := createCapableServiceProvider(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "Ordered plan")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	proposal, err := service.Send(t.Context(), conversation.ID, provider.ID, "run both", nil)
+	if err != nil || proposal.Plan == nil || len(proposal.Plan.Steps) != 2 {
+		t.Fatalf("proposal = %+v err=%v", proposal, err)
+	}
+	result, err := service.ConfirmPlan(t.Context(), proposal.Plan.ID, nil)
+	if err != nil {
+		t.Fatalf("ConfirmPlan: %v", err)
+	}
+	if firstExecutions.Load() != 1 || secondExecutions.Load() != 0 {
+		t.Fatalf("executions = first:%d second:%d", firstExecutions.Load(), secondExecutions.Load())
+	}
+	if result.Plan == nil || result.Plan.Status != "partial" || result.Plan.Steps[0].Status != "failure" || result.Plan.Steps[1].Status != "skipped" {
+		t.Fatalf("failed plan projection = %+v", result.Plan)
+	}
+	if result.Message == nil || !strings.Contains(result.Message.Content, "失败 1，跳过 1") {
+		t.Fatalf("failed plan message = %+v", result.Message)
+	}
+}
+
+func TestServiceRejectsMixedDuplicateAndOversizedWriteBatchesAtomically(t *testing.T) {
+	tests := []struct {
+		name        string
+		toolCalls   []ToolCall
+		wantMessage string
+	}{
+		{name: "mixed read and write", toolCalls: []ToolCall{
+			{ID: "read", Name: "plan_read", Arguments: json.RawMessage(`{}`)},
+			{ID: "write", Name: "plan_write", Arguments: json.RawMessage(`{}`)},
+		}, wantMessage: "先完成查询"},
+		{name: "duplicate writes", toolCalls: []ToolCall{
+			{ID: "write-1", Name: "plan_write", Arguments: json.RawMessage(`{}`)},
+			{ID: "write-2", Name: "plan_write", Arguments: json.RawMessage(`{}`)},
+		}, wantMessage: "重复步骤"},
+		{name: "more than five writes", toolCalls: []ToolCall{
+			{ID: "write-1", Name: "plan_write", Arguments: json.RawMessage(`{}`)},
+			{ID: "write-2", Name: "plan_write_2", Arguments: json.RawMessage(`{}`)},
+			{ID: "write-3", Name: "plan_write_3", Arguments: json.RawMessage(`{}`)},
+			{ID: "write-4", Name: "plan_write_4", Arguments: json.RawMessage(`{}`)},
+			{ID: "write-5", Name: "plan_write_5", Arguments: json.RawMessage(`{}`)},
+			{ID: "write-6", Name: "plan_write_6", Arguments: json.RawMessage(`{}`)},
+		}, wantMessage: "最多包含五个步骤"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var executions atomic.Int32
+			registry := &Registry{tools: make(map[string]registeredTool)}
+			for _, name := range []string{"plan_read", "plan_write", "plan_write_2", "plan_write_3", "plan_write_4", "plan_write_5", "plan_write_6"} {
+				toolName := name
+				risk := RiskConfirm
+				if toolName == "plan_read" {
+					risk = RiskRead
+				}
+				registry.add(registeredTool{
+					definition: noArgumentDefinition(toolName, "Batch validation"), risk: risk,
+					validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
+						if err := strictArguments(raw, &struct{}{}); err != nil {
+							return nil, ToolTarget{}, err
+						}
+						return json.RawMessage(`{}`), ToolTarget{Type: "node", ID: toolName, NodeID: toolName}, nil
+					},
+					execute: func(context.Context, json.RawMessage) (SafeToolResult, error) {
+						executions.Add(1)
+						return SafeToolResult{Summary: "unexpected"}, nil
+					},
+				})
+			}
+			adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+				return ChatResponse{ToolCalls: test.toolCalls}, nil
+			}}
+			service, aiStore, _ := newServiceTestFixture(t, registry, adapter)
+			provider := createCapableServiceProvider(t, service, aiStore)
+			conversation, err := service.CreateConversation(t.Context(), "Invalid batch")
+			if err != nil {
+				t.Fatalf("create conversation: %v", err)
+			}
+			result, err := service.Send(t.Context(), conversation.ID, provider.ID, "invalid batch", nil)
+			if err != nil || result.Plan != nil || result.Message == nil || !strings.Contains(result.Message.Content, test.wantMessage) {
+				t.Fatalf("invalid batch result = %+v err=%v", result, err)
+			}
+			state, err := service.ConversationState(t.Context(), conversation.ID, 20)
+			if err != nil || len(state.Plans) != 0 || len(state.ToolCalls) != 0 || executions.Load() != 0 {
+				t.Fatalf("invalid batch persisted or executed: plans=%+v calls=%+v executions=%d err=%v", state.Plans, state.ToolCalls, executions.Load(), err)
+			}
+		})
+	}
+}
+
+func TestServiceAcceptedPlanWaitsThenContinuesWithoutReplay(t *testing.T) {
+	var firstExecutions, secondExecutions atomic.Int32
+	registry := &Registry{tools: make(map[string]registeredTool)}
+	for _, name := range []string{"accepted_first", "accepted_second"} {
+		toolName := name
+		registry.add(registeredTool{
+			definition: noArgumentDefinition(toolName, "Plan step"),
+			risk:       RiskConfirm,
+			validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
+				if err := strictArguments(raw, &struct{}{}); err != nil {
+					return nil, ToolTarget{}, ErrInvalidArguments
+				}
+				return json.RawMessage(`{}`), ToolTarget{Type: "node", ID: toolName, Name: toolName, NodeID: toolName}, nil
+			},
+			execute: func(context.Context, json.RawMessage) (SafeToolResult, error) {
+				if toolName == "accepted_first" {
+					firstExecutions.Add(1)
+					return SafeToolResult{Status: "accepted", Summary: "waiting", OperationID: "operation-1"}, nil
+				}
+				secondExecutions.Add(1)
+				return SafeToolResult{Status: "success", Summary: "done"}, nil
+			},
+		})
+	}
+	adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+		return ChatResponse{ToolCalls: []ToolCall{
+			{ID: "call-1", Name: "accepted_first", Arguments: json.RawMessage(`{}`)},
+			{ID: "call-2", Name: "accepted_second", Arguments: json.RawMessage(`{}`)},
+		}}, nil
+	}}
+	service, aiStore, _ := newServiceTestFixture(t, registry, adapter)
+	provider := createCapableServiceProvider(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "Accepted plan")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	proposal, err := service.Send(t.Context(), conversation.ID, provider.ID, "run both", nil)
+	if err != nil || proposal.Plan == nil {
+		t.Fatalf("proposal = %+v err=%v", proposal, err)
+	}
+	accepted, err := service.ConfirmPlan(t.Context(), proposal.Plan.ID, nil)
+	if err != nil {
+		t.Fatalf("ConfirmPlan: %v", err)
+	}
+	if accepted.Plan == nil || accepted.Plan.Steps[0].Status != "accepted" || accepted.Plan.Steps[1].Status != "queued" || secondExecutions.Load() != 0 {
+		t.Fatalf("accepted plan advanced too early: %+v executions=%d", accepted.Plan, secondExecutions.Load())
+	}
+	if err := aiStore.RecoverInterrupted(t.Context()); err != nil {
+		t.Fatalf("recover accepted plan: %v", err)
+	}
+	recovered, err := service.ConversationState(t.Context(), conversation.ID, 20)
+	if err != nil || len(recovered.Plans) != 1 || recovered.Plans[0].Status != "running" ||
+		recovered.Plans[0].Steps[0].Status != "accepted" || recovered.Plans[0].Steps[1].Status != "queued" {
+		t.Fatalf("recovered accepted plan = %+v err=%v", recovered.Plans, err)
+	}
+	if firstExecutions.Load() != 1 || secondExecutions.Load() != 0 {
+		t.Fatalf("recovery replayed or advanced plan = first:%d second:%d", firstExecutions.Load(), secondExecutions.Load())
+	}
+	if err := service.completeAcceptedOperation(t.Context(), accepted.Plan.Steps[0].ID, "success", "verified", "unused"); err != nil {
+		t.Fatalf("complete accepted operation: %v", err)
+	}
+	if firstExecutions.Load() != 1 || secondExecutions.Load() != 1 {
+		t.Fatalf("executions after verification = first:%d second:%d", firstExecutions.Load(), secondExecutions.Load())
+	}
+	state, err := service.ConversationState(t.Context(), conversation.ID, 20)
+	if err != nil || len(state.Plans) != 1 || state.Plans[0].Status != "success" {
+		t.Fatalf("completed conversation plan = %+v err=%v", state.Plans, err)
 	}
 }
 

@@ -54,8 +54,9 @@ func (r *Registry) registerPlatformReadTools() {
 		definition: objectDefinition("get_docker_snapshot", "Read the latest bounded Docker container snapshot for one node.", map[string]any{
 			"node_id": map[string]any{"type": "string", "maxLength": 191},
 		}, []string{"node_id"}),
-		risk:     RiskRead,
-		validate: r.validateNodeRead,
+		risk:       RiskRead,
+		capability: capabilityDocker,
+		validate:   r.validateNodeRead,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeReadArguments
 			_ = json.Unmarshal(raw, &args)
@@ -94,8 +95,9 @@ func (r *Registry) registerPlatformReadTools() {
 		definition: objectDefinition("get_docker_resources", "Read bounded Docker images, volumes, networks, and disk usage for one online node.", map[string]any{
 			"node_id": map[string]any{"type": "string", "maxLength": 191},
 		}, []string{"node_id"}),
-		risk:     RiskRead,
-		validate: r.validateOnlineNodeRead,
+		risk:       RiskRead,
+		capability: capabilityDockerAgent,
+		validate:   r.validateOnlineNodeRead,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeReadArguments
 			_ = json.Unmarshal(raw, &args)
@@ -124,8 +126,9 @@ func (r *Registry) registerPlatformReadTools() {
 			"node_id": map[string]any{"type": "string", "maxLength": 191},
 			"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": maxAIReadLimit},
 		}, []string{"node_id"}),
-		risk:     RiskRead,
-		validate: r.validateNodeLimitOnline,
+		risk:       RiskRead,
+		capability: capabilityCompose,
+		validate:   r.validateNodeLimitOnline,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeLimitArguments
 			_ = json.Unmarshal(raw, &args)
@@ -169,8 +172,9 @@ func (r *Registry) registerPlatformReadTools() {
 			"node_id": map[string]any{"type": "string", "maxLength": 191},
 			"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": maxAIReadLimit},
 		}, []string{"node_id"}),
-		risk:     RiskRead,
-		validate: r.validateNodeLimit,
+		risk:       RiskRead,
+		capability: capabilityProcesses,
+		validate:   r.validateNodeLimit,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeLimitArguments
 			_ = json.Unmarshal(raw, &args)
@@ -211,8 +215,9 @@ func (r *Registry) registerPlatformReadTools() {
 			"node_id": map[string]any{"type": "string", "maxLength": 191},
 			"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": maxAIReadLimit},
 		}, []string{"node_id"}),
-		risk:     RiskRead,
-		validate: r.validateNodeLimitOnline,
+		risk:       RiskRead,
+		capability: capabilitySystemd,
+		validate:   r.validateNodeLimitOnline,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeLimitArguments
 			_ = json.Unmarshal(raw, &args)
@@ -245,8 +250,9 @@ func (r *Registry) registerPlatformReadTools() {
 		definition: objectDefinition("get_k8s_cluster_summary", "Read a bounded Kubernetes cluster resource summary.", map[string]any{
 			"cluster_id": map[string]any{"type": "string", "maxLength": 191},
 		}, []string{"cluster_id"}),
-		risk:     RiskRead,
-		validate: r.validateK8sCluster,
+		risk:       RiskRead,
+		capability: capabilityKubernetesTarget,
+		validate:   r.validateK8sCluster,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args struct {
 				ClusterID string `json:"cluster_id"`
@@ -273,8 +279,9 @@ func (r *Registry) registerPlatformReadTools() {
 			"namespace":  map[string]any{"type": "string", "maxLength": 191},
 			"limit":      map[string]any{"type": "integer", "minimum": 1, "maximum": maxAIReadLimit},
 		}, []string{"cluster_id", "resource"}),
-		risk:     RiskRead,
-		validate: r.validateK8sResource,
+		risk:       RiskRead,
+		capability: capabilityKubernetesTarget,
+		validate:   r.validateK8sResource,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args k8sResourceArguments
 			_ = json.Unmarshal(raw, &args)
@@ -302,7 +309,8 @@ func (r *Registry) registerPlatformReadTools() {
 			"node_id": map[string]any{"type": "string", "maxLength": 191},
 			"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": maxAIReadLimit},
 		}, nil),
-		risk: RiskRead,
+		risk:       RiskRead,
+		capability: capabilityTaskHistory,
 		validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args automationRunsArguments
 			if err := strictArguments(raw, &args); err != nil {
@@ -343,7 +351,8 @@ func (r *Registry) registerPlatformReadTools() {
 			"query":   map[string]any{"type": "string", "maxLength": 128},
 			"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": maxAIReadLimit},
 		}, nil),
-		risk: RiskRead,
+		risk:       RiskRead,
+		capability: capabilityAudit,
 		validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args auditEventsArguments
 			if err := strictArguments(raw, &args); err != nil {
@@ -384,9 +393,10 @@ func (r *Registry) registerPlatformReadTools() {
 		definition: objectDefinition("diagnose_node", "Combine bounded node metrics, processes, Docker, Compose, and Systemd signals to explain a node health concern.", map[string]any{
 			"node_id": map[string]any{"type": "string", "maxLength": 191},
 		}, []string{"node_id"}),
-		risk:     RiskRead,
-		validate: r.validateNodeRead,
-		execute:  r.executeNodeDiagnosis,
+		risk:       RiskRead,
+		capability: capabilityOnlineNode,
+		validate:   r.validateNodeRead,
+		execute:    r.executeNodeDiagnosis,
 	})
 	r.registerIncidentDiagnosisTool()
 }

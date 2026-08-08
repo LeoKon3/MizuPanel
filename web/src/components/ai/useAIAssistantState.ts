@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { confirmAIToolCall, createAIConversation, deleteAIConversation, getAIConversation, getAIConversations, getAIProviders, rejectAIToolCall, sendAIMessageStream, updateAIConversationModel } from '../../api/client'
-import type { AIConversation, AIConversationState, AIMessage, AIProgress, AIProvider, AIProviderModel, AIRequestContext, AIToolCall, AITurn } from '../../types'
+import { confirmAIPlan, confirmAIToolCall, createAIConversation, deleteAIConversation, getAIConversation, getAIConversations, getAIProviders, rejectAIPlan, rejectAIToolCall, sendAIMessageStream, updateAIConversationModel } from '../../api/client'
+import type { AIConversation, AIConversationState, AIMessage, AIOperationPlan, AIProgress, AIProvider, AIProviderModel, AIRequestContext, AIToolCall, AITurn } from '../../types'
 
 export const aiProvidersChangedEvent = 'mizupanel:ai-providers-changed'
 
@@ -43,13 +43,16 @@ export type AIAssistantState = {
   stop: () => void
   confirm: (call: AIToolCall) => Promise<void>
   reject: (call: AIToolCall) => Promise<void>
+  confirmPlan: (plan: AIOperationPlan) => Promise<void>
+  rejectPlan: (plan: AIOperationPlan) => Promise<void>
   clearToast: () => void
 }
 
 const emptyConversationState = (conversation: AIConversation): AIConversationState => ({
   conversation,
   messages: [],
-  tool_calls: []
+  tool_calls: [],
+  plans: []
 })
 
 function errorText(error: unknown, fallback: string) {
@@ -76,6 +79,14 @@ function confirmedOperationToast(call?: AIToolCall): AIToast {
         message: call.result_summary || `AI 运维操作状态异常: ${call.status}`
       }
   }
+}
+
+function confirmedPlanToast(plan?: AIOperationPlan): AIToast {
+  if (!plan) return { type: 'error', message: 'AI 变更计划结果缺失' }
+  if (plan.status === 'success') return { type: 'success', message: 'AI 变更计划执行成功' }
+  if (plan.status === 'running') return { type: 'success', message: 'AI 变更计划正在执行' }
+  if (plan.status === 'rejected') return { type: 'success', message: 'AI 变更计划拒绝成功' }
+  return { type: 'error', message: 'AI 变更计划未完全成功，请检查步骤结果' }
 }
 
 export function isAIModelUsable(provider: AIProvider, model: AIProviderModel) {
@@ -467,20 +478,42 @@ export function useAIAssistantState(): AIAssistantState {
     try {
       const result = decision === 'confirm' ? await confirmAIToolCall(call.id) : await rejectAIToolCall(call.id)
       setTurnResults((current) => ({ ...current, [result.turn.id]: result.turn }))
-      if (conversationID && activeConversationRef.current === conversationID) await loadConversation(conversationID)
+      if (conversationID && activeConversationRef.current === conversationID) await refreshConversation(conversationID)
       setToast(decision === 'confirm'
         ? confirmedOperationToast(result.tool_call)
         : { type: 'success', message: 'AI 运维操作拒绝成功' })
     } catch (operationError) {
       setToast({ type: 'error', message: `AI 运维操作失败: ${errorText(operationError, '未知错误')}` })
-      if (conversationID && activeConversationRef.current === conversationID) await loadConversation(conversationID)
+      if (conversationID && activeConversationRef.current === conversationID) await refreshConversation(conversationID)
     } finally {
       setOperationID(undefined)
     }
-  }, [loadConversation, operationID])
+  }, [operationID, refreshConversation])
 
   const confirm = useCallback((call: AIToolCall) => runToolDecision(call, 'confirm'), [runToolDecision])
   const reject = useCallback((call: AIToolCall) => runToolDecision(call, 'reject'), [runToolDecision])
+
+  const runPlanDecision = useCallback(async (plan: AIOperationPlan, decision: 'confirm' | 'reject') => {
+    if (operationID) return
+    const conversationID = activeConversationRef.current
+    setOperationID(plan.id)
+    try {
+      const result = decision === 'confirm' ? await confirmAIPlan(plan.id) : await rejectAIPlan(plan.id)
+      setTurnResults((current) => ({ ...current, [result.turn.id]: result.turn }))
+      if (conversationID && activeConversationRef.current === conversationID) await refreshConversation(conversationID)
+      setToast(decision === 'confirm'
+        ? confirmedPlanToast(result.plan)
+        : { type: 'success', message: 'AI 变更计划拒绝成功' })
+    } catch (operationError) {
+      setToast({ type: 'error', message: `AI 变更计划操作失败: ${errorText(operationError, '未知错误')}` })
+      if (conversationID && activeConversationRef.current === conversationID) await refreshConversation(conversationID)
+    } finally {
+      setOperationID(undefined)
+    }
+  }, [operationID, refreshConversation])
+
+  const confirmPlan = useCallback((plan: AIOperationPlan) => runPlanDecision(plan, 'confirm'), [runPlanDecision])
+  const rejectPlan = useCallback((plan: AIOperationPlan) => runPlanDecision(plan, 'reject'), [runPlanDecision])
   const clearToast = useCallback(() => setToast(undefined), [])
 
   useEffect(() => {
@@ -501,13 +534,15 @@ export function useAIAssistantState(): AIAssistantState {
 
   useEffect(() => {
     const conversationID = activeConversationRef.current
-    if (!conversationID || !conversation?.tool_calls.some((call) => call.status === 'accepted')) return
+    const hasActiveOperation = conversation?.tool_calls.some((call) => call.status === 'accepted')
+      || conversation?.plans?.some((plan) => plan.status === 'running')
+    if (!conversationID || !hasActiveOperation) return
     const poll = window.setInterval(() => {
       if (document.visibilityState === 'hidden' || activeConversationRef.current !== conversationID) return
       void refreshConversation(conversationID)
     }, 2000)
     return () => window.clearInterval(poll)
-  }, [conversation?.tool_calls, refreshConversation])
+  }, [conversation?.plans, conversation?.tool_calls, refreshConversation])
 
   useEffect(() => () => {
     conversationController.current?.abort()
@@ -552,6 +587,8 @@ export function useAIAssistantState(): AIAssistantState {
     stop,
     confirm,
     reject,
+    confirmPlan,
+    rejectPlan,
     clearToast
-  }), [activeConversationID, clearToast, closeDrawer, confirm, context, conversation, conversations, deleteConversation, drawerOpen, drawerWidth, ensureLoaded, error, loading, newConversation, openDrawer, operationID, progress, providers, refreshProviders, reject, selectedModelID, selectedProviderID, selectConversation, selectModel, selectProvider, selectingModel, send, sending, sendingConversationID, setContext, setDrawerWidth, stop, streamedContent, timeline, toast, turnResults])
+  }), [activeConversationID, clearToast, closeDrawer, confirm, confirmPlan, context, conversation, conversations, deleteConversation, drawerOpen, drawerWidth, ensureLoaded, error, loading, newConversation, openDrawer, operationID, progress, providers, refreshProviders, reject, rejectPlan, selectedModelID, selectedProviderID, selectConversation, selectModel, selectProvider, selectingModel, send, sending, sendingConversationID, setContext, setDrawerWidth, stop, streamedContent, timeline, toast, turnResults])
 }

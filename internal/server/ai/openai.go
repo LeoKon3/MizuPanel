@@ -140,8 +140,14 @@ func (a *OpenAIChatCompletionsAdapter) doCompletionRequest(ctx context.Context, 
 func convertOpenAIMessage(message openAIMessage) (ChatResponse, error) {
 	result := ChatResponse{Content: message.Content, ToolCalls: make([]ToolCall, 0, len(message.ToolCalls))}
 	for _, call := range message.ToolCalls {
-		if call.ID == "" || call.Function.Name == "" {
-			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用格式无效")
+		if call.ID == "" {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用缺少 ID")
+		}
+		if call.Function.Name == "" {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用缺少名称")
+		}
+		if !json.Valid([]byte(call.Function.Arguments)) {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用参数无效")
 		}
 		result.ToolCalls = append(result.ToolCalls, ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: json.RawMessage(call.Function.Arguments)})
 	}
@@ -152,6 +158,38 @@ type openAIStreamToolCall struct {
 	ID        string
 	Name      string
 	Arguments strings.Builder
+}
+
+func resolveOpenAIStreamToolIndex(toolCalls map[int]*openAIStreamToolCall, order []int, frameIndexes map[int]struct{}, providerIndex *int, callID string, position int) int {
+	if callID != "" {
+		for index, call := range toolCalls {
+			if call.ID == callID {
+				return index
+			}
+		}
+	}
+	if providerIndex != nil {
+		index := *providerIndex
+		call, exists := toolCalls[index]
+		_, alreadyUsed := frameIndexes[index]
+		if !alreadyUsed && (!exists || call.ID == "" || callID == "" || call.ID == callID) {
+			return index
+		}
+	}
+	if position < len(order) {
+		index := order[position]
+		call := toolCalls[index]
+		if call.ID == "" || callID == "" || call.ID == callID {
+			return index
+		}
+	}
+	index := 0
+	for {
+		if _, exists := toolCalls[index]; !exists {
+			return index
+		}
+		index++
+	}
 }
 
 func parseOpenAICompletionStream(ctx context.Context, reader io.Reader, callback ContentCallback) (ChatResponse, error) {
@@ -195,23 +233,26 @@ func parseOpenAICompletionStream(ctx context.Context, reader io.Reader, callback
 				}
 			}
 		}
-		for _, delta := range choice.Delta.ToolCalls {
-			call, exists := toolCalls[delta.Index]
+		frameIndexes := make(map[int]struct{}, len(choice.Delta.ToolCalls))
+		for position, delta := range choice.Delta.ToolCalls {
+			index := resolveOpenAIStreamToolIndex(toolCalls, order, frameIndexes, delta.Index, delta.ID, position)
+			frameIndexes[index] = struct{}{}
+			call, exists := toolCalls[index]
 			if !exists {
 				call = &openAIStreamToolCall{}
-				toolCalls[delta.Index] = call
-				order = append(order, delta.Index)
+				toolCalls[index] = call
+				order = append(order, index)
 			}
 			if delta.ID != "" {
 				if call.ID != "" && call.ID != delta.ID {
-					return adapterError(ErrorProtocol, "模型工具调用格式无效")
+					return adapterError(ErrorProtocol, "模型工具调用 ID 冲突")
 				}
 				call.ID = delta.ID
 			}
 			call.Name += delta.Function.Name
 			call.Arguments.WriteString(delta.Function.Arguments)
 			if call.Arguments.Len() > maxProviderStreamFrameBytes {
-				return adapterError(ErrorProtocol, "模型工具调用格式无效")
+				return adapterError(ErrorProtocol, "模型工具调用参数过大")
 			}
 		}
 		return nil
@@ -269,8 +310,14 @@ func parseOpenAICompletionStream(ctx context.Context, reader io.Reader, callback
 	for _, index := range order {
 		call := toolCalls[index]
 		arguments := call.Arguments.String()
-		if call.ID == "" || call.Name == "" || !json.Valid([]byte(arguments)) {
-			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用格式无效")
+		if call.ID == "" {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用缺少 ID")
+		}
+		if call.Name == "" {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用缺少名称")
+		}
+		if !json.Valid([]byte(arguments)) {
+			return ChatResponse{}, adapterError(ErrorProtocol, "模型工具调用参数无效")
 		}
 		result.ToolCalls = append(result.ToolCalls, ToolCall{ID: call.ID, Name: call.Name, Arguments: json.RawMessage(arguments)})
 	}
@@ -369,7 +416,7 @@ type openAIStreamResponse struct {
 		Delta struct {
 			Content   string `json:"content"`
 			ToolCalls []struct {
-				Index    int    `json:"index"`
+				Index    *int   `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
 					Name      string `json:"name"`
