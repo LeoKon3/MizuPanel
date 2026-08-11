@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,7 +70,7 @@ func TestRegistryCreateDockerContainerUsesTypedRequestAndConfirmationRisk(t *tes
 	ops := &mutationNodeOperationsStub{dockerResponse: protocol.DockerContainerCreateResponse{Supported: true, Success: true, ContainerID: "container-1", Name: "web", Started: true}}
 	registry := NewRegistry(RegistryDependencies{Nodes: nodes, AgentOps: ops})
 
-	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","ports":[{"host_port":8080,"container_port":80,"protocol":"tcp"}],"start":true}`))
+	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[{"host_port":8080,"container_port":80,"protocol":"tcp"}],"start":true}`))
 	if err != nil {
 		t.Fatalf("validate Docker create: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestRegistryCreateDockerContainerPreservesPartialIdentityOnStartFailure(t *
 		Supported: true, Created: true, ContainerID: "container-1", Name: "web", Error: "Docker container created but start failed",
 	}}
 	registry := NewRegistry(RegistryDependencies{Nodes: nodes, AgentOps: ops})
-	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","start":true}`))
+	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"start":true}`))
 	if err != nil {
 		t.Fatalf("validate Docker create: %v", err)
 	}
@@ -124,6 +125,44 @@ func TestRegistryCreateDockerContainerPreservesPartialIdentityOnStartFailure(t *
 	}
 }
 
+func TestRegistryCreateDockerContainerAllowsExplicitAutoNameWithoutNameField(t *testing.T) {
+	_, nodes, _ := newMutationDatabase(t)
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "worker", Status: "online"}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	ops := &mutationNodeOperationsStub{dockerResponse: protocol.DockerContainerCreateResponse{Supported: true, Success: true, ContainerID: "container-1", Name: "generated-name", Started: true}}
+	registry := NewRegistry(RegistryDependencies{Nodes: nodes, AgentOps: ops})
+
+	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","auto_name":true,"restart_policy":"no","network_mode":"bridge","ports":[],"start":true}`))
+	if err != nil {
+		t.Fatalf("validate auto-named Docker create: %v", err)
+	}
+	if validated.Target.ID != "node-1/nginx:1.27" {
+		t.Fatalf("auto-named Docker target = %+v", validated.Target)
+	}
+	if _, err := registry.Execute(t.Context(), validated); err != nil {
+		t.Fatalf("execute auto-named Docker create: %v", err)
+	}
+	if ops.dockerRequest.Name != "" {
+		t.Fatalf("auto-named Docker request name = %q, want empty", ops.dockerRequest.Name)
+	}
+	_, err = registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"start":true}`))
+	var missing *missingCreationParametersError
+	if !errors.As(err, &missing) || !slices.Equal(missing.Fields, []string{"name"}) {
+		t.Fatalf("unnamed Docker create error = %v, missing = %+v", err, missing)
+	}
+
+	for _, definition := range registry.Definitions() {
+		if definition.Name != "create_docker_container" {
+			continue
+		}
+		required, _ := definition.Parameters["required"].([]string)
+		if slices.Contains(required, "name") {
+			t.Fatalf("Docker create schema requires name for auto-name choice: %v", required)
+		}
+	}
+}
+
 func TestRegistryCreateScheduledTaskUsesExistingScriptAndOnlineTaskRunner(t *testing.T) {
 	_, nodes, tasks := newMutationDatabase(t)
 	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "worker", Status: "online"}); err != nil {
@@ -134,7 +173,7 @@ func TestRegistryCreateScheduledTaskUsesExistingScriptAndOnlineTaskRunner(t *tes
 		t.Fatalf("create script: %v", err)
 	}
 	registry := NewRegistry(RegistryDependencies{Nodes: nodes, Tasks: tasks, AgentOps: &mutationNodeOperationsStub{taskRunner: true}})
-	validated, err := registry.Validate(t.Context(), "create_scheduled_task", json.RawMessage(`{"name":"nightly check","script_id":1,"node_ids":["node-1"],"cron_expression":"*/5 * * * *","timezone":"UTC","timeout_seconds":30,"notification_policy":"never"}`))
+	validated, err := registry.Validate(t.Context(), "create_scheduled_task", json.RawMessage(`{"name":"nightly check","script_id":1,"node_ids":["node-1"],"cron_expression":"*/5 * * * *","timezone":"UTC","enabled":true,"timeout_seconds":30,"notification_policy":"never"}`))
 	if err != nil {
 		t.Fatalf("validate scheduled task: %v", err)
 	}
@@ -183,5 +222,34 @@ func TestRegistryCreateK8sDeploymentUsesTypedFieldsOnly(t *testing.T) {
 		if _, err := registry.Validate(t.Context(), "create_k8s_deployment", json.RawMessage(raw)); !errors.Is(err, ErrInvalidArguments) {
 			t.Fatalf("Validate Deployment forbidden field error = %v, want ErrInvalidArguments", err)
 		}
+	}
+}
+
+func TestRegistryCreationToolsRequireExplicitMaterialParameters(t *testing.T) {
+	registry := NewRegistry(RegistryDependencies{})
+	cases := []struct {
+		name       string
+		raw        string
+		wantFields []string
+	}{
+		{name: "scheduled task", raw: `{}`, wantFields: []string{"name", "script_id", "node_ids", "cron_expression", "timezone", "enabled", "timeout_seconds", "notification_policy"}},
+		{name: "docker container", raw: `{"node_id":"node-1","image":"nginx"}`, wantFields: []string{"name", "auto_name", "restart_policy", "network_mode", "ports", "start"}},
+		{name: "kubernetes deployment", raw: `{"cluster_id":"cluster-1","namespace":"default","name":"web","image":"nginx"}`, wantFields: []string{"replicas", "container_port"}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := registry.Validate(t.Context(), map[string]string{
+				"scheduled task":        "create_scheduled_task",
+				"docker container":      "create_docker_container",
+				"kubernetes deployment": "create_k8s_deployment",
+			}[test.name], json.RawMessage(test.raw))
+			var missing *missingCreationParametersError
+			if !errors.As(err, &missing) {
+				t.Fatalf("error = %v, want missing creation parameters", err)
+			}
+			if !strings.EqualFold(strings.Join(missing.Fields, ","), strings.Join(test.wantFields, ",")) {
+				t.Fatalf("missing fields = %v, want %v", missing.Fields, test.wantFields)
+			}
+		})
 	}
 }

@@ -39,6 +39,7 @@ type createDockerContainerArguments struct {
 	NodeID        string                         `json:"node_id"`
 	Image         string                         `json:"image"`
 	Name          string                         `json:"name"`
+	AutoName      bool                           `json:"auto_name"`
 	RestartPolicy string                         `json:"restart_policy"`
 	NetworkMode   string                         `json:"network_mode"`
 	Ports         []protocol.DockerContainerPort `json:"ports"`
@@ -56,7 +57,7 @@ type createK8sDeploymentArguments struct {
 
 func (r *Registry) registerCreationTools() {
 	r.add(registeredTool{
-		definition: objectDefinition("create_scheduled_task", "Create a scheduled task from an existing saved script after confirmation. Script content and shell commands are not accepted.", map[string]any{
+		definition: objectDefinition("create_scheduled_task", "Create a scheduled task from an existing saved script after confirmation. Before calling, ask for and receive every creation setting: name, script, target nodes, Cron, timezone, enabled state, timeout, and notification policy. Script content and shell commands are not accepted.", map[string]any{
 			"name":                map[string]any{"type": "string", "maxLength": store.MaxAutomationNameRunes},
 			"script_id":           map[string]any{"type": "integer", "minimum": 1},
 			"node_ids":            map[string]any{"type": "array", "minItems": 1, "maxItems": store.MaxTaskNodes, "uniqueItems": true, "items": map[string]any{"type": "string", "maxLength": store.MaxTaskNodeIDBytes}},
@@ -65,11 +66,14 @@ func (r *Registry) registerCreationTools() {
 			"enabled":             map[string]any{"type": "boolean"},
 			"timeout_seconds":     map[string]any{"type": "integer", "minimum": 0, "maximum": store.MaxTaskTimeoutSeconds},
 			"notification_policy": map[string]any{"type": "string", "enum": []string{store.NotificationPolicyNever, store.NotificationPolicyFailure, store.NotificationPolicyAlways}},
-		}, []string{"name", "script_id", "node_ids", "cron_expression", "timezone"}),
+		}, []string{"name", "script_id", "node_ids", "cron_expression", "timezone", "enabled", "timeout_seconds", "notification_policy"}),
 		risk:       RiskConfirm,
 		capability: capabilityTaskCreation,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createScheduledTaskArguments
+			if err := requireCreationParameters(raw, "create_scheduled_task", "name", "script_id", "node_ids", "cron_expression", "timezone", "enabled", "timeout_seconds", "notification_policy"); err != nil {
+				return nil, ToolTarget{}, err
+			}
 			if err := strictArguments(raw, &args); err != nil || args.ScriptID <= 0 || len(args.NodeIDs) < 1 || len(args.NodeIDs) > store.MaxTaskNodes {
 				return nil, ToolTarget{}, ErrInvalidArguments
 			}
@@ -84,12 +88,8 @@ func (r *Registry) registerCreationTools() {
 				args.NodeIDs[index] = strings.TrimSpace(args.NodeIDs[index])
 			}
 			sort.Strings(args.NodeIDs)
-			if args.NotificationPolicy == "" {
-				args.NotificationPolicy = store.NotificationPolicyFailure
-			}
-			if args.Enabled == nil {
-				enabled := true
-				args.Enabled = &enabled
+			if args.NotificationPolicy == "" || args.Enabled == nil {
+				return nil, ToolTarget{}, ErrInvalidArguments
 			}
 			if err := validateScheduledTaskTargets(ctx, r, args); err != nil {
 				return nil, ToolTarget{}, err
@@ -126,33 +126,34 @@ func (r *Registry) registerCreationTools() {
 	})
 
 	r.add(registeredTool{
-		definition: objectDefinition("create_docker_container", "Create a bounded Docker container through the structured Docker API after confirmation. Shell commands, mounts, environment variables, and privileged mode are unavailable.", map[string]any{
+		definition: objectDefinition("create_docker_container", "Create a bounded Docker container through the structured Docker API after confirmation. Before calling, ask for and receive the target node, image, name or an explicit auto-name choice, restart policy, network mode, port mappings, and whether to start immediately. Shell commands, mounts, environment variables, and privileged mode are unavailable.", map[string]any{
 			"node_id":        map[string]any{"type": "string", "maxLength": 191},
 			"image":          map[string]any{"type": "string", "maxLength": maxAIImageBytes},
 			"name":           map[string]any{"type": "string", "maxLength": 128},
+			"auto_name":      map[string]any{"type": "boolean"},
 			"restart_policy": map[string]any{"type": "string", "enum": []string{"no", "always", "on-failure", "unless-stopped"}},
 			"network_mode":   map[string]any{"type": "string", "enum": []string{"bridge", "host", "none"}},
 			"ports":          map[string]any{"type": "array", "maxItems": maxAICreatePorts, "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"host_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "container_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}}}, "required": []string{"host_port", "container_port", "protocol"}}},
 			"start":          map[string]any{"type": "boolean"},
-		}, []string{"node_id", "image"}),
+		}, []string{"node_id", "image", "auto_name", "restart_policy", "network_mode", "ports", "start"}),
 		risk:       RiskConfirm,
 		capability: capabilityDockerAgent,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createDockerContainerArguments
-			if err := strictArguments(raw, &args); err != nil || !validDockerImage(args.Image) || len(args.Ports) > maxAICreatePorts || (args.Name != "" && !dockerContainerNamePattern.MatchString(args.Name)) || !oneOfDefault(args.RestartPolicy, "no") || !oneOfDefault(args.NetworkMode, "bridge") {
-				return nil, ToolTarget{}, ErrInvalidArguments
+			if err := requireCreationParameters(raw, "create_docker_container", "node_id", "image", "name", "auto_name", "restart_policy", "network_mode", "ports", "start"); err != nil {
+				return nil, ToolTarget{}, err
 			}
-			if r.dependencies.AgentOps == nil {
-				return nil, ToolTarget{}, ErrUnsupportedTool
+			if err := strictArguments(raw, &args); err != nil {
+				return nil, ToolTarget{}, ErrInvalidArguments
 			}
 			args.NodeID = strings.TrimSpace(args.NodeID)
 			args.Image = strings.TrimSpace(args.Image)
 			args.Name = strings.TrimSpace(args.Name)
-			if args.RestartPolicy == "" {
-				args.RestartPolicy = "no"
+			if !validDockerImage(args.Image) || len(args.Ports) > maxAICreatePorts || (args.AutoName && args.Name != "") || (!args.AutoName && !dockerContainerNamePattern.MatchString(args.Name)) || !oneOf(args.RestartPolicy, "no", "always", "on-failure", "unless-stopped") || !oneOf(args.NetworkMode, "bridge", "host", "none") {
+				return nil, ToolTarget{}, ErrInvalidArguments
 			}
-			if args.NetworkMode == "" {
-				args.NetworkMode = "bridge"
+			if r.dependencies.AgentOps == nil {
+				return nil, ToolTarget{}, ErrUnsupportedTool
 			}
 			if err := validateDockerPorts(args.Ports); err != nil {
 				return nil, ToolTarget{}, err
@@ -202,28 +203,28 @@ func (r *Registry) registerCreationTools() {
 	})
 
 	r.add(registeredTool{
-		definition: objectDefinition("create_k8s_deployment", "Create one generated Kubernetes Deployment after confirmation. Raw YAML and arbitrary resource kinds are unavailable.", map[string]any{
+		definition: objectDefinition("create_k8s_deployment", "Create one generated Kubernetes Deployment after confirmation. Before calling, ask for and receive the cluster, namespace, Deployment name, image, replica count, and whether to expose a container port. Raw YAML and arbitrary resource kinds are unavailable.", map[string]any{
 			"cluster_id":     map[string]any{"type": "string", "maxLength": 191},
 			"namespace":      map[string]any{"type": "string", "maxLength": 63},
 			"name":           map[string]any{"type": "string", "maxLength": 63},
 			"image":          map[string]any{"type": "string", "maxLength": maxAIImageBytes},
 			"replicas":       map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
 			"container_port": map[string]any{"type": "integer", "minimum": 0, "maximum": 65535},
-		}, []string{"cluster_id", "namespace", "name", "image"}),
+		}, []string{"cluster_id", "namespace", "name", "image", "replicas", "container_port"}),
 		risk:       RiskConfirm,
 		capability: capabilityKubernetesMutation,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createK8sDeploymentArguments
-			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ClusterID, 191) || args.Replicas < 0 || args.ContainerPort < 0 || args.ContainerPort > 65535 || !validDockerImage(args.Image) {
+			if err := requireCreationParameters(raw, "create_k8s_deployment", "cluster_id", "namespace", "name", "image", "replicas", "container_port"); err != nil {
+				return nil, ToolTarget{}, err
+			}
+			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ClusterID, 191) || args.Replicas < 1 || args.ContainerPort < 0 || args.ContainerPort > 65535 || !validDockerImage(args.Image) {
 				return nil, ToolTarget{}, ErrInvalidArguments
 			}
 			args.ClusterID = strings.TrimSpace(args.ClusterID)
 			args.Namespace = strings.TrimSpace(args.Namespace)
 			args.Name = strings.TrimSpace(args.Name)
 			args.Image = strings.TrimSpace(args.Image)
-			if args.Replicas == 0 {
-				args.Replicas = 1
-			}
 			if r.dependencies.Kubernetes == nil || r.dependencies.KubernetesMutations == nil {
 				return nil, ToolTarget{}, ErrUnsupportedTool
 			}
@@ -247,9 +248,6 @@ func (r *Registry) registerCreationTools() {
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args createK8sDeploymentArguments
 			_ = json.Unmarshal(raw, &args)
-			if args.Replicas == 0 {
-				args.Replicas = 1
-			}
 			port := (*int32)(nil)
 			if args.ContainerPort > 0 {
 				value := args.ContainerPort
@@ -341,18 +339,114 @@ func validDockerImage(value string) bool {
 	return value != "" && len(value) <= maxAIImageBytes && !strings.ContainsAny(value, " \t\r\n;|&$<>\"'`\x00")
 }
 
-func oneOfDefault(value, defaultValue string) bool {
-	if value == "" {
+type missingCreationParametersError struct {
+	ToolName string
+	Fields   []string
+}
+
+func (e *missingCreationParametersError) Error() string {
+	return "missing AI creation parameters"
+}
+
+func (e *missingCreationParametersError) Unwrap() error {
+	return ErrInvalidArguments
+}
+
+func requireCreationParameters(raw json.RawMessage, toolName string, fields ...string) error {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return ErrInvalidArguments
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+		return ErrInvalidArguments
+	}
+	missing := make([]string, 0)
+	for _, field := range fields {
+		if creationParameterValueMissing(toolName, field, values[field], values) {
+			missing = append(missing, field)
+		}
+	}
+	if len(missing) > 0 {
+		return &missingCreationParametersError{ToolName: toolName, Fields: missing}
+	}
+	return nil
+}
+
+func creationParameterValueMissing(toolName, field string, value json.RawMessage, values map[string]json.RawMessage) bool {
+	if toolName == "create_docker_container" && field == "name" {
+		var autoName bool
+		if json.Unmarshal(values["auto_name"], &autoName) == nil && autoName {
+			return false
+		}
+	}
+	if len(value) == 0 || strings.TrimSpace(string(value)) == "null" {
 		return true
 	}
-	switch defaultValue {
-	case "no":
-		return oneOf(value, "no", "always", "on-failure", "unless-stopped")
-	case "bridge":
-		return oneOf(value, "bridge", "host", "none")
+	switch field {
+	case "node_ids":
+		var items []string
+		return json.Unmarshal(value, &items) != nil || len(items) == 0
+	case "script_id":
+		var id int64
+		return json.Unmarshal(value, &id) != nil || id <= 0
+	case "replicas":
+		var replicas int32
+		return json.Unmarshal(value, &replicas) != nil || replicas < 1
+	case "name", "cluster_id", "namespace", "image", "cron_expression", "timezone", "restart_policy", "network_mode", "notification_policy":
+		var text string
+		return json.Unmarshal(value, &text) != nil || strings.TrimSpace(text) == ""
 	default:
 		return false
 	}
+}
+
+func missingCreationParameterFields(err error) []string {
+	var missing *missingCreationParametersError
+	if !errors.As(err, &missing) {
+		return nil
+	}
+	return append([]string(nil), missing.Fields...)
+}
+
+func creationParameterPrompt(fields []string) string {
+	labels := map[string]string{
+		"node_id":             "目标节点",
+		"image":               "镜像",
+		"name":                "名称",
+		"auto_name":           "是否使用自动命名",
+		"restart_policy":      "重启策略",
+		"network_mode":        "网络模式",
+		"ports":               "端口映射（或确认不映射）",
+		"start":               "是否立即启动",
+		"cluster_id":          "Kubernetes 集群",
+		"namespace":           "命名空间",
+		"replicas":            "副本数",
+		"container_port":      "端口暴露选择（或确认不暴露）",
+		"script_id":           "已有脚本",
+		"node_ids":            "目标节点",
+		"cron_expression":     "Cron 表达式",
+		"timezone":            "时区",
+		"enabled":             "是否启用",
+		"timeout_seconds":     "超时时间",
+		"notification_policy": "通知策略",
+	}
+	seen := make(map[string]struct{}, len(fields))
+	values := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		if label, ok := labels[field]; ok {
+			values = append(values, label)
+		} else {
+			values = append(values, "创建参数")
+		}
+	}
+	if len(values) == 0 {
+		return ""
+	}
+	return "创建操作还需要确认：" + strings.Join(values, "、") + "。请补充这些参数后再继续，当前未创建任何资源。"
 }
 
 func validateDockerPorts(ports []protocol.DockerContainerPort) error {

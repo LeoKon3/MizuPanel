@@ -2,6 +2,16 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.23 - 2026-08-09
+
+### Fixed
+
+- Fixed AI operation plans appearing above messages from later conversation
+  turns instead of remaining with the turn that created them.
+- Fixed AI creation tools silently accepting omitted behavior-changing settings;
+  Docker containers, Kubernetes Deployments, and scheduled tasks now ask for
+  all required creation parameters before a confirmation plan is generated.
+
 ## v0.1.22 - 2026-08-08
 
 ### Added

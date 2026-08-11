@@ -191,6 +191,88 @@ func TestServiceCancellationFailsTurnWithoutAssistantMessage(t *testing.T) {
 	}
 }
 
+func TestServiceIncompleteCreationCallAsksForParametersWithoutCreatingAPlan(t *testing.T) {
+	const toolName = "create_docker_container"
+	definition := objectDefinition(toolName, "create a Docker container", map[string]any{"image": map[string]any{"type": "string"}}, []string{"image"})
+	registry := &Registry{
+		tools:   map[string]registeredTool{},
+		ordered: []ToolDefinition{definition},
+	}
+	registry.tools[toolName] = registeredTool{
+		definition: definition,
+		risk:       RiskConfirm,
+		capability: capabilityDockerAgent,
+		validate: func(context.Context, json.RawMessage) (json.RawMessage, ToolTarget, error) {
+			return nil, ToolTarget{}, &missingCreationParametersError{ToolName: toolName, Fields: []string{"image", "replicas"}}
+		},
+	}
+	adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+		return ChatResponse{ToolCalls: []ToolCall{{ID: "call-1", Name: toolName, Arguments: json.RawMessage(`{"image":"nginx"}`)}}}, nil
+	}}
+	service, aiStore, _ := newServiceTestFixture(t, registry, adapter)
+	provider := createCapableServiceProvider(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "Creation parameters")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	result, err := service.Send(t.Context(), conversation.ID, provider.ID, "create a container", nil)
+	if err != nil {
+		t.Fatalf("send incomplete creation request: %v", err)
+	}
+	if result.Plan != nil || result.Message == nil || !strings.Contains(result.Message.Content, "镜像") || !strings.Contains(result.Message.Content, "副本数") {
+		t.Fatalf("incomplete creation result = %+v", result)
+	}
+	calls, err := aiStore.ListToolCalls(t.Context(), conversation.ID)
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("tool calls after incomplete creation = %+v", calls)
+	}
+}
+
+func TestServiceIncompleteK8sCreationCallAsksForParametersWithoutCreatingAPlan(t *testing.T) {
+	const toolName = "create_k8s_deployment"
+	definition := objectDefinition(toolName, "create a Kubernetes Deployment", map[string]any{"image": map[string]any{"type": "string"}}, []string{"image"})
+	registry := &Registry{
+		tools:   map[string]registeredTool{},
+		ordered: []ToolDefinition{definition},
+	}
+	registry.tools[toolName] = registeredTool{
+		definition: definition,
+		risk:       RiskConfirm,
+		capability: capabilityKubernetesMutation,
+		validate: func(context.Context, json.RawMessage) (json.RawMessage, ToolTarget, error) {
+			return nil, ToolTarget{}, &missingCreationParametersError{ToolName: toolName, Fields: []string{"cluster_id", "namespace", "name", "image", "replicas", "container_port"}}
+		},
+	}
+	adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+		return ChatResponse{ToolCalls: []ToolCall{{ID: "call-1", Name: toolName, Arguments: json.RawMessage(`{"image":"nginx"}`)}}}, nil
+	}}
+	service, aiStore, _ := newServiceTestFixture(t, registry, adapter)
+	provider := createCapableServiceProvider(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "Deployment parameters")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	result, err := service.Send(t.Context(), conversation.ID, provider.ID, "create a deployment", nil)
+	if err != nil {
+		t.Fatalf("send incomplete deployment request: %v", err)
+	}
+	if result.Plan != nil || result.Message == nil || !strings.Contains(result.Message.Content, "Kubernetes 集群") || !strings.Contains(result.Message.Content, "副本数") || !strings.Contains(result.Message.Content, "端口暴露选择") {
+		t.Fatalf("incomplete deployment result = %+v", result)
+	}
+	calls, err := aiStore.ListToolCalls(t.Context(), conversation.ID)
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("tool calls after incomplete deployment = %+v", calls)
+	}
+}
+
 func TestServiceConnectionUpdateInvalidatesCapabilitiesAndDefault(t *testing.T) {
 	var completeCalls atomic.Int32
 	adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {

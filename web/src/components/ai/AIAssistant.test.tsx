@@ -548,6 +548,34 @@ describe('AI assistant', () => {
     await waitFor(() => expect(confirmPlan).toHaveBeenCalledWith(plan))
   })
 
+  test('keeps a plan with its own Turn when a later message is added', () => {
+    const firstUser: AIMessage = {
+      id: 'message-plan-user', conversation_id: conversation.id, turn_id: 'turn-plan-order', role: 'user',
+      content: 'create a container', provider_name: 'Primary', model: primaryModel.model_id, created_at: '2026-08-05T00:00:00Z'
+    }
+    const firstAssistant: AIMessage = {
+      id: 'message-plan-assistant', conversation_id: conversation.id, turn_id: 'turn-plan-order', role: 'assistant',
+      content: '准备创建容器。', provider_name: 'Primary', model: primaryModel.model_id, created_at: '2026-08-05T00:00:01Z'
+    }
+    const laterUser: AIMessage = {
+      id: 'message-later-user', conversation_id: conversation.id, turn_id: 'turn-later', role: 'user',
+      content: 'show me the current nodes', provider_name: 'Primary', model: primaryModel.model_id, created_at: '2026-08-05T00:00:02Z'
+    }
+    const step = { ...pendingCall, turn_id: 'turn-plan-order', step_index: 0, result_summary: '创建容器' }
+    const plan: AIOperationPlan = {
+      id: 'turn-plan-order', turn_id: 'turn-plan-order', status: 'pending', current_step: -1, steps: [step]
+    }
+    const state = assistant({ conversation: { conversation, messages: [firstUser, firstAssistant, laterUser], tool_calls: [step], plans: [plan] } })
+    render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+
+    const drawer = screen.getByTestId('ai-drawer-messages')
+    const firstAnswer = within(drawer).getByText('准备创建容器。')
+    const planRegion = within(drawer).getByRole('region', { name: 'AI 变更计划' })
+    const laterQuestion = within(drawer).getByText('show me the current nodes')
+    expect(Boolean(firstAnswer.compareDocumentPosition(planRegion) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+    expect(Boolean(planRegion.compareDocumentPosition(laterQuestion) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+  })
+
   test.each([
     { status: 'success', summary: '节点已重启', expected: 'success:AI 运维操作执行成功' },
     { status: 'accepted', summary: '重启请求已提交', expected: 'success:AI 运维操作已接受，正在处理中' },

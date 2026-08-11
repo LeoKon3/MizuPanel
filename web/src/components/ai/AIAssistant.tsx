@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, CheckCircle2, ChevronRight, Circle, CircleAlert, CircleX, Clock3, LoaderCircle, Maximize2, MessageSquarePlus, PanelRightClose, Plus, Send, Settings2, Square, Trash2, X } from 'lucide-react'
 
 import type { AIOperationPlan, AIProgress, AIToolCall } from '../../types'
@@ -93,6 +93,79 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   const selected = findAIModel(assistant.providers, assistant.selectedModelID)
   const canSend = selected?.provider.id === assistant.selectedProviderID && isAIModelUsable(selected.provider, selected.model)
   const activeSending = assistant.sending && assistant.sendingConversationID === assistant.activeConversationID
+  const plansByTurn = new Map<string, AIOperationPlan[]>()
+  for (const plan of plans) {
+    const current = plansByTurn.get(plan.turn_id) ?? []
+    current.push(plan)
+    plansByTurn.set(plan.turn_id, current)
+  }
+  const legacyCalls = toolCalls.filter((call) => call.status === 'pending' && (call.step_index ?? -1) < 0)
+  const legacyCallsByTurn = new Map<string, AIToolCall[]>()
+  for (const call of legacyCalls) {
+    const current = legacyCallsByTurn.get(call.turn_id) ?? []
+    current.push(call)
+    legacyCallsByTurn.set(call.turn_id, current)
+  }
+  const messageTurnIDs = new Set(messages.map((message) => message.turn_id))
+  const lastMessageIndexByTurn = new Map<string, number>()
+  messages.forEach((message, index) => lastMessageIndexByTurn.set(message.turn_id, index))
+
+  const renderPlan = (plan: AIOperationPlan) => (
+    <section key={plan.id} aria-label="AI 变更计划" className={`border px-3 py-3 ${plan.status === 'pending' ? 'border-warning/40 bg-warning/10' : 'border-border bg-surface/70'}`}>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-black text-foreground">变更计划 · {plan.steps.length} 步</p>
+          <p className="mt-1 text-xs font-semibold text-muted-foreground">按顺序执行，任一步失败后停止</p>
+        </div>
+        <span className={`shrink-0 text-xs font-black ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
+      </div>
+      <ol className="mt-3 border-t border-border/70">
+        {plan.steps.map((step, index) => (
+          <li key={step.id} className="flex min-w-0 gap-2 border-b border-border/70 py-2 last:border-b-0">
+            <span className="mt-0.5 shrink-0"><PlanStepIcon status={step.status} /></span>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <p className="min-w-0 break-words text-xs font-black text-foreground">{index + 1}. {toolLabels[step.tool_name] ?? step.tool_name}</p>
+                <span className="shrink-0 text-[11px] font-bold text-muted-foreground">{planStepStatusText(step.status)}</span>
+              </div>
+              <p className="mt-0.5 break-words text-xs font-semibold text-muted-foreground">{toolTarget(step)}</p>
+              {step.result_summary ? <p className="mt-0.5 break-words text-xs font-semibold text-muted-foreground">{step.result_summary}</p> : null}
+            </div>
+          </li>
+        ))}
+      </ol>
+      {plan.status === 'pending' ? (
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <button type="button" disabled={assistant.operationID === plan.id} onClick={() => void assistant.rejectPlan(plan)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
+          <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmPlan(plan)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
+        </div>
+      ) : null}
+    </section>
+  )
+
+  const renderLegacyCall = (call: AIToolCall) => (
+    <div key={call.id} className="border border-warning/40 bg-warning/10 px-3 py-3">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-black text-foreground">{toolLabels[call.tool_name] ?? call.tool_name}</p>
+          <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">目标：{toolTarget(call)}</p>
+          {call.result_summary ? <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">{call.result_summary}</p> : null}
+        </div>
+        <span className="shrink-0 text-xs font-black text-warning">等待确认</span>
+      </div>
+      <div className="mt-3 flex flex-wrap justify-end gap-2">
+        <button type="button" disabled={assistant.operationID === call.id} onClick={() => void assistant.reject(call)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
+        <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmCall(call)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
+      </div>
+    </div>
+  )
+
+  const renderTurnArtifacts = (turnID: string) => {
+    const turnPlans = plansByTurn.get(turnID) ?? []
+    const turnCalls = legacyCallsByTurn.get(turnID) ?? []
+    if (turnPlans.length === 0 && turnCalls.length === 0) return null
+    return <Fragment key={`turn-artifacts-${turnID}`}>{turnPlans.map(renderPlan)}{turnCalls.map(renderLegacyCall)}</Fragment>
+  }
 
   useEffect(() => {
     if (confirmCall || confirmPlan) dialogRef.current?.focus()
@@ -164,22 +237,28 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
           </div>
         ) : (
           <div className="space-y-3">
-            {messages.map((message) => {
+            {messages.map((message, index) => {
               const turn = assistant.turnResults[message.turn_id]
               return (
-                <article key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[88%] min-w-0 border px-3 py-2.5 text-sm font-semibold leading-6 ${message.role === 'user' ? 'border-primary/30 bg-primary text-primary-foreground' : 'border-border bg-surface text-foreground'}`}>
-                    <p className="whitespace-pre-wrap break-words">{message.content}</p>
-                    {message.role === 'assistant' && (message.provider_name || message.model) ? (
-                      <p className="mt-1 truncate text-[11px] font-bold opacity-60">
-                        {turn?.fallback_used ? '备用响应 · ' : ''}{[message.provider_name, message.model].filter(Boolean).join(' / ')}
-                        {turn?.fallback_used && turn.requested_model ? `（原请求 ${turn.requested_provider_name} / ${turn.requested_model}）` : ''}
-                      </p>
-                    ) : null}
-                  </div>
-                </article>
+                <Fragment key={message.id}>
+                  <article className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[88%] min-w-0 border px-3 py-2.5 text-sm font-semibold leading-6 ${message.role === 'user' ? 'border-primary/30 bg-primary text-primary-foreground' : 'border-border bg-surface text-foreground'}`}>
+                      <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                      {message.role === 'assistant' && (message.provider_name || message.model) ? (
+                        <p className="mt-1 truncate text-[11px] font-bold opacity-60">
+                          {turn?.fallback_used ? '备用响应 · ' : ''}{[message.provider_name, message.model].filter(Boolean).join(' / ')}
+                          {turn?.fallback_used && turn.requested_model ? `（原请求 ${turn.requested_provider_name} / ${turn.requested_model}）` : ''}
+                        </p>
+                      ) : null}
+                    </div>
+                  </article>
+                  {lastMessageIndexByTurn.get(message.turn_id) === index ? renderTurnArtifacts(message.turn_id) : null}
+                </Fragment>
               )
             })}
+
+            {plans.filter((plan) => !messageTurnIDs.has(plan.turn_id)).map(renderPlan)}
+            {legacyCalls.filter((call) => !messageTurnIDs.has(call.turn_id)).map(renderLegacyCall)}
 
             {activeSending && assistant.streamedContent ? (
               <article className="flex justify-start" aria-live="polite">
@@ -188,56 +267,6 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
                 </div>
               </article>
             ) : null}
-
-            {plans.map((plan) => (
-              <section key={plan.id} aria-label="AI 变更计划" className={`border px-3 py-3 ${plan.status === 'pending' ? 'border-warning/40 bg-warning/10' : 'border-border bg-surface/70'}`}>
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-black text-foreground">变更计划 · {plan.steps.length} 步</p>
-                    <p className="mt-1 text-xs font-semibold text-muted-foreground">按顺序执行，任一步失败后停止</p>
-                  </div>
-                  <span className={`shrink-0 text-xs font-black ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
-                </div>
-                <ol className="mt-3 border-t border-border/70">
-                  {plan.steps.map((step, index) => (
-                    <li key={step.id} className="flex min-w-0 gap-2 border-b border-border/70 py-2 last:border-b-0">
-                      <span className="mt-0.5 shrink-0"><PlanStepIcon status={step.status} /></span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex min-w-0 items-start justify-between gap-2">
-                          <p className="min-w-0 break-words text-xs font-black text-foreground">{index + 1}. {toolLabels[step.tool_name] ?? step.tool_name}</p>
-                          <span className="shrink-0 text-[11px] font-bold text-muted-foreground">{planStepStatusText(step.status)}</span>
-                        </div>
-                        <p className="mt-0.5 break-words text-xs font-semibold text-muted-foreground">{toolTarget(step)}</p>
-                        {step.result_summary ? <p className="mt-0.5 break-words text-xs font-semibold text-muted-foreground">{step.result_summary}</p> : null}
-                      </div>
-                    </li>
-                  ))}
-                </ol>
-                {plan.status === 'pending' ? (
-                  <div className="mt-3 flex flex-wrap justify-end gap-2">
-                    <button type="button" disabled={assistant.operationID === plan.id} onClick={() => void assistant.rejectPlan(plan)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
-                    <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmPlan(plan)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
-                  </div>
-                ) : null}
-              </section>
-            ))}
-
-            {toolCalls.filter((call) => call.status === 'pending' && (call.step_index ?? -1) < 0).map((call) => (
-              <div key={call.id} className={`border px-3 py-3 ${call.status === 'pending' ? 'border-warning/40 bg-warning/10' : 'border-border bg-surface/70'}`}>
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-black text-foreground">{toolLabels[call.tool_name] ?? call.tool_name}</p>
-                    <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">目标：{toolTarget(call)}</p>
-                    {call.result_summary ? <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">{call.result_summary}</p> : null}
-                  </div>
-                  <span className="shrink-0 text-xs font-black text-warning">等待确认</span>
-                </div>
-                <div className="mt-3 flex flex-wrap justify-end gap-2">
-                  <button type="button" disabled={assistant.operationID === call.id} onClick={() => void assistant.reject(call)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
-                  <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmCall(call)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
-                </div>
-              </div>
-            ))}
 
             {activeSending ? (
               <div className="space-y-1.5 text-xs font-bold text-muted-foreground" role="status">

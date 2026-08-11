@@ -133,7 +133,7 @@ func TestOperationalContextRequiresAgentDockerCreateCapability(t *testing.T) {
 	if hasToolDefinition(definitions, "create_docker_container") {
 		t.Fatal("Docker create was advertised for a legacy Agent")
 	}
-	if _, err := legacy.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:latest"}`)); !errors.Is(err, ErrUnsupportedTool) {
+	if _, err := legacy.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:latest","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"start":true}`)); !errors.Is(err, ErrUnsupportedTool) {
 		t.Fatalf("legacy Docker create validation error = %v, want unsupported", err)
 	}
 
