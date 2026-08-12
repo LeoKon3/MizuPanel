@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.23-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.24-14B8A6">
 </p>
 
 <p align="center">
@@ -145,6 +145,19 @@ Dashboard 顶层的 **日志中心**（`/logs`）以一次一个具体目标的�
 AI 只能调用 Server 内置的固定运维工具。故障、告警、节点、服务、拨测、指标和有界日志查询可自动执行；主机重启、Agent 升级、Docker/Compose/Systemd 状态变更和已有脚本执行必须先展示目标与影响，再由管理员在自定义确认窗口中批准。任意 Shell、文件写删、资源删除和 Kubernetes 写操作不在工具范围内。
 
 Provider API Key 由 Server 使用 `data/ai.key` 加密后保存，读取接口不会返回明文或密文。回退只适用于首次模型调用在任何工具执行前发生的超时、限流或上游不可用，并且只重试一次；认证、协议、取消和工具执行后的错误不会触发回退。备份或迁移时必须同时保留数据库和 `ai.key`。模型提示词、原始响应、工具原始输出和日志内容不会作为会话历史持久化。完整配置与数据边界见 [配置部署文档](docs/configuration.md)。
+
+<strong>Docker 镜像部署</strong>
+
+正式镜像发布在 Docker Hub。目标机只需要 Docker Engine 与 Docker Compose，不需要仓库源码、Go 或 Node.js；仓库 Compose 默认锁定不可变版本 `leokon3/mizupanel:0.1.24`：
+
+```bash
+mkdir -p mizupanel && cd mizupanel
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.24/docker-compose.yml
+docker compose pull
+docker compose up -d
+```
+
+如需通过服务器 IP 或局域网访问，使用 `MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d` 重建容器。升级、回滚、MySQL、数据与 `ai.key` 备份以及自定义镜像地址见 [配置部署文档](docs/configuration.md)。`latest` 只适合临时体验，生产部署应固定 SemVer 镜像。
 
 <strong>Release 包部署运行</strong>
 

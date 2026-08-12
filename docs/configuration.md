@@ -4,24 +4,33 @@
 
 这份文档收纳 README 中不适合展开太长的细节：Docker、Release 包、`server.yaml`、Agent 安装、认证、AI Provider、告警、计划任务、操作审计和 Token 模型。
 
-## Docker 部署
+## Docker 部署（SQLite）
 
-默认 `docker-compose.yml` 使用 SQLite，并把数据库持久化到 `./data/mizupanel.db`。配置 AI Provider 后，同一目录还会保存加密主密钥 `./data/ai.key`。
+正式镜像发布在公开 Docker Hub 仓库 `leokon3/mizupanel`。目标机只需要 Docker Engine、Docker Compose 和版本化 Compose 文件，不需要 MizuPanel 源码、Go、Node.js 或本地镜像构建环境。仓库提供的 Compose 默认锁定 `leokon3/mizupanel:0.1.24`，不会跟随漂移的 `latest`。
+
+首次部署：
 
 ```bash
+mkdir -p mizupanel && cd mizupanel
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.24/docker-compose.yml
+docker compose pull
 docker compose up -d
+docker compose logs -f mizupanel
 ```
 
-默认端口绑定为 `127.0.0.1:8080`。如果需要从服务器 IP 或局域网访问，显式设置绑定地址：
+默认端口绑定为 `127.0.0.1:8080`。如果需要从服务器 IP 或局域网访问，显式设置绑定地址并重建容器：
 
 ```bash
 MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d
 ```
 
+SQLite 数据库持久化到 `${MIZUPANEL_DATA_DIR:-./data}/mizupanel.db`。配置 AI Provider 后，同一宿主机目录还会保存加密主密钥 `ai.key`。
+
 常用环境变量：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `MIZUPANEL_IMAGE` | `leokon3/mizupanel:0.1.24` | 完整镜像引用；可用于指定版本、镜像加速地址、测试镜像或回滚 |
 | `MIZUPANEL_BIND_ADDR` | `127.0.0.1` | Docker 端口绑定地址 |
 | `MIZUPANEL_PORT` | `8080` | 宿主机端口 |
 | `MIZUPANEL_DATA_DIR` | `./data` | SQLite 数据库和 AI 主密钥目录 |
@@ -31,57 +40,115 @@ MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d
 | `MIZUPANEL_TASK_RETENTION` | `30d` | 任务执行历史保留时间 |
 | `MIZUPANEL_TASK_CLEANUP_INTERVAL` | `1h` | 任务历史清理间隔 |
 
-常用命令：
+`MIZUPANEL_IMAGE` 必须是完整镜像引用，例如 `registry.example.com/mirror/mizupanel:0.1.24`。`latest` 只适合临时体验；生产、升级和回滚都应使用明确的 SemVer 标签。
+
+升级前必须备份整个数据目录，让 `mizupanel.db` 和 `ai.key` 保持在同一份备份中：
 
 ```bash
-docker compose logs -f
-docker compose down
+docker compose stop mizupanel
+tar -czf "mizupanel-sqlite-$(date +%Y%m%d-%H%M%S).tar.gz" "${MIZUPANEL_DATA_DIR:-./data}"
+docker compose start mizupanel
 ```
 
-备份或迁移 SQLite 部署时，必须把 `mizupanel.db` 和 `ai.key` 一起保存。数据库包含加密后的 Provider 凭据，但只有原 `ai.key` 可以解密；不要输出、复制到文档或单独公开该密钥内容。
+升级到指定已发布版本只拉取镜像并重建容器，不执行本地构建。把完整镜像引用持久化到当前部署目录的 `.env`，以后执行普通 Compose 命令也不会退回文件中的旧默认版本。下面以未来目标版本 `0.1.25` 为例；发布后将变量改为实际版本：
+
+在 `.env` 中设置：
+
+```dotenv
+MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.25
+```
+
+保留文件中已有的绑定地址和其他配置，然后执行：
+
+```bash
+chmod 600 .env
+docker compose pull mizupanel
+docker compose up -d
+docker compose logs --tail=100 mizupanel
+curl -fsS "http://127.0.0.1:${MIZUPANEL_PORT:-8080}/api/system/about"
+```
+
+如果新版本验收失败，把 `.env` 中同一行切回上一个 SemVer 标签：
+
+```dotenv
+MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.24
+```
+
+然后重建；需要恢复数据时使用升级前备份：
+
+```bash
+docker compose pull mizupanel
+docker compose up -d
+docker compose logs --tail=100 mizupanel
+```
+
+停止但保留数据使用 `docker compose down`。不要在未确认备份可用时删除 `${MIZUPANEL_DATA_DIR:-./data}`。
 
 ## Docker 使用 MySQL
 
-MySQL 版本使用 `docker-compose.mysql.yml` 和 `docker/server.mysql.yaml`。启动前先设置数据库环境变量：
+MySQL 部署只需要版本化的 `docker-compose.mysql.yml`；MySQL Server 配置已经包含在 MizuPanel 镜像中，不再需要下载或挂载 `docker/server.mysql.yaml`：
 
 ```bash
+mkdir -p mizupanel && cd mizupanel
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.24/docker-compose.mysql.yml
 export MIZUPANEL_MYSQL_DATABASE=mizupanel
 export MIZUPANEL_MYSQL_USERNAME=mizupanel
 export MIZUPANEL_MYSQL_PASSWORD='换成你的数据库密码'
 export MIZUPANEL_MYSQL_ROOT_PASSWORD='换成你的 Root 密码'
-```
-
-启动：
-
-```bash
+docker compose -f docker-compose.mysql.yml pull
 docker compose -f docker-compose.mysql.yml up -d
+docker compose -f docker-compose.mysql.yml logs -f mizupanel
 ```
 
-如果需要从服务器 IP 或局域网访问：
+四个数据库变量在每次 Compose 解析时都必须可用；可由受保护的部署环境或权限为 `0600` 的 `.env` 文件提供，不要提交到仓库。如果需要从服务器 IP 或局域网访问：
 
 ```bash
 MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose -f docker-compose.mysql.yml up -d
 ```
 
-MySQL 数据保存在 Docker volume：
-
-```text
-mizupanel_mizupanel-mysql-data
-```
-
-AI 主密钥不存储在 MySQL 中。MizuPanel 容器仍将 `${MIZUPANEL_DATA_DIR:-./data}` 挂载到 `/app/data`，因此备份 MySQL 时也必须同时备份宿主机数据目录中的 `ai.key`。
-
-停止但保留数据：
+MySQL 数据保存在 Docker volume `mizupanel_mizupanel-mysql-data`。AI 主密钥不存储在 MySQL 中；MizuPanel 容器仍将 `${MIZUPANEL_DATA_DIR:-./data}` 挂载到 `/app/data`。升级前必须同时导出 MySQL 和备份该宿主机目录：
 
 ```bash
-docker compose -f docker-compose.mysql.yml down
+docker compose -f docker-compose.mysql.yml exec -T mysql \
+  sh -c 'exec mysqldump --single-transaction -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' \
+  > "mizupanel-mysql-$(date +%Y%m%d-%H%M%S).sql"
+tar -czf "mizupanel-ai-key-$(date +%Y%m%d-%H%M%S).tar.gz" "${MIZUPANEL_DATA_DIR:-./data}"
 ```
 
-停止并删除 MySQL 数据：
+升级或回滚 MizuPanel 容器时保留 MySQL volume，只修改受保护 `.env` 中的 `MIZUPANEL_IMAGE`，并确保四个 MySQL 变量仍然存在：
+
+升级时 `.env` 至少包含：
+
+```dotenv
+MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.25
+MIZUPANEL_MYSQL_DATABASE=mizupanel
+MIZUPANEL_MYSQL_USERNAME=mizupanel
+MIZUPANEL_MYSQL_PASSWORD=换成你的数据库密码
+MIZUPANEL_MYSQL_ROOT_PASSWORD=换成你的 Root 密码
+```
+
+然后执行：
 
 ```bash
-docker compose -f docker-compose.mysql.yml down -v
+chmod 600 .env
+docker compose -f docker-compose.mysql.yml pull mizupanel
+docker compose -f docker-compose.mysql.yml up -d
 ```
+
+回滚时只把 `.env` 中的镜像行改为：
+
+```dotenv
+MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.24
+```
+
+再执行：
+
+```bash
+docker compose -f docker-compose.mysql.yml pull mizupanel
+docker compose -f docker-compose.mysql.yml up -d
+```
+
+停止但保留数据使用 `docker compose -f docker-compose.mysql.yml down`。`docker compose -f docker-compose.mysql.yml down -v` 会删除 MySQL 数据卷，只能在已确认备份并明确需要清空数据库时执行。
 
 ## Release 包部署
 

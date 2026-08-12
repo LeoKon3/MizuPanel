@@ -2,6 +2,20 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.24 - 2026-08-11
+
+### Added
+
+- Added Docker Hub release publishing for one `linux/amd64` and `linux/arm64`
+  manifest under immutable SemVer and convenience `latest` tags.
+
+### Changed
+
+- Changed the SQLite and MySQL Compose deployments to pull the pinned
+  `leokon3/mizupanel:0.1.24` image instead of building from a source checkout.
+- Added image-based deployment, backup, upgrade, and rollback documentation,
+  including the Docker Hub secret boundary for release operators.
+
 ## v0.1.23 - 2026-08-09
 
 ### Fixed

@@ -63,6 +63,9 @@ func TestReleaseVersionSurfacesStayInSync(t *testing.T) {
 	assertReadmeBadge(t, filepath.Join(repositoryRoot, "README.md"), Current)
 	assertReadmeBadge(t, filepath.Join(repositoryRoot, "README.en.md"), Current)
 	assertLatestChangelogVersion(t, filepath.Join(repositoryRoot, "CHANGELOG.md"), Current)
+	assertComposeDefaultImage(t, filepath.Join(repositoryRoot, "docker-compose.yml"), Current)
+	assertComposeDefaultImage(t, filepath.Join(repositoryRoot, "docker-compose.mysql.yml"), Current)
+	assertDockerImageIncludesVersion(t, filepath.Join(repositoryRoot, "Dockerfile"))
 }
 
 func assertTextVersion(t *testing.T, path, expected string) {
@@ -146,5 +149,35 @@ func assertLatestChangelogVersion(t *testing.T, path, expected string) {
 	}
 	if match[1] != expected {
 		t.Fatalf("latest changelog version = %q, want %q", match[1], expected)
+	}
+}
+
+func assertComposeDefaultImage(t *testing.T, path, expectedVersion string) {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	imagePattern := regexp.MustCompile(`(?m)^\s*image:\s*\$\{MIZUPANEL_IMAGE:-([^}\s]+)\}\s*$`)
+	matches := imagePattern.FindAllStringSubmatch(string(content), -1)
+	if len(matches) != 1 {
+		t.Fatalf("%s has %d MIZUPANEL_IMAGE defaults, want 1", path, len(matches))
+	}
+	want := "leokon3/mizupanel:" + expectedVersion
+	if matches[0][1] != want {
+		t.Fatalf("%s default image = %q, want %q", path, matches[0][1], want)
+	}
+}
+
+func assertDockerImageIncludesVersion(t *testing.T, path string) {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !regexp.MustCompile(`(?m)^COPY\s+VERSION\s+/app/VERSION\s*$`).Match(content) {
+		t.Fatalf("%s does not copy VERSION into the runtime image", path)
 	}
 }

@@ -8,7 +8,7 @@ COPY web/ ./
 RUN npm run build
 
 FROM golang:1.24-bookworm AS go-builder
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -30,7 +30,9 @@ RUN apt-get update \
 COPY --from=go-builder /out/mizupanel-server /app/mizupanel-server
 COPY --from=go-builder /out/web /app/web
 COPY --from=go-builder /out/downloads /app/downloads
+COPY VERSION /app/VERSION
 COPY docker/server.sqlite.yaml /app/server.yaml
+COPY docker/server.mysql.yaml /app/server.mysql.yaml
 EXPOSE 8080
 VOLUME ["/app/data"]
 CMD ["/app/mizupanel-server", "--config", "/app/server.yaml"]

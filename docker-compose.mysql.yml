@@ -17,7 +17,8 @@ services:
       retries: 12
 
   mizupanel:
-    build: .
+    image: ${MIZUPANEL_IMAGE:-leokon3/mizupanel:0.1.24}
+    command: ["/app/mizupanel-server", "--config", "/app/server.mysql.yaml"]
     container_name: ${MIZUPANEL_CONTAINER_NAME:-mizupanel}
     restart: unless-stopped
     depends_on:
@@ -34,7 +35,6 @@ services:
       MIZUPANEL_TASK_RETENTION: ${MIZUPANEL_TASK_RETENTION:-30d}
       MIZUPANEL_TASK_CLEANUP_INTERVAL: ${MIZUPANEL_TASK_CLEANUP_INTERVAL:-1h}
     volumes:
-      - ./docker/server.mysql.yaml:/app/server.yaml:ro
       - ${MIZUPANEL_DATA_DIR:-./data}:/app/data
 
 volumes:

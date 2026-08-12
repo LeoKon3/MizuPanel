@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.23-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.24-14B8A6">
 </p>
 
 <p align="center">
@@ -145,6 +145,19 @@ The top-bar **AI Operations Assistant** opens as an overlay drawer and can expan
 The model can only select from a fixed Server-owned operations registry. Incident, alert, node, service, uptime, metric, and bounded-log queries may run automatically. Host reboot, Agent upgrade, Docker/Compose/Systemd state changes, and existing saved-script runs must display their target and impact and receive explicit administrator confirmation. Arbitrary Shell, file writes/deletes, resource deletion, and Kubernetes writes are not expressible through the registry.
 
 Provider API Keys are encrypted by the Server using `data/ai.key`; read APIs return neither plaintext nor ciphertext. Fallback applies only once to a transient timeout, rate limit, or upstream-availability failure on the first model call before any tool work. Authentication, protocol, cancellation, and post-tool failures never fall back. Backups and migrations must preserve the database and `ai.key` together. System prompts, raw model responses, raw tool output, and log content are not persisted as conversation history. See the [configuration docs](docs/configuration.en.md) for the complete setup and data boundary.
+
+<strong>Deploy With Docker</strong>
+
+Release images are published on Docker Hub. A target host needs only Docker Engine and Docker Compose—no repository checkout, Go, or Node.js. The repository Compose file pins the immutable `leokon3/mizupanel:0.1.24` image:
+
+```bash
+mkdir -p mizupanel && cd mizupanel
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.24/docker-compose.yml
+docker compose pull
+docker compose up -d
+```
+
+To expose the panel on the server IP or LAN, recreate it with `MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d`. See the [configuration docs](docs/configuration.en.md) for upgrades, rollback, MySQL, database and `ai.key` backups, and custom image references. `latest` is convenient for evaluation only; production deployments should pin a SemVer image.
 
 <strong>Run From Release Package</strong>
 
