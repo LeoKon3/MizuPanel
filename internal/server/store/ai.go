@@ -108,22 +108,26 @@ type AIMessage struct {
 }
 
 type AIToolCall struct {
-	ID             string    `json:"id"`
-	TurnID         string    `json:"turn_id"`
-	StepIndex      int       `json:"step_index"`
-	ProviderCallID string    `json:"-"`
-	ToolName       string    `json:"tool_name"`
-	Risk           string    `json:"risk"`
-	Status         string    `json:"status"`
-	ArgumentsJSON  string    `json:"-"`
-	TargetType     string    `json:"target_type"`
-	TargetID       string    `json:"target_id"`
-	TargetName     string    `json:"target_name"`
-	NodeID         string    `json:"node_id"`
-	OperationID    string    `json:"-"`
-	ResultSummary  string    `json:"result_summary"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	TurnID             string    `json:"turn_id"`
+	StepIndex          int       `json:"step_index"`
+	ProviderCallID     string    `json:"-"`
+	ToolName           string    `json:"tool_name"`
+	Risk               string    `json:"risk"`
+	Status             string    `json:"status"`
+	ArgumentsJSON      string    `json:"-"`
+	TargetType         string    `json:"target_type"`
+	TargetID           string    `json:"target_id"`
+	TargetName         string    `json:"target_name"`
+	NodeID             string    `json:"node_id"`
+	OperationID        string    `json:"-"`
+	ResultSummary      string    `json:"result_summary"`
+	PolicyDecision     string    `json:"policy_decision,omitempty"`
+	PolicyReason       string    `json:"policy_reason,omitempty"`
+	PolicyRevision     int64     `json:"policy_revision,omitempty"`
+	VerificationStatus string    `json:"verification_status,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type AIStore struct {
@@ -1040,10 +1044,12 @@ func (s *AIStore) CreateToolPlan(ctx context.Context, turn AITurn, calls []AIToo
 func insertAIToolCallTx(ctx context.Context, tx *sql.Tx, call AIToolCall) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO ai_tool_calls
 		(id, turn_id, step_index, provider_call_id, tool_name, risk, status, arguments_json, target_type,
-		 target_id, target_name, node_id, operation_id, result_summary, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, call.ID, call.TurnID, call.StepIndex,
+		 target_id, target_name, node_id, operation_id, result_summary, policy_decision, policy_reason,
+		 policy_revision, verification_status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, call.ID, call.TurnID, call.StepIndex,
 		call.ProviderCallID, call.ToolName, call.Risk, call.Status, call.ArgumentsJSON,
 		call.TargetType, call.TargetID, call.TargetName, call.NodeID, call.OperationID, call.ResultSummary,
+		call.PolicyDecision, call.PolicyReason, call.PolicyRevision, call.VerificationStatus,
 		formatTime(call.CreatedAt), formatTime(call.UpdatedAt))
 	return err
 }
@@ -1103,7 +1109,8 @@ func (s *AIStore) CompleteToolCallAndTurn(ctx context.Context, id string, turn A
 func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITurn, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name, c.risk,
 		c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
-		c.result_summary, c.created_at, c.updated_at, t.conversation_id, t.model_id, t.provider_id,
+		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status,
+		c.created_at, c.updated_at, t.conversation_id, t.model_id, t.provider_id,
 		t.provider_name, t.protocol, t.model, t.requested_provider_id, t.requested_provider_name,
 		t.requested_model_id, t.requested_model, t.fallback_used, t.status, t.error_code, t.created_at, t.updated_at
 		FROM ai_tool_calls c JOIN ai_turns t ON t.id = c.turn_id WHERE c.id = ?`, id)
@@ -1113,7 +1120,8 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 	var callCreated, callUpdated, turnCreated, turnUpdated string
 	err := row.Scan(&call.ID, &call.TurnID, &call.StepIndex, &call.ProviderCallID, &call.ToolName, &call.Risk,
 		&call.Status, &call.ArgumentsJSON, &call.TargetType, &call.TargetID, &call.TargetName,
-		&call.NodeID, &call.OperationID, &call.ResultSummary, &callCreated, &callUpdated, &turn.ConversationID, &modelID,
+		&call.NodeID, &call.OperationID, &call.ResultSummary, &call.PolicyDecision, &call.PolicyReason,
+		&call.PolicyRevision, &call.VerificationStatus, &callCreated, &callUpdated, &turn.ConversationID, &modelID,
 		&turn.ProviderID, &turn.ProviderName, &turn.Protocol, &turn.Model, &turn.RequestedProviderID,
 		&turn.RequestedProviderName, &requestedModelID, &turn.RequestedModel, &turn.FallbackUsed, &turn.Status,
 		&turn.ErrorCode, &turnCreated, &turnUpdated)
@@ -1144,7 +1152,8 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 func (s *AIStore) ListToolCalls(ctx context.Context, conversationID string) ([]AIToolCall, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name,
 		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
-		c.result_summary, c.created_at, c.updated_at FROM ai_tool_calls c
+		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status,
+		c.created_at, c.updated_at FROM ai_tool_calls c
 		JOIN ai_turns t ON t.id = c.turn_id WHERE t.conversation_id = ? ORDER BY c.created_at, c.step_index, c.id`, conversationID)
 	if err != nil {
 		return nil, err
@@ -1275,10 +1284,67 @@ func (s *AIStore) RejectToolPlan(ctx context.Context, turnID, content string) ([
 }
 
 func (s *AIStore) TransitionToolPlanStep(ctx context.Context, id, fromStatus, status, summary, operationID string) error {
+	return s.TransitionToolPlanStepWithVerification(ctx, id, fromStatus, status, summary, operationID, "")
+}
+
+func (s *AIStore) StartToolPlanStep(ctx context.Context, id, policyDecision, policyReason string, policyRevision int64) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'running', policy_decision = ?,
+		policy_reason = ?, policy_revision = ?, updated_at = ?
+		WHERE id = ? AND step_index >= 0 AND status = 'queued'`, policyDecision, policyReason, policyRevision,
+		formatTime(time.Now().UTC()), id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrAIConflict
+	}
+	return nil
+}
+
+func (s *AIStore) UpdateQueuedToolPlanPolicy(ctx context.Context, id, policyDecision, policyReason string, policyRevision int64) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE ai_tool_calls SET policy_decision = ?, policy_reason = ?,
+		policy_revision = ?, updated_at = ? WHERE id = ? AND step_index >= 0 AND status = 'queued'`,
+		policyDecision, policyReason, policyRevision, formatTime(time.Now().UTC()), id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrAIConflict
+	}
+	return nil
+}
+
+func (s *AIStore) UpdatePendingToolPlanPolicy(ctx context.Context, id, policyDecision, policyReason string, policyRevision int64) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE ai_tool_calls SET policy_decision = ?, policy_reason = ?,
+		policy_revision = ?, updated_at = ? WHERE id = ? AND step_index >= 0 AND status = 'pending'`,
+		policyDecision, policyReason, policyRevision, formatTime(time.Now().UTC()), id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrAIConflict
+	}
+	return nil
+}
+
+func (s *AIStore) TransitionToolPlanStepWithVerification(ctx context.Context, id, fromStatus, status, summary, operationID, verificationStatus string) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE ai_tool_calls SET status = ?, result_summary = ?,
-		operation_id = CASE WHEN ? <> '' THEN ? ELSE operation_id END, updated_at = ?
+		operation_id = CASE WHEN ? <> '' THEN ? ELSE operation_id END,
+		verification_status = CASE WHEN ? <> '' THEN ? ELSE verification_status END, updated_at = ?
 		WHERE id = ? AND step_index >= 0 AND status = ?`, status, summary, operationID, operationID,
-		formatTime(time.Now().UTC()), id, fromStatus)
+		verificationStatus, verificationStatus, formatTime(time.Now().UTC()), id, fromStatus)
 	if err != nil {
 		return err
 	}
@@ -1293,6 +1359,10 @@ func (s *AIStore) TransitionToolPlanStep(ctx context.Context, id, fromStatus, st
 }
 
 func (s *AIStore) CompleteToolPlan(ctx context.Context, turnID, stepID, fromStatus, status, summary, operationID, content string) ([]AIToolCall, AITurn, AIMessage, error) {
+	return s.CompleteToolPlanWithVerification(ctx, turnID, stepID, fromStatus, status, summary, operationID, "", content)
+}
+
+func (s *AIStore) CompleteToolPlanWithVerification(ctx context.Context, turnID, stepID, fromStatus, status, summary, operationID, verificationStatus, content string) ([]AIToolCall, AITurn, AIMessage, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, AITurn{}, AIMessage{}, err
@@ -1324,9 +1394,10 @@ func (s *AIStore) CompleteToolPlan(ctx context.Context, turnID, stepID, fromStat
 	}
 	now := time.Now().UTC()
 	result, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = ?, result_summary = ?,
-		operation_id = CASE WHEN ? <> '' THEN ? ELSE operation_id END, updated_at = ?
+		operation_id = CASE WHEN ? <> '' THEN ? ELSE operation_id END,
+		verification_status = CASE WHEN ? <> '' THEN ? ELSE verification_status END, updated_at = ?
 		WHERE id = ? AND turn_id = ? AND step_index >= 0 AND status = ?`, status, summary,
-		operationID, operationID, formatTime(now), stepID, turnID, fromStatus)
+		operationID, operationID, verificationStatus, verificationStatus, formatTime(now), stepID, turnID, fromStatus)
 	if err != nil {
 		return nil, AITurn{}, AIMessage{}, err
 	}
@@ -1425,7 +1496,8 @@ type aiQueryer interface {
 func listPlanSteps(ctx context.Context, queryer aiQueryer, turnID string) ([]AIToolCall, error) {
 	rows, err := queryer.QueryContext(ctx, `SELECT id, turn_id, step_index, provider_call_id, tool_name,
 		risk, status, arguments_json, target_type, target_id, target_name, node_id, operation_id,
-		result_summary, created_at, updated_at FROM ai_tool_calls
+		result_summary, policy_decision, policy_reason, policy_revision, verification_status,
+		created_at, updated_at FROM ai_tool_calls
 		WHERE turn_id = ? AND step_index >= 0 ORDER BY step_index`, turnID)
 	if err != nil {
 		return nil, err
@@ -1448,7 +1520,8 @@ func (s *AIStore) ListAcceptedToolCalls(ctx context.Context, limit int) ([]AIToo
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name,
 		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
-		c.result_summary, c.created_at, c.updated_at FROM ai_tool_calls c
+		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status,
+		c.created_at, c.updated_at FROM ai_tool_calls c
 		WHERE c.status = 'accepted' ORDER BY c.updated_at, c.id LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -1580,6 +1653,71 @@ func (s *AIStore) RecoverInterrupted(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *AIStore) CancelPendingConfirmations(ctx context.Context, summary, content string) error {
+	rows, err := s.db.QueryContext(ctx, aiTurnSelect+` WHERE status = 'awaiting_confirmation' ORDER BY created_at, id`)
+	if err != nil {
+		return err
+	}
+	turns := make([]AITurn, 0)
+	for rows.Next() {
+		turn, scanErr := scanAITurn(rows)
+		if scanErr != nil {
+			rows.Close()
+			return scanErr
+		}
+		turns = append(turns, turn)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, candidate := range turns {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		turn, err := scanAITurn(tx.QueryRowContext(ctx, aiTurnSelect+` WHERE id = ? AND status = 'awaiting_confirmation'`, candidate.ID))
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			continue
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		now := time.Now().UTC()
+		result, err := tx.ExecContext(ctx, `UPDATE ai_tool_calls SET status = 'rejected', result_summary = ?, updated_at = ?
+			WHERE turn_id = ? AND status = 'pending'`, summary, formatTime(now), turn.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if affected == 0 {
+			_ = tx.Rollback()
+			continue
+		}
+		if _, err := s.finishTurnTx(ctx, tx, turn, "completed", "", content, now); err != nil {
+			_ = tx.Rollback()
+			if errors.Is(err, ErrAIConflict) {
+				continue
+			}
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const aiProviderSelect = `SELECT id, name, protocol, base_url, model, api_key_ciphertext,
@@ -1715,7 +1853,8 @@ func scanAIToolCall(scanner aiScanner) (AIToolCall, error) {
 	var created, updated string
 	if err := scanner.Scan(&call.ID, &call.TurnID, &call.StepIndex, &call.ProviderCallID, &call.ToolName,
 		&call.Risk, &call.Status, &call.ArgumentsJSON, &call.TargetType, &call.TargetID,
-		&call.TargetName, &call.NodeID, &call.OperationID, &call.ResultSummary, &created, &updated); err != nil {
+		&call.TargetName, &call.NodeID, &call.OperationID, &call.ResultSummary, &call.PolicyDecision,
+		&call.PolicyReason, &call.PolicyRevision, &call.VerificationStatus, &created, &updated); err != nil {
 		return AIToolCall{}, err
 	}
 	var err error

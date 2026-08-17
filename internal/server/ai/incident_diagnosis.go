@@ -57,6 +57,7 @@ func (r *Registry) registerIncidentDiagnosisTool() {
 		}, []string{"scope_type"}),
 		risk:       RiskRead,
 		capability: capabilityIncidentDiagnosis,
+		metadata:   classifiedPolicyMetadata("incident", "diagnose_incident", "read", "platform_or_resource"),
 		validate:   r.validateIncidentDiagnosis,
 		execute:    r.executeIncidentDiagnosis,
 	})

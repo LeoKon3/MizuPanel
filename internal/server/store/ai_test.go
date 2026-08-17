@@ -279,6 +279,66 @@ func TestAIStoreToolPlanCreationClaimRejectAndRecoveryAreAtomic(t *testing.T) {
 	}
 }
 
+func TestAIStoreCancelPendingConfirmationsCancelsEveryPlan(t *testing.T) {
+	database := openTestDB(t)
+	database.SetMaxOpenConns(1)
+	repo := NewAIStore(database, serverdb.DialectSQLite)
+	provider, err := repo.CreateProvider(t.Context(), testAIProvider("provider-cancel", "Cancel Model"))
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	type pendingPlan struct {
+		conversation AIConversation
+		turn         AITurn
+	}
+	plans := make([]pendingPlan, 0, 2)
+	for _, spec := range []struct {
+		title  string
+		input  string
+		callID string
+	}{
+		{title: "First pending plan", input: "first request", callID: "cancel-first"},
+		{title: "Second pending plan", input: "second request", callID: "cancel-second"},
+	} {
+		conversation, createErr := repo.CreateConversation(t.Context(), spec.title)
+		if createErr != nil {
+			t.Fatalf("create conversation: %v", createErr)
+		}
+		turn, _, startErr := repo.StartTurn(t.Context(), conversation.ID, provider, spec.input)
+		if startErr != nil {
+			t.Fatalf("start turn: %v", startErr)
+		}
+		if _, createErr := repo.CreateToolPlan(t.Context(), turn, []AIToolCall{{
+			ID: spec.callID, ProviderCallID: spec.callID, ToolName: "restart", Risk: "confirm", Status: "pending",
+			ArgumentsJSON: `{}`, TargetType: "node", TargetID: "node-1", TargetName: "Node One", NodeID: "node-1",
+			ResultSummary: "planned",
+		}}); createErr != nil {
+			t.Fatalf("create pending plan: %v", createErr)
+		}
+		plans = append(plans, pendingPlan{conversation: conversation, turn: turn})
+	}
+
+	const summary = "AI control plane paused"
+	const content = "pending plan cancelled"
+	if err := repo.CancelPendingConfirmations(t.Context(), summary, content); err != nil {
+		t.Fatalf("cancel pending confirmations: %v", err)
+	}
+	for _, plan := range plans {
+		turn, turnErr := repo.GetTurn(t.Context(), plan.turn.ID)
+		steps, stepsErr := repo.ListPlanSteps(t.Context(), plan.turn.ID)
+		messages, messagesErr := repo.ListMessages(t.Context(), plan.conversation.ID, 10)
+		if turnErr != nil || stepsErr != nil || messagesErr != nil {
+			t.Fatalf("load cancelled plan: turn=%v steps=%v messages=%v", turnErr, stepsErr, messagesErr)
+		}
+		if turn.Status != "completed" || len(steps) != 1 || steps[0].Status != "rejected" ||
+			steps[0].ResultSummary != summary || len(messages) != 2 || messages[1].Role != "assistant" ||
+			messages[1].Content != content {
+			t.Fatalf("cancelled plan = turn:%+v steps:%+v messages:%+v", turn, steps, messages)
+		}
+	}
+}
+
 func TestAIStoreProviderModelsRoutingAndAtomicFallback(t *testing.T) {
 	database := openTestDB(t)
 	database.SetMaxOpenConns(1)

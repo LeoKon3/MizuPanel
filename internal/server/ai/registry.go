@@ -126,6 +126,7 @@ type RegistryDependencies struct {
 	Audit               *serveraudit.Store
 	Kubernetes          KubernetesClusters
 	KubernetesMutations KubernetesMutations
+	Settings            PolicyStore
 }
 
 type ToolTarget struct {
@@ -140,6 +141,8 @@ type ValidatedToolCall struct {
 	Risk       Risk
 	Arguments  json.RawMessage
 	Target     ToolTarget
+	Metadata   PolicyMetadata
+	ActionKey  string
 }
 
 type SafeToolResult struct {
@@ -155,6 +158,9 @@ type registeredTool struct {
 	definition ToolDefinition
 	risk       Risk
 	capability operationCapability
+	metadata   PolicyMetadata
+	actionKey  func(json.RawMessage) string
+	verify     func(context.Context, json.RawMessage, SafeToolResult, time.Time) VerificationResult
 	validate   func(context.Context, json.RawMessage) (json.RawMessage, ToolTarget, error)
 	execute    func(context.Context, json.RawMessage) (SafeToolResult, error)
 }
@@ -186,7 +192,18 @@ func (r *Registry) Validate(ctx context.Context, name string, arguments json.Raw
 	if err != nil {
 		return ValidatedToolCall{}, err
 	}
-	return ValidatedToolCall{Definition: tool.definition, Risk: tool.risk, Arguments: normalized, Target: target}, nil
+	action := tool.metadata.Action
+	if tool.actionKey != nil {
+		action = tool.actionKey(normalized)
+	}
+	metadata := tool.metadata
+	if metadata.Autonomous && !isAutonomousRecoveryAction(action) {
+		metadata.AutonomyClass = "high"
+		metadata.Autonomous = false
+		metadata.Verifier = ""
+	}
+	return ValidatedToolCall{Definition: tool.definition, Risk: tool.risk, Arguments: normalized, Target: target,
+		Metadata: metadata, ActionKey: action}, nil
 }
 
 func (r *Registry) Execute(ctx context.Context, call ValidatedToolCall) (SafeToolResult, error) {
@@ -207,6 +224,7 @@ func (r *Registry) registerReadTools() {
 		definition: noArgumentDefinition("get_operational_overview", "Get a bounded overview of nodes, active alerts, uptime monitors, and application services."),
 		risk:       RiskRead,
 		capability: capabilityNodes,
+		metadata:   classifiedPolicyMetadata("platform", "get_operational_overview", "read", "platform"),
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			nodesStore, err := r.requireNodes()
@@ -249,6 +267,7 @@ func (r *Registry) registerReadTools() {
 		definition: noArgumentDefinition("list_nodes", "List nodes with safe identity, online state, IP address, platform, Agent version, and latest metrics."),
 		risk:       RiskRead,
 		capability: capabilityNodes,
+		metadata:   classifiedPolicyMetadata("node", "list_nodes", "read", "platform"),
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			nodesStore, err := r.requireNodes()
@@ -290,6 +309,7 @@ func (r *Registry) registerReadTools() {
 		}, []string{"node_id"}),
 		risk:       RiskRead,
 		capability: capabilityNodeMetrics,
+		metadata:   classifiedPolicyMetadata("node", "get_node_metrics", "read", "node"),
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args metricsArguments
 			if err := strictArguments(raw, &args); err != nil || args.RangeMinutes < 0 || args.RangeMinutes > 1440 {
@@ -330,6 +350,7 @@ func (r *Registry) registerReadTools() {
 		}, nil),
 		risk:       RiskRead,
 		capability: capabilityAlerts,
+		metadata:   classifiedPolicyMetadata("alert", "list_alerts", "read", "platform"),
 		validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args alertsArguments
 			if err := strictArguments(raw, &args); err != nil {
@@ -380,6 +401,7 @@ func (r *Registry) registerReadTools() {
 		definition: noArgumentDefinition("list_application_services", "List logical application services and their bounded health projection."),
 		risk:       RiskRead,
 		capability: capabilityApplicationServices,
+		metadata:   classifiedPolicyMetadata("application_service", "list_application_services", "read", "platform"),
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			if r.dependencies.Services == nil {
@@ -401,6 +423,7 @@ func (r *Registry) registerReadTools() {
 		definition: noArgumentDefinition("list_uptime_monitors", "List bounded HTTP and TCP uptime monitor status."),
 		risk:       RiskRead,
 		capability: capabilityUptime,
+		metadata:   classifiedPolicyMetadata("uptime", "list_uptime_monitors", "read", "platform"),
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			if r.dependencies.Uptime == nil {
@@ -433,6 +456,7 @@ func (r *Registry) registerReadTools() {
 		}, []string{"source"}),
 		risk:       RiskRead,
 		capability: capabilityLogs,
+		metadata:   classifiedPolicyMetadata("logs", "get_log_snapshot", "read", "platform_or_node"),
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args logsArguments
 			if err := strictArguments(raw, &args); err != nil {
@@ -507,6 +531,7 @@ func (r *Registry) registerReadTools() {
 		definition: noArgumentDefinition("list_k8s_clusters", "List Kubernetes clusters with safe identity, online state, node count, and version."),
 		risk:       RiskRead,
 		capability: capabilityKubernetes,
+		metadata:   classifiedPolicyMetadata("kubernetes", "list_k8s_clusters", "read", "platform"),
 		validate:   noArguments,
 		execute: func(ctx context.Context, _ json.RawMessage) (SafeToolResult, error) {
 			if r.dependencies.Kubernetes == nil {
@@ -543,6 +568,7 @@ func (r *Registry) registerConfirmTools() {
 		r.add(registeredTool{
 			definition: objectDefinition(name, description, map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}}, []string{"node_id"}), risk: RiskConfirm,
 			capability: capabilityAgentNode,
+			metadata:   classifiedPolicyMetadata("node", name, "high", "node"),
 			validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 				var args nodeArguments
 				if err := strictArguments(raw, &args); err != nil {
@@ -588,6 +614,9 @@ func (r *Registry) registerConfirmTools() {
 	r.add(registeredTool{
 		definition: objectDefinition("docker_container_action", "Start, stop, or restart one existing Docker container after confirmation.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "container_id": map[string]any{"type": "string", "maxLength": 191}, "action": map[string]any{"type": "string", "enum": []string{"start", "stop", "restart"}}}, []string{"node_id", "container_id", "action"}), risk: RiskConfirm,
 		capability: capabilityDockerAgent,
+		metadata:   autonomousPolicyMetadata("docker", "docker.container", "node_resource", "docker_container_running"),
+		actionKey:  func(raw json.RawMessage) string { return policyAction(raw, "docker.container", false) },
+		verify:     r.verifyDockerRunning,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args containerArguments
 			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ContainerID, 191) || !oneOf(args.Action, "start", "stop", "restart") {
@@ -648,6 +677,9 @@ func (r *Registry) registerConfirmTools() {
 	r.add(registeredTool{
 		definition: objectDefinition("compose_service_action", "Start, stop, or restart one Compose project or service after confirmation. Delete, pull, build, and logs are unavailable.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "project_name": map[string]any{"type": "string", "maxLength": 191}, "service_name": map[string]any{"type": "string", "maxLength": 191}, "action": map[string]any{"type": "string", "enum": []string{"up", "stop", "restart"}}}, []string{"node_id", "project_name", "action"}), risk: RiskConfirm,
 		capability: capabilityCompose,
+		metadata:   autonomousPolicyMetadata("compose", "compose.service", "node_resource", "compose_service_running"),
+		actionKey:  func(raw json.RawMessage) string { return policyAction(raw, "compose.service", true) },
+		verify:     r.verifyComposeRunning,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args composeArguments
 			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ProjectName, 191) || (args.ServiceName != "" && !validIdentifier(args.ServiceName, 191)) || !oneOf(args.Action, "up", "stop", "restart") {
@@ -689,6 +721,9 @@ func (r *Registry) registerConfirmTools() {
 	r.add(registeredTool{
 		definition: objectDefinition("systemd_service_action", "Start, stop, or restart one Systemd service after confirmation.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "service_name": map[string]any{"type": "string", "maxLength": 255}, "action": map[string]any{"type": "string", "enum": []string{"start", "stop", "restart"}}}, []string{"node_id", "service_name", "action"}), risk: RiskConfirm,
 		capability: capabilitySystemd,
+		metadata:   autonomousPolicyMetadata("systemd", "systemd.service", "node_resource", "systemd_service_running"),
+		actionKey:  func(raw json.RawMessage) string { return policyAction(raw, "systemd.service", false) },
+		verify:     r.verifySystemdRunning,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args systemdArguments
 			if err := strictArguments(raw, &args); err != nil || !validIdentifier(args.ServiceName, 255) || !oneOf(args.Action, "start", "stop", "restart") {
@@ -725,6 +760,7 @@ func (r *Registry) registerConfirmTools() {
 	r.add(registeredTool{
 		definition: objectDefinition("run_saved_script", "Run an existing saved script on 1 to 100 explicit nodes after confirmation. Script text and arguments cannot be supplied.", map[string]any{"script_id": map[string]any{"type": "integer", "minimum": 1}, "node_ids": map[string]any{"type": "array", "minItems": 1, "maxItems": 100, "items": map[string]any{"type": "string", "maxLength": 191}, "uniqueItems": true}}, []string{"script_id", "node_ids"}), risk: RiskConfirm,
 		capability: capabilityAutomation,
+		metadata:   classifiedPolicyMetadata("automation", "run_saved_script", "high", "multi_node"),
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args scriptArguments
 			if err := strictArguments(raw, &args); err != nil || args.ScriptID <= 0 || len(args.NodeIDs) < 1 || len(args.NodeIDs) > store.MaxTaskNodes {

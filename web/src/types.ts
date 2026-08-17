@@ -1,6 +1,28 @@
 export type RangeOption = '1h' | '6h' | '24h' | '3d' | '7d'
 export type AgentMode = 'normal' | 'ops'
 
+export type AIControlMode = 'confirm_all' | 'low_risk_auto' | 'paused'
+
+export type AIControlAction =
+  | 'docker.container.start'
+  | 'docker.container.restart'
+  | 'compose.service.start'
+  | 'compose.service.restart'
+  | 'systemd.service.start'
+  | 'systemd.service.restart'
+
+export type AIControlSettings = {
+  mode: AIControlMode
+  allowed_actions: AIControlAction[]
+  node_scope: string[]
+  revision: number
+  updated_at: string | null
+  scoped_node_count: number
+  emergency_stopped: boolean
+}
+
+export type AIControlSettingsUpdate = Pick<AIControlSettings, 'mode' | 'allowed_actions' | 'node_scope'>
+
 export type AuthSessionResponse = {
   auth_enabled: boolean
   authenticated: boolean
@@ -16,11 +38,12 @@ export type SettingsResponse = {
   metrics_retention: RangeOption
   metrics_retention_seconds: number
   max_metrics_retention: RangeOption
+  ai_control: AIControlSettings
 }
 
-export type SettingsUpdate = {
-  metrics_retention: RangeOption
-}
+export type SettingsUpdate =
+  | { metrics_retention: RangeOption, ai_control?: never }
+  | { metrics_retention?: never, ai_control: AIControlSettingsUpdate }
 
 export type SystemAboutResponse = {
   version: string
@@ -1310,9 +1333,26 @@ export type AIToolCall = {
   target_name: string
   node_id: string
   result_summary: string
+  policy_decision?: AIPolicyDecision
+  policy_reason?: string
+  policy_revision?: number
+  verification_status?: AIVerificationStatus
   created_at: string
   updated_at: string
 }
+
+export type AIPolicyDecision =
+  | 'read'
+  | 'manual_confirmation'
+  | 'autonomous_allowed'
+  | 'blocked_paused'
+  | 'blocked_scope'
+  | 'blocked_action'
+  | 'blocked_capability'
+  | 'blocked_verifier'
+  | 'blocked_policy'
+
+export type AIVerificationStatus = 'success' | 'failure' | 'unknown'
 
 export type AIOperationPlanStep = AIToolCall & { step_index: number }
 
@@ -1321,6 +1361,9 @@ export type AIOperationPlan = {
   turn_id: string
   status: 'pending' | 'running' | 'success' | 'partial' | 'rejected' | 'interrupted'
   current_step: number
+  policy_decision?: AIPolicyDecision
+  policy_reason?: string
+  policy_revision?: number
   steps: AIOperationPlanStep[]
 }
 

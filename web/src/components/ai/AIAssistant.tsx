@@ -1,7 +1,7 @@
 import { Fragment, type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, CheckCircle2, ChevronRight, Circle, CircleAlert, CircleX, Clock3, LoaderCircle, Maximize2, MessageSquarePlus, PanelRightClose, Plus, Send, Settings2, Square, Trash2, X } from 'lucide-react'
 
-import type { AIOperationPlan, AIProgress, AIToolCall } from '../../types'
+import type { AIOperationPlan, AIPolicyDecision, AIProgress, AIToolCall, AIVerificationStatus } from '../../types'
 import { Toast } from '../Toast'
 import { AIModelSelector } from './AIModelSelector'
 import type { AIAssistantState } from './useAIAssistantState'
@@ -72,6 +72,49 @@ function planStepSummary(step: AIToolCall) {
   return summary || (toolLabels[step.tool_name] ?? step.tool_name)
 }
 
+function policyDecisionText(decision?: AIPolicyDecision) {
+  if (decision === 'autonomous_allowed') return '策略允许自动执行'
+  if (decision === 'manual_confirmation') return '需要人工确认'
+  if (decision === 'blocked_paused') return 'AI 控制平面已暂停'
+  if (decision === 'blocked_scope') return '节点不在自动执行范围'
+  if (decision === 'blocked_action') return '动作未获自动执行授权'
+  if (decision === 'blocked_capability') return '节点能力当前不可用'
+  if (decision === 'blocked_verifier') return '终态验证当前不可用'
+  if (decision === 'blocked_policy') return 'AI 控制策略当前不可用'
+  return ''
+}
+
+function verificationStatusText(status?: AIVerificationStatus) {
+  if (status === 'success') return '终态已验证'
+  if (status === 'failure') return '终态验证失败'
+  if (status === 'unknown') return '终态验证未知'
+  return ''
+}
+
+function policyReasonText(reason?: string) {
+  if (reason === 'read_only') return '只读操作'
+  if (reason === 'confirmation_required') return '默认需要确认'
+  if (reason === 'confirmed_by_user') return '已由用户确认'
+  if (reason === 'low_risk_policy') return '动作与节点范围已授权'
+  if (reason === 'paused') return '紧急暂停已启用'
+  if (reason === 'node_outside_scope') return '节点不在授权范围'
+  if (reason === 'action_not_allowed') return '动作未获授权'
+  if (reason === 'capability_offline') return '节点能力不可用'
+  if (reason === 'verifier_unavailable') return '终态验证不可用'
+  if (reason === 'policy_unavailable') return '策略读取失败'
+  if (reason === 'mixed_plan_requires_confirmation') return '计划包含需确认步骤'
+  return ''
+}
+
+function policyStatusText(item: Pick<AIToolCall, 'policy_decision' | 'policy_reason' | 'verification_status'>) {
+  const parts = [
+    policyDecisionText(item.policy_decision),
+    policyReasonText(item.policy_reason),
+    verificationStatusText(item.verification_status)
+  ].filter(Boolean)
+  return [...new Set(parts)].join(' · ')
+}
+
 function progressText(progress: AIProgress, labels: Record<string, string>) {
   if (progress.phase === 'model') return '思考中...'
   if (progress.phase === 'fallback') return `当前请求模型暂时不可用，切换到 ${[progress.provider_name, progress.model].filter(Boolean).join(' / ') || '回退模型'}...`
@@ -121,6 +164,9 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
         <p className="text-xs font-black text-foreground">执行计划 · {plan.steps.length} 步</p>
         <span className={`shrink-0 text-xs font-black ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
       </div>
+      {!plan.steps.some((step) => step.policy_decision) && (policyDecisionText(plan.policy_decision) || policyReasonText(plan.policy_reason)) ? (
+        <p className="mt-1 break-words text-[11px] font-bold text-muted-foreground">{[policyDecisionText(plan.policy_decision), policyReasonText(plan.policy_reason)].filter(Boolean).join(' · ')}</p>
+      ) : null}
       <ol className="mt-2 space-y-2">
         {plan.steps.map((step, index) => (
           <li key={step.id} className="flex min-w-0 gap-2">
@@ -128,6 +174,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
             <div className="min-w-0 flex-1">
               <p className="break-words text-xs font-bold text-foreground">{plan.steps.length > 1 ? `${index + 1}. ` : ''}{planStepSummary(step)}</p>
               <p className="mt-0.5 break-words text-[11px] font-semibold text-muted-foreground">{toolTarget(step)} · {planStepStatusText(step.status)}</p>
+              {policyStatusText(step) ? <p className="mt-0.5 break-words text-[11px] font-bold text-muted-foreground">{policyStatusText(step)}</p> : null}
             </div>
           </li>
         ))}
@@ -231,7 +278,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
           <div className="m-auto max-w-md text-center">
             <MessageSquarePlus className="mx-auto h-9 w-9 text-primary" aria-hidden="true" />
             <h3 className="mt-3 text-base font-black text-foreground">开始一次运维对话</h3>
-            <p className="mt-2 text-sm font-semibold leading-6 text-muted-foreground">可以询问当前故障、告警、离线节点、应用服务和拨测状态。任何状态变更都会先等待你的确认。</p>
+            <p className="mt-2 text-sm font-semibold leading-6 text-muted-foreground">可以询问当前故障、告警、离线节点、应用服务和拨测状态。状态变更由 Server 策略决定是否需要确认。</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -298,7 +345,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
           className="soft-input max-h-36 min-h-[76px] w-full resize-y px-3 py-2 text-sm font-semibold leading-6 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
         />
         <div className="mt-2 flex items-center justify-between gap-3">
-          <p className="min-w-0 truncate text-[11px] font-bold text-muted-foreground">变更操作始终需要人工确认</p>
+          <p className="min-w-0 truncate text-[11px] font-bold text-muted-foreground">变更操作由 Server 策略控制</p>
           {activeSending ? (
             <button type="button" onClick={assistant.stop} title="停止模型请求" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-danger/40 bg-card text-danger focus:outline-none focus:ring-4 focus:ring-danger/20">
               <Square size={15} fill="currentColor" aria-hidden="true" />
@@ -481,7 +528,7 @@ export function AIWorkspacePage({ assistant, onOpenSettings }: { assistant: AIAs
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-4 py-3">
           <div className="min-w-0">
             <h2 className="truncate text-base font-black text-foreground">{activeConversation?.title ?? '新会话'}</h2>
-            <p className="mt-0.5 truncate text-xs font-semibold text-muted-foreground">查询自动执行，变更需要确认</p>
+            <p className="mt-0.5 truncate text-xs font-semibold text-muted-foreground">查询自动执行，变更由策略控制</p>
           </div>
           <div className="flex min-w-0 items-center gap-2">
             <div className="w-[min(520px,48vw)] min-w-[360px]"><AIModelSelector assistant={assistant} idPrefix="ai-workspace" /></div>

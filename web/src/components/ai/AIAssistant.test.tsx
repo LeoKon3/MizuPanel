@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import * as api from '../../api/client'
-import type { AIConversation, AIConversationState, AIMessage, AIOperationPlan, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
+import type { AIConversation, AIConversationState, AIMessage, AIOperationPlan, AIOperationPlanStep, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
 import { AIAssistantDrawer, AIWorkspacePage } from './AIAssistant'
 import { type AIAssistantState, useAIAssistantState } from './useAIAssistantState'
 
@@ -550,6 +550,37 @@ describe('AI assistant', () => {
     expect(within(dialog).getByText('2. 升级 Agent')).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: '确认执行计划' }))
     await waitFor(() => expect(confirmPlan).toHaveBeenCalledWith(plan))
+  })
+
+  test('renders autonomous policy and verification results inside the ordered plan surface', () => {
+    const autonomousStep: AIOperationPlanStep = {
+      ...pendingCall,
+      step_index: 0,
+      status: 'success',
+      result_summary: 'Systemd 服务已确认运行',
+      policy_decision: 'autonomous_allowed',
+      policy_reason: 'low_risk_policy',
+      policy_revision: 2,
+      verification_status: 'success'
+    }
+    const plan: AIOperationPlan = {
+      id: pendingCall.turn_id,
+      turn_id: pendingCall.turn_id,
+      status: 'success',
+      current_step: 0,
+      steps: [autonomousStep]
+    }
+    const state = assistant({
+      conversation: { conversation, messages: [], tool_calls: [autonomousStep], plans: [plan] }
+    })
+
+    render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+
+    const planRegion = screen.getByRole('region', { name: 'AI 变更计划' })
+    expect(planRegion).toHaveTextContent('Systemd 服务已确认运行')
+    expect(planRegion).toHaveTextContent('策略允许自动执行 · 动作与节点范围已授权 · 终态已验证')
+    expect(screen.getAllByRole('region', { name: 'AI 变更计划' })).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: '检查并确认' })).not.toBeInTheDocument()
   })
 
   test('keeps a plan with its own Turn when a later message is added', () => {

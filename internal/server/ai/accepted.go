@@ -141,20 +141,39 @@ func (s *Service) completeAcceptedOperation(ctx context.Context, id, status, sum
 		return err
 	}
 	if call.StepIndex >= 0 {
+		verificationStatus := ""
+		if status == "success" {
+			if tool, ok := s.registry.tools[call.ToolName]; ok && tool.metadata.Verifier != "" {
+				validated, validateErr := s.revalidatePlanStep(ctx, call)
+				if validateErr != nil {
+					status, summary, verificationStatus = "interrupted", "最终状态无法确认，未自动重试", string(VerificationUnknown)
+				} else {
+					verification := s.registry.Verify(ctx, validated, SafeToolResult{Status: "success"}, call.UpdatedAt)
+					verificationStatus, summary = string(verification.Status), verification.Summary
+					switch verification.Status {
+					case VerificationFailure:
+						status = "failure"
+					case VerificationUnknown:
+						status = "interrupted"
+					}
+				}
+			}
+		}
 		steps, listErr := s.store.ListPlanSteps(ctx, turn.ID)
 		if listErr != nil {
 			return listErr
 		}
 		if status == "success" && call.StepIndex < len(steps)-1 {
-			if err := s.store.TransitionToolPlanStep(ctx, id, "accepted", status, summary, ""); err != nil {
+			if err := s.store.TransitionToolPlanStepWithVerification(ctx, id, "accepted", status, summary, "", verificationStatus); err != nil {
 				if err == store.ErrAIConflict || err == store.ErrAINotFound {
 					return nil
 				}
 				return err
 			}
-			_, err = s.advancePlan(ctx, turn, nil)
+			autonomous := call.PolicyDecision == string(PolicyAutonomous)
+			_, err = s.advancePlan(ctx, turn, nil, autonomous)
 		} else {
-			_, err = s.completePlanStep(ctx, turn.ID, id, "accepted", status, summary, "")
+			_, err = s.completePlanStepVerified(ctx, turn.ID, id, "accepted", status, summary, "", verificationStatus)
 		}
 		if err == store.ErrAIConflict || err == store.ErrAINotFound {
 			return nil

@@ -56,6 +56,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, []string{"node_id"}),
 		risk:       RiskRead,
 		capability: capabilityDocker,
+		metadata:   classifiedPolicyMetadata("docker", "get_docker_snapshot", "read", "node"),
 		validate:   r.validateNodeRead,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeReadArguments
@@ -97,6 +98,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, []string{"node_id"}),
 		risk:       RiskRead,
 		capability: capabilityDockerAgent,
+		metadata:   classifiedPolicyMetadata("docker", "get_docker_resources", "read", "node"),
 		validate:   r.validateOnlineNodeRead,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeReadArguments
@@ -128,6 +130,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, []string{"node_id"}),
 		risk:       RiskRead,
 		capability: capabilityCompose,
+		metadata:   classifiedPolicyMetadata("compose", "list_compose_projects", "read", "node"),
 		validate:   r.validateNodeLimitOnline,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeLimitArguments
@@ -174,6 +177,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, []string{"node_id"}),
 		risk:       RiskRead,
 		capability: capabilityProcesses,
+		metadata:   classifiedPolicyMetadata("process", "list_node_processes", "read", "node"),
 		validate:   r.validateNodeLimit,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeLimitArguments
@@ -217,6 +221,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, []string{"node_id"}),
 		risk:       RiskRead,
 		capability: capabilitySystemd,
+		metadata:   classifiedPolicyMetadata("systemd", "list_systemd_services", "read", "node"),
 		validate:   r.validateNodeLimitOnline,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args nodeLimitArguments
@@ -252,6 +257,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, []string{"cluster_id"}),
 		risk:       RiskRead,
 		capability: capabilityKubernetesTarget,
+		metadata:   classifiedPolicyMetadata("kubernetes", "get_k8s_cluster_summary", "read", "cluster"),
 		validate:   r.validateK8sCluster,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args struct {
@@ -281,6 +287,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, []string{"cluster_id", "resource"}),
 		risk:       RiskRead,
 		capability: capabilityKubernetesTarget,
+		metadata:   classifiedPolicyMetadata("kubernetes", "list_k8s_resources", "read", "cluster"),
 		validate:   r.validateK8sResource,
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args k8sResourceArguments
@@ -311,6 +318,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, nil),
 		risk:       RiskRead,
 		capability: capabilityTaskHistory,
+		metadata:   classifiedPolicyMetadata("automation", "list_automation_runs", "read", "platform_or_node"),
 		validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args automationRunsArguments
 			if err := strictArguments(raw, &args); err != nil {
@@ -353,6 +361,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, nil),
 		risk:       RiskRead,
 		capability: capabilityAudit,
+		metadata:   classifiedPolicyMetadata("audit", "list_audit_events", "read", "platform_or_node"),
 		validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args auditEventsArguments
 			if err := strictArguments(raw, &args); err != nil {
@@ -395,6 +404,7 @@ func (r *Registry) registerPlatformReadTools() {
 		}, []string{"node_id"}),
 		risk:       RiskRead,
 		capability: capabilityOnlineNode,
+		metadata:   classifiedPolicyMetadata("node", "diagnose_node", "read", "node"),
 		validate:   r.validateNodeRead,
 		execute:    r.executeNodeDiagnosis,
 	})

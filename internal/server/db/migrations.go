@@ -138,6 +138,14 @@ func sqliteMigrationStatements() []string {
 					value TEXT NOT NULL,
 					updated_at DATETIME NOT NULL
 				);`,
+		`CREATE TABLE IF NOT EXISTS ai_control_policy (
+					id INTEGER PRIMARY KEY CHECK (id = 1),
+					mode TEXT NOT NULL,
+					allowed_actions_json TEXT NOT NULL,
+					node_scope_json TEXT NOT NULL,
+					revision INTEGER NOT NULL,
+					updated_at DATETIME NOT NULL
+				);`,
 		`CREATE TABLE IF NOT EXISTS alert_rules (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					name TEXT NOT NULL,
@@ -490,6 +498,10 @@ func sqliteMigrationStatements() []string {
 					node_id TEXT NOT NULL DEFAULT '',
 					operation_id TEXT NOT NULL DEFAULT '',
 					result_summary TEXT NOT NULL DEFAULT '',
+					policy_decision TEXT NOT NULL DEFAULT '',
+					policy_reason TEXT NOT NULL DEFAULT '',
+					policy_revision INTEGER NOT NULL DEFAULT 0,
+					verification_status TEXT NOT NULL DEFAULT '',
 					created_at TEXT NOT NULL,
 					updated_at TEXT NOT NULL,
 					FOREIGN KEY (turn_id) REFERENCES ai_turns(id) ON DELETE CASCADE
@@ -618,6 +630,14 @@ func mysqlMigrationStatements() []string {
 		`CREATE TABLE IF NOT EXISTS settings (
 					` + "`key`" + ` VARCHAR(191) PRIMARY KEY,
 					value VARCHAR(255) NOT NULL,
+					updated_at VARCHAR(64) NOT NULL
+				);`,
+		`CREATE TABLE IF NOT EXISTS ai_control_policy (
+					id TINYINT PRIMARY KEY,
+					mode VARCHAR(32) NOT NULL,
+					allowed_actions_json TEXT NOT NULL,
+					node_scope_json LONGTEXT NOT NULL,
+					revision BIGINT NOT NULL,
 					updated_at VARCHAR(64) NOT NULL
 				);`,
 		`CREATE TABLE IF NOT EXISTS alert_rules (
@@ -982,6 +1002,10 @@ func mysqlMigrationStatements() []string {
 					node_id VARCHAR(191) NOT NULL DEFAULT '',
 					operation_id VARCHAR(191) NOT NULL DEFAULT '',
 					result_summary VARCHAR(512) NOT NULL DEFAULT '',
+					policy_decision VARCHAR(32) NOT NULL DEFAULT '',
+					policy_reason VARCHAR(64) NOT NULL DEFAULT '',
+					policy_revision BIGINT NOT NULL DEFAULT 0,
+					verification_status VARCHAR(16) NOT NULL DEFAULT '',
 					created_at VARCHAR(64) NOT NULL,
 					updated_at VARCHAR(64) NOT NULL,
 					INDEX idx_ai_tool_calls_turn_created (turn_id, created_at, id),
@@ -1099,6 +1123,10 @@ func aiCompatibilityColumnStatements(dialect Dialect) []string {
 			`ALTER TABLE ai_turns ADD COLUMN fallback_used BOOLEAN NOT NULL DEFAULT 0`,
 			`ALTER TABLE ai_tool_calls ADD COLUMN operation_id VARCHAR(191) NOT NULL DEFAULT ''`,
 			`ALTER TABLE ai_tool_calls ADD COLUMN step_index INT NOT NULL DEFAULT -1`,
+			`ALTER TABLE ai_tool_calls ADD COLUMN policy_decision VARCHAR(32) NOT NULL DEFAULT ''`,
+			`ALTER TABLE ai_tool_calls ADD COLUMN policy_reason VARCHAR(64) NOT NULL DEFAULT ''`,
+			`ALTER TABLE ai_tool_calls ADD COLUMN policy_revision BIGINT NOT NULL DEFAULT 0`,
+			`ALTER TABLE ai_tool_calls ADD COLUMN verification_status VARCHAR(16) NOT NULL DEFAULT ''`,
 		}
 	}
 	return []string{
@@ -1116,6 +1144,10 @@ func aiCompatibilityColumnStatements(dialect Dialect) []string {
 		`ALTER TABLE ai_turns ADD COLUMN fallback_used INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE ai_tool_calls ADD COLUMN operation_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ai_tool_calls ADD COLUMN step_index INTEGER NOT NULL DEFAULT -1`,
+		`ALTER TABLE ai_tool_calls ADD COLUMN policy_decision TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_tool_calls ADD COLUMN policy_reason TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_tool_calls ADD COLUMN policy_revision INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE ai_tool_calls ADD COLUMN verification_status TEXT NOT NULL DEFAULT ''`,
 	}
 }
 

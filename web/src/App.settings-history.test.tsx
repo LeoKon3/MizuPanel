@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import App from './App'
 import { getNodeDocker, getNodeMetrics, getNodeProcesses, getNodes, getSettings, getSystemAbout, updateSettings } from './api/client'
-import type { Metric, Node } from './types'
+import type { AIControlSettings, Metric, Node } from './types'
 
 vi.mock('./api/client', () => ({
   setUnauthorizedHandler: vi.fn(),
@@ -16,6 +16,8 @@ vi.mock('./api/client', () => ({
   getSettings: vi.fn(),
   getSystemAbout: vi.fn(),
   updateSettings: vi.fn(),
+  getAIProviders: vi.fn(async () => ({ providers: [] })),
+  getAIRouting: vi.fn(async () => ({ default_model_id: null, fallback_model_id: null })),
   getNodeFiles: vi.fn(async () => ({ path: '/', entries: [] })),
   readNodeFile: vi.fn(async () => ({ path: '/tmp/a', content: '', editable: true })),
   writeNodeFile: vi.fn(async () => ({ path: '/tmp/a', saved: true })),
@@ -76,6 +78,16 @@ const metrics: Metric[] = [
   }
 ]
 
+const aiControlSettings: AIControlSettings = {
+  mode: 'confirm_all',
+  allowed_actions: [],
+  node_scope: [],
+  revision: 1,
+  updated_at: null,
+  scoped_node_count: 0,
+  emergency_stopped: false
+}
+
 describe('App history and system settings', () => {
   beforeEach(() => {
     window.history.pushState({}, '', '/')
@@ -90,9 +102,9 @@ describe('App history and system settings', () => {
     vi.mocked(getNodeMetrics).mockResolvedValue({ metrics })
     vi.mocked(getNodeProcesses).mockResolvedValue({ node_id: 'node-1', collected_at: 0, error: '', processes: [] })
     vi.mocked(getNodeDocker).mockResolvedValue({ node_id: 'node-1', collected_at: 0, available: false, error: '', containers: [] })
-    vi.mocked(getSettings).mockResolvedValue({ metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d' })
+    vi.mocked(getSettings).mockResolvedValue({ metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d', ai_control: aiControlSettings })
     vi.mocked(getSystemAbout).mockResolvedValue({ version: '0.1.0', github_url: 'https://github.com/LeoKon3/MizuPanel' })
-    vi.mocked(updateSettings).mockResolvedValue({ metrics_retention: '7d', metrics_retention_seconds: 604800, max_metrics_retention: '7d' })
+    vi.mocked(updateSettings).mockResolvedValue({ metrics_retention: '7d', metrics_retention_seconds: 604800, max_metrics_retention: '7d', ai_control: aiControlSettings })
   })
 
   test('keeps the legacy history route and switches metric ranges', async () => {
@@ -113,7 +125,7 @@ describe('App history and system settings', () => {
   })
 
   test('disables history ranges beyond the configured retention', async () => {
-    vi.mocked(getSettings).mockResolvedValue({ metrics_retention: '6h', metrics_retention_seconds: 21600, max_metrics_retention: '7d' })
+    vi.mocked(getSettings).mockResolvedValue({ metrics_retention: '6h', metrics_retention_seconds: 21600, max_metrics_retention: '7d', ai_control: aiControlSettings })
     window.history.pushState({}, '', '/history')
 
     render(<App />)
@@ -141,6 +153,43 @@ describe('App history and system settings', () => {
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ metrics_retention: '7d' }))
     expect(await within(panel).findByText('设置已保存，新的保留时间会立即用于历史查询和后续清理。')).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/settings')
+  })
+
+  test('saves AI Control Plane policy independently with the existing node inventory', async () => {
+    vi.mocked(updateSettings).mockResolvedValue({
+      metrics_retention: '24h',
+      metrics_retention_seconds: 86400,
+      max_metrics_retention: '7d',
+      ai_control: {
+        ...aiControlSettings,
+        mode: 'low_risk_auto',
+        allowed_actions: ['docker.container.restart'],
+        node_scope: ['node-1'],
+        revision: 2,
+        scoped_node_count: 1
+      }
+    })
+    render(<App />)
+
+    const sidebarNavigation = await screen.findByRole('navigation', { name: '侧边导航' })
+    fireEvent.click(within(sidebarNavigation).getByRole('button', { name: '系统设置' }))
+    const panel = await screen.findByRole('region', { name: '系统设置' })
+    const lowRiskMode = within(panel).getByRole('button', { name: '低风险自动' })
+    await waitFor(() => expect(lowRiskMode).not.toBeDisabled())
+    fireEvent.click(lowRiskMode)
+    fireEvent.click(within(panel).getByRole('checkbox', { name: 'Docker 容器 重启容器' }))
+    fireEvent.click(within(panel).getByRole('checkbox', { name: 'Oracle SG 在线' }))
+    fireEvent.click(within(panel).getByRole('button', { name: '保存策略' }))
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      ai_control: {
+        mode: 'low_risk_auto',
+        allowed_actions: ['docker.container.restart'],
+        node_scope: ['node-1']
+      }
+    }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('AI 控制平面设置保存成功')
     expect(window.location.pathname).toBe('/settings')
   })
 })

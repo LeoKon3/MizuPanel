@@ -94,11 +94,14 @@ type ConversationState struct {
 }
 
 type OperationPlan struct {
-	ID          string             `json:"id"`
-	TurnID      string             `json:"turn_id"`
-	Status      string             `json:"status"`
-	CurrentStep int                `json:"current_step"`
-	Steps       []store.AIToolCall `json:"steps"`
+	ID             string             `json:"id"`
+	TurnID         string             `json:"turn_id"`
+	Status         string             `json:"status"`
+	CurrentStep    int                `json:"current_step"`
+	PolicyDecision string             `json:"policy_decision,omitempty"`
+	PolicyReason   string             `json:"policy_reason,omitempty"`
+	PolicyRevision int64              `json:"policy_revision,omitempty"`
+	Steps          []store.AIToolCall `json:"steps"`
 }
 
 type SendResult struct {
@@ -130,6 +133,7 @@ func operationPlans(calls []store.AIToolCall) []OperationPlan {
 	}
 	for index := range plans {
 		plans[index].Status, plans[index].CurrentStep = aggregatePlanStatus(plans[index].Steps)
+		plans[index].PolicyDecision, plans[index].PolicyReason, plans[index].PolicyRevision = planPolicyProjection(plans[index].Steps)
 	}
 	return plans
 }
@@ -176,7 +180,24 @@ func aggregatePlanStatus(steps []store.AIToolCall) (string, int) {
 func planFromSteps(turnID string, steps []store.AIToolCall) OperationPlan {
 	plan := OperationPlan{ID: turnID, TurnID: turnID, Steps: append([]store.AIToolCall(nil), steps...)}
 	plan.Status, plan.CurrentStep = aggregatePlanStatus(plan.Steps)
+	plan.PolicyDecision, plan.PolicyReason, plan.PolicyRevision = planPolicyProjection(plan.Steps)
 	return plan
+}
+
+func planPolicyProjection(steps []store.AIToolCall) (string, string, int64) {
+	if len(steps) == 0 {
+		return "", "", 0
+	}
+	decision, reason, revision := steps[0].PolicyDecision, steps[0].PolicyReason, steps[0].PolicyRevision
+	for _, step := range steps[1:] {
+		if step.PolicyRevision > revision {
+			revision = step.PolicyRevision
+		}
+		if step.PolicyDecision != decision || step.PolicyReason != reason {
+			return string(PolicyManual), "mixed_plan_requires_confirmation", revision
+		}
+	}
+	return decision, reason, revision
 }
 
 type ProgressPhase string
@@ -759,6 +780,8 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 			storedCalls := make([]store.AIToolCall, 0, len(validated))
 			seen := make(map[string]struct{}, len(validated))
 			summaryBytes := 0
+			allAutonomous := len(validated) > 0
+			pausedProposal := false
 			for index, call := range validated {
 				arguments := string(call.Arguments)
 				key := call.Definition.Name + "\x00" + arguments
@@ -772,9 +795,20 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 					planError = "变更计划摘要过大。"
 				}
 				proposed := response.ToolCalls[index]
+				policy, policyErr := s.registry.Policy(ctx, call)
+				if policyErr != nil {
+					return result, policyErr
+				}
+				if policy.Decision != PolicyAutonomous {
+					allAutonomous = false
+				}
+				if policy.Decision == PolicyBlockedPaused {
+					pausedProposal = true
+				}
 				storedCall := store.AIToolCall{ID: uuid.NewString(), ProviderCallID: proposed.ID, ToolName: call.Definition.Name,
 					Risk: string(call.Risk), Status: "pending", TargetType: call.Target.Type, TargetID: call.Target.ID,
-					TargetName: call.Target.Name, NodeID: call.Target.NodeID, ResultSummary: summary}
+					TargetName: call.Target.Name, NodeID: call.Target.NodeID, ResultSummary: summary,
+					PolicyDecision: string(policy.Decision), PolicyReason: policy.SafeReason(), PolicyRevision: policy.Revision}
 				storedCall.ArgumentsJSON, err = s.persistedToolArguments(storedCall.ID, call)
 				if err != nil {
 					return result, err
@@ -807,6 +841,33 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 				for _, call := range created {
 					audit(AuditEvent{Action: "tool_propose", ProviderID: provider.ID, ModelID: model.ID, Model: model.ModelID, ToolCall: call, Status: "pending"})
 				}
+			}
+			if pausedProposal {
+				rejected, rejectedTurn, message, rejectErr := s.store.RejectToolPlan(ctx, turn.ID,
+					"AI 控制平面已暂停，变更计划已取消；已经接受的远端操作不会被撤回。")
+				if rejectErr != nil {
+					return result, rejectErr
+				}
+				if audit != nil && len(rejected) > 0 {
+					audit(planAuditEvent("plan_policy_block", rejectedTurn, rejected[0], "failure"))
+				}
+				rejectedPlan := planFromSteps(turn.ID, rejected)
+				return SendResult{Turn: rejectedTurn, Message: &message, Plan: &rejectedPlan}, nil
+			}
+			if allAutonomous {
+				automatic, claimed, claimErr := s.tryClaimAutonomousPlan(ctx, turn.ID, audit)
+				if claimErr != nil {
+					return result, claimErr
+				}
+				if claimed {
+					s.emitProgress(callbacks.Progress, ProgressEvent{Phase: ProgressCompleted})
+					return automatic, nil
+				}
+				created, claimErr = s.store.ListPlanSteps(ctx, turn.ID)
+				if claimErr != nil {
+					return result, claimErr
+				}
+				plan = planFromSteps(turn.ID, created)
 			}
 			result.Plan, result.Turn.Status = &plan, "awaiting_confirmation"
 			return result, nil
@@ -890,6 +951,67 @@ func (s *Service) emitProgress(progress ProgressCallback, event ProgressEvent) {
 	}
 }
 
+func (s *Service) ensureAIControlActive(ctx context.Context) error {
+	policy, err := s.registry.ControlPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if policy.Mode == store.AIControlPaused {
+		return ErrAIControlPaused
+	}
+	return nil
+}
+
+func (s *Service) PausePendingPlans(ctx context.Context) error {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return s.store.CancelPendingConfirmations(cancelCtx, "AI 控制平面已暂停，计划已取消",
+		"AI 控制平面已暂停，变更计划已取消；已经接受的远端操作不会被撤回。")
+}
+
+func (s *Service) tryClaimAutonomousPlan(ctx context.Context, turnID string, audit AuditCallback) (SendResult, bool, error) {
+	steps, err := s.store.ListPlanSteps(ctx, turnID)
+	if err != nil {
+		return SendResult{}, false, err
+	}
+	for _, step := range steps {
+		validated, validateErr := s.revalidatePlanStep(ctx, step)
+		if validateErr != nil {
+			policy := PolicyResult{Decision: PolicyBlockedCapability, Reason: "capability_offline", Revision: step.PolicyRevision}
+			if updateErr := s.store.UpdatePendingToolPlanPolicy(ctx, step.ID, string(policy.Decision), policy.SafeReason(), policy.Revision); updateErr != nil {
+				return SendResult{}, false, updateErr
+			}
+			return SendResult{}, false, nil
+		}
+		policy, policyErr := s.registry.Policy(ctx, validated)
+		if policyErr != nil {
+			policy = PolicyResult{Decision: PolicyBlockedPolicy, Reason: "policy_unavailable", Revision: step.PolicyRevision}
+			if updateErr := s.store.UpdatePendingToolPlanPolicy(ctx, step.ID, string(policy.Decision), policy.SafeReason(), policy.Revision); updateErr != nil {
+				return SendResult{}, false, updateErr
+			}
+			return SendResult{}, false, nil
+		}
+		if policy.Decision != PolicyAutonomous {
+			if updateErr := s.store.UpdatePendingToolPlanPolicy(ctx, step.ID, string(policy.Decision), policy.SafeReason(), policy.Revision); updateErr != nil {
+				return SendResult{}, false, updateErr
+			}
+			return SendResult{}, false, nil
+		}
+	}
+	claimed, turn, err := s.store.ClaimToolPlan(ctx, turnID)
+	if err != nil {
+		return SendResult{}, false, err
+	}
+	if audit != nil {
+		audit(planAuditEvent("plan_auto_claim", turn, claimed[0], "running"))
+	}
+	result, err := s.advancePlan(ctx, turn, audit, true)
+	return result, true, err
+}
+
 func (s *Service) Confirm(ctx context.Context, id string, audit AuditCallback) (SendResult, error) {
 	existing, _, err := s.store.GetToolCall(ctx, id)
 	if err != nil {
@@ -897,6 +1019,9 @@ func (s *Service) Confirm(ctx context.Context, id string, audit AuditCallback) (
 	}
 	if existing.StepIndex >= 0 {
 		return SendResult{}, store.ErrAIConflict
+	}
+	if err := s.ensureAIControlActive(ctx); err != nil {
+		return SendResult{}, err
 	}
 	call, turn, err := s.store.ClaimToolCall(ctx, id)
 	if err != nil {
@@ -940,14 +1065,20 @@ func (s *Service) Confirm(ctx context.Context, id string, audit AuditCallback) (
 
 func (s *Service) executeConfirmedToolCall(ctx context.Context, call store.AIToolCall, turn store.AITurn, validated ValidatedToolCall, audit AuditCallback) (SendResult, error) {
 	started := s.now()
-	toolResult, executeErr := s.registry.Execute(ctx, validated)
+	var toolResult SafeToolResult
+	executeErr := s.ensureAIControlActive(ctx)
+	if executeErr == nil {
+		toolResult, executeErr = s.registry.Execute(ctx, validated)
+	}
 	status, summary, assistant := toolResult.Status, toolResult.Summary, "操作执行成功。"
 	if status == "" {
 		status = "success"
 	}
 	if executeErr != nil {
 		status, summary, assistant = "failure", "操作执行失败", "操作执行失败，未确认成功状态。"
-		if errors.Is(executeErr, ErrUnsupportedTool) {
+		if errors.Is(executeErr, ErrAIControlPaused) {
+			summary, assistant = "AI 控制平面已暂停，操作未执行", "AI 控制平面已暂停，操作未执行。"
+		} else if errors.Is(executeErr, ErrUnsupportedTool) {
 			status, summary, assistant = "unsupported", "当前操作不受支持", "当前操作不受支持，未执行。"
 		}
 	} else if status == "accepted" {
@@ -993,6 +1124,18 @@ func (s *Service) Reject(ctx context.Context, id string, audit AuditCallback) (S
 }
 
 func (s *Service) ConfirmPlan(ctx context.Context, turnID string, audit AuditCallback) (SendResult, error) {
+	if err := s.ensureAIControlActive(ctx); err != nil {
+		return SendResult{}, err
+	}
+	pending, err := s.store.ListPlanSteps(ctx, turnID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	for _, step := range pending {
+		if _, err := s.revalidatePlanStep(ctx, step); err != nil {
+			return SendResult{}, err
+		}
+	}
 	steps, turn, err := s.store.ClaimToolPlan(ctx, turnID)
 	if err != nil {
 		return SendResult{}, err
@@ -1010,7 +1153,7 @@ func (s *Service) ConfirmPlan(ctx context.Context, turnID string, audit AuditCal
 			return s.completePlanStep(context.WithoutCancel(ctx), turn.ID, step.ID, "queued", status, summary, "")
 		}
 	}
-	return s.advancePlan(ctx, turn, audit)
+	return s.advancePlan(ctx, turn, audit, false)
 }
 
 func (s *Service) RejectPlan(ctx context.Context, turnID string, audit AuditCallback) (SendResult, error) {
@@ -1025,7 +1168,7 @@ func (s *Service) RejectPlan(ctx context.Context, turnID string, audit AuditCall
 	return SendResult{Turn: turn, Message: &message, Plan: &plan}, nil
 }
 
-func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit AuditCallback) (SendResult, error) {
+func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit AuditCallback, autonomous bool) (SendResult, error) {
 	for {
 		steps, err := s.store.ListPlanSteps(ctx, turn.ID)
 		if err != nil {
@@ -1052,6 +1195,15 @@ func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit Audi
 		if next == nil {
 			return s.finishPlan(context.WithoutCancel(ctx), turn.ID)
 		}
+		controlPolicy, controlErr := s.registry.ControlPolicy(ctx)
+		if controlErr != nil {
+			return s.blockQueuedPlanStep(ctx, turn, *next,
+				PolicyResult{Decision: PolicyBlockedPolicy, Reason: "policy_unavailable", Revision: next.PolicyRevision}, audit)
+		}
+		if controlPolicy.Mode == store.AIControlPaused {
+			return s.blockQueuedPlanStep(ctx, turn, *next,
+				PolicyResult{Decision: PolicyBlockedPaused, Reason: "paused", Revision: controlPolicy.Revision}, audit)
+		}
 
 		validated, validateErr := s.revalidatePlanStep(ctx, *next)
 		if validateErr != nil {
@@ -1062,12 +1214,29 @@ func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit Audi
 			}
 			return s.completePlanStep(context.WithoutCancel(ctx), turn.ID, next.ID, "queued", status, summary, "")
 		}
-		if err := s.store.TransitionToolPlanStep(ctx, next.ID, "queued", "running", next.ResultSummary, ""); err != nil {
+		policy, policyErr := s.registry.Policy(ctx, validated)
+		if policyErr != nil {
+			return s.blockQueuedPlanStep(ctx, turn, *next,
+				PolicyResult{Decision: PolicyBlockedPolicy, Reason: "policy_unavailable", Revision: next.PolicyRevision}, audit)
+		}
+		if policy.Decision == PolicyBlockedPaused || (autonomous && policy.Decision != PolicyAutonomous) {
+			return s.blockQueuedPlanStep(ctx, turn, *next, policy, audit)
+		}
+		executionPolicy := policy
+		if !autonomous {
+			executionPolicy.Decision, executionPolicy.Reason = PolicyManual, "confirmed_by_user"
+		}
+		if err := s.store.StartToolPlanStep(ctx, next.ID, string(executionPolicy.Decision), executionPolicy.SafeReason(), executionPolicy.Revision); err != nil {
+			if ctx.Err() != nil {
+				return s.completePlanStep(context.WithoutCancel(ctx), turn.ID, next.ID, "queued", "interrupted", "步骤执行前已取消，未执行", "")
+			}
 			return SendResult{}, err
 		}
+		next.PolicyDecision, next.PolicyReason, next.PolicyRevision = string(executionPolicy.Decision), executionPolicy.SafeReason(), executionPolicy.Revision
 		started := s.now()
 		toolResult, executeErr := s.registry.Execute(ctx, validated)
 		status, summary := toolResult.Status, toolResult.Summary
+		verificationStatus := ""
 		if status == "" {
 			status = "success"
 		}
@@ -1082,6 +1251,17 @@ func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit Audi
 		if status != "success" && status != "accepted" && status != "failure" && status != "unsupported" && status != "interrupted" {
 			status, summary = "failure", "步骤返回了无效状态"
 		}
+		if executeErr == nil && status == "success" && validated.Metadata.Verifier != "" {
+			verification := s.registry.Verify(ctx, validated, toolResult, started)
+			verificationStatus = string(verification.Status)
+			summary = verification.Summary
+			switch verification.Status {
+			case VerificationFailure:
+				status = "failure"
+			case VerificationUnknown:
+				status = "interrupted"
+			}
+		}
 		if strings.TrimSpace(summary) == "" {
 			summary = map[string]string{"success": "步骤执行成功", "accepted": "步骤已接受，等待结果确认"}[status]
 			if summary == "" {
@@ -1089,20 +1269,20 @@ func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit Audi
 			}
 		}
 		summary = boundedString(summary, 512)
-		next.Status, next.ResultSummary, next.OperationID = status, summary, toolResult.OperationID
+		next.Status, next.ResultSummary, next.OperationID, next.VerificationStatus = status, summary, toolResult.OperationID, verificationStatus
 		if audit != nil {
 			event := planAuditEvent("tool_execute", turn, *next, status)
 			event.Duration = s.now().Sub(started)
 			audit(event)
 		}
 		if status == "success" && next.StepIndex < len(steps)-1 {
-			if err := s.store.TransitionToolPlanStep(context.WithoutCancel(ctx), next.ID, "running", status, summary, toolResult.OperationID); err != nil {
+			if err := s.store.TransitionToolPlanStepWithVerification(context.WithoutCancel(ctx), next.ID, "running", status, summary, toolResult.OperationID, verificationStatus); err != nil {
 				return SendResult{}, err
 			}
 			continue
 		}
 		if status == "accepted" {
-			if err := s.store.TransitionToolPlanStep(context.WithoutCancel(ctx), next.ID, "running", status, summary, toolResult.OperationID); err != nil {
+			if err := s.store.TransitionToolPlanStepWithVerification(context.WithoutCancel(ctx), next.ID, "running", status, summary, toolResult.OperationID, verificationStatus); err != nil {
 				return SendResult{}, err
 			}
 			steps, err = s.store.ListPlanSteps(context.WithoutCancel(ctx), turn.ID)
@@ -1113,8 +1293,22 @@ func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit Audi
 			turn.Status = "running"
 			return SendResult{Turn: turn, Plan: &plan}, nil
 		}
-		return s.completePlanStep(context.WithoutCancel(ctx), turn.ID, next.ID, "running", status, summary, toolResult.OperationID)
+		return s.completePlanStepVerified(context.WithoutCancel(ctx), turn.ID, next.ID, "running", status, summary, toolResult.OperationID, verificationStatus)
 	}
+}
+
+func (s *Service) blockQueuedPlanStep(ctx context.Context, turn store.AITurn, step store.AIToolCall, policy PolicyResult, audit AuditCallback) (SendResult, error) {
+	status, summary := "failure", policyExecutionFailureSummary(policy)
+	step.Status, step.ResultSummary = status, summary
+	step.PolicyDecision, step.PolicyReason, step.PolicyRevision = string(policy.Decision), policy.SafeReason(), policy.Revision
+	persistCtx := context.WithoutCancel(ctx)
+	if err := s.store.UpdateQueuedToolPlanPolicy(persistCtx, step.ID, step.PolicyDecision, step.PolicyReason, step.PolicyRevision); err != nil {
+		return SendResult{}, err
+	}
+	if audit != nil {
+		audit(planAuditEvent("tool_execute", turn, step, status))
+	}
+	return s.completePlanStep(persistCtx, turn.ID, step.ID, "queued", status, summary, "")
 }
 
 func (s *Service) revalidatePlanStep(ctx context.Context, step store.AIToolCall) (ValidatedToolCall, error) {
@@ -1191,6 +1385,10 @@ func (s *Service) finishPlan(ctx context.Context, turnID string) (SendResult, er
 }
 
 func (s *Service) completePlanStep(ctx context.Context, turnID, stepID, fromStatus, status, summary, operationID string) (SendResult, error) {
+	return s.completePlanStepVerified(ctx, turnID, stepID, fromStatus, status, summary, operationID, "")
+}
+
+func (s *Service) completePlanStepVerified(ctx context.Context, turnID, stepID, fromStatus, status, summary, operationID, verificationStatus string) (SendResult, error) {
 	steps, err := s.store.ListPlanSteps(ctx, turnID)
 	if err != nil {
 		return SendResult{}, err
@@ -1200,11 +1398,12 @@ func (s *Service) completePlanStep(ctx context.Context, turnID, stepID, fromStat
 		if projected[index].ID == stepID {
 			projected[index].Status = status
 			projected[index].ResultSummary = summary
+			projected[index].VerificationStatus = verificationStatus
 		} else if projected[index].Status == "queued" {
 			projected[index].Status = "skipped"
 		}
 	}
-	steps, turn, message, err := s.store.CompleteToolPlan(ctx, turnID, stepID, fromStatus, status, summary, operationID, planResultMessage(projected))
+	steps, turn, message, err := s.store.CompleteToolPlanWithVerification(ctx, turnID, stepID, fromStatus, status, summary, operationID, verificationStatus, planResultMessage(projected))
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -1219,9 +1418,38 @@ func planValidationFailure(err error) (string, string) {
 	return "failure", "目标或能力已变化，计划未执行"
 }
 
+func policyExecutionFailureSummary(policy PolicyResult) string {
+	switch policy.Decision {
+	case PolicyBlockedPaused:
+		return "AI 控制平面已暂停，当前及后续步骤未执行"
+	case PolicyBlockedScope:
+		return "节点已不在自动执行范围内，步骤未执行"
+	case PolicyBlockedAction:
+		return "操作已不在自动执行范围内，步骤未执行"
+	case PolicyBlockedCapability:
+		return "目标能力当前不可用，步骤未执行"
+	case PolicyBlockedVerifier:
+		return "最终状态验证不可用，步骤未执行"
+	case PolicyBlockedPolicy:
+		return "无法读取 AI 控制策略，步骤未执行"
+	default:
+		return "自动执行策略已变化，步骤未执行"
+	}
+}
+
 func planResultMessage(steps []store.AIToolCall) string {
-	success, failed, skipped := 0, 0, 0
+	success, failed, skipped, unknown := 0, 0, 0, 0
+	autonomous := len(steps) > 0
 	for _, step := range steps {
+		if step.PolicyReason == "paused" || strings.Contains(step.ResultSummary, "控制平面已暂停") {
+			return "AI 控制平面已暂停，新步骤未执行；已经接受的远端操作不会被撤回。"
+		}
+		if step.PolicyDecision != string(PolicyAutonomous) {
+			autonomous = false
+		}
+		if step.VerificationStatus == string(VerificationUnknown) {
+			unknown++
+		}
 		switch step.Status {
 		case "success":
 			success++
@@ -1232,7 +1460,13 @@ func planResultMessage(steps []store.AIToolCall) string {
 		}
 	}
 	if success == len(steps) {
+		if autonomous {
+			return fmt.Sprintf("已按低风险自动执行策略完成：%d 个步骤均已验证成功。", success)
+		}
 		return fmt.Sprintf("变更计划执行完成：%d 个步骤全部成功。", success)
+	}
+	if unknown > 0 {
+		return fmt.Sprintf("变更计划执行结束：%d 个步骤状态无法确认，未自动重试。", unknown)
 	}
 	return fmt.Sprintf("变更计划执行结束：成功 %d，失败 %d，跳过 %d。", success, failed, skipped)
 }
@@ -1500,6 +1734,8 @@ func SafeErrorMessage(err error) string {
 		return ErrProviderCapability.Error()
 	case errors.Is(err, ErrMessageTooLarge):
 		return ErrMessageTooLarge.Error()
+	case errors.Is(err, ErrAIControlPaused):
+		return "AI 控制平面已暂停"
 	case errors.Is(err, store.ErrAINotFound):
 		return "AI 资源不存在"
 	case errors.Is(err, store.ErrAIConflict):
@@ -1523,6 +1759,8 @@ func stableErrorCode(err error) string {
 		return "timeout"
 	case errors.Is(err, ErrModelRoundsExceeded):
 		return "round_limit"
+	case errors.Is(err, ErrAIControlPaused):
+		return "policy_paused"
 	default:
 		return "internal"
 	}

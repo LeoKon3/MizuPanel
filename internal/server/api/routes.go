@@ -122,6 +122,27 @@ type SettingsConfig struct {
 	DefaultMetricsRetention time.Duration
 }
 
+type aiControlSettingsRequest struct {
+	Mode           store.AIControlMode `json:"mode"`
+	AllowedActions *[]string           `json:"allowed_actions"`
+	NodeScope      *[]string           `json:"node_scope"`
+}
+
+type settingsUpdateRequest struct {
+	MetricsRetention *string                   `json:"metrics_retention"`
+	AIControl        *aiControlSettingsRequest `json:"ai_control"`
+}
+
+type aiControlSettingsResponse struct {
+	Mode             store.AIControlMode `json:"mode"`
+	AllowedActions   []string            `json:"allowed_actions"`
+	NodeScope        []string            `json:"node_scope"`
+	Revision         int64               `json:"revision"`
+	UpdatedAt        *time.Time          `json:"updated_at"`
+	ScopedNodeCount  int                 `json:"scoped_node_count"`
+	EmergencyStopped bool                `json:"emergency_stopped"`
+}
+
 type UptimeConfig struct {
 	Store   *store.UptimeStore
 	Checker UptimeChecker
@@ -453,23 +474,83 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.writeSettings(w, r)
 	case http.MethodPut:
-		markAudit(r, "settings", "update", "settings", "metrics", "")
+		markAudit(r, "settings", "update", "settings", "system", "")
 		if !sameOrigin(r) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
-		var request struct {
-			MetricsRetention string `json:"metrics_retention"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid request body")
+		var request settingsUpdateRequest
+		if !decodeAIRequest(w, r, &request) {
 			return
 		}
-		if err := s.settings.SetMetricsRetention(r.Context(), request.MetricsRetention); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+		if request.MetricsRetention == nil && request.AIControl == nil {
+			writeError(w, http.StatusBadRequest, "settings update is empty")
 			return
 		}
-		serveraudit.SetMetadata(r, "metrics_retention", request.MetricsRetention)
+		if request.MetricsRetention != nil && request.AIControl != nil {
+			writeError(w, http.StatusBadRequest, "settings update must contain one section")
+			return
+		}
+		if request.MetricsRetention != nil {
+			if _, err := store.ParseMetricsRetention(*request.MetricsRetention); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		var policy store.AIControlPolicy
+		if request.AIControl != nil {
+			if request.AIControl.AllowedActions == nil || request.AIControl.NodeScope == nil {
+				writeError(w, http.StatusBadRequest, "AI control policy is incomplete")
+				return
+			}
+			policy = store.AIControlPolicy{
+				Mode: request.AIControl.Mode, AllowedActions: append([]string{}, (*request.AIControl.AllowedActions)...),
+				NodeScope: append([]string{}, (*request.AIControl.NodeScope)...), Revision: 1,
+			}
+			if err := store.ValidateAIControlPolicy(policy); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if err := s.validateAIControlNodeScope(r.Context(), policy); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		if request.MetricsRetention != nil {
+			if err := s.settings.SetMetricsRetention(r.Context(), *request.MetricsRetention); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update settings")
+				return
+			}
+			serveraudit.SetMetadata(r, "metrics_retention", *request.MetricsRetention)
+		}
+		if request.AIControl != nil {
+			current, err := s.settings.AIControlPolicy(r.Context())
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load settings")
+				return
+			}
+			if current.Mode == store.AIControlPaused && policy.Mode != store.AIControlPaused && s.ai != nil {
+				if err := s.ai.PausePendingPlans(r.Context()); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to cancel paused AI plans")
+					return
+				}
+			}
+			updated, err := s.settings.SetAIControlPolicy(r.Context(), policy)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update settings")
+				return
+			}
+			serveraudit.SetMetadata(r, "ai_control_mode", string(updated.Mode))
+			serveraudit.SetMetadata(r, "allowed_action_count", strconv.Itoa(len(updated.AllowedActions)))
+			serveraudit.SetMetadata(r, "scoped_node_count", strconv.Itoa(len(updated.NodeScope)))
+			serveraudit.SetMetadata(r, "policy_revision", strconv.FormatInt(updated.Revision, 10))
+			if updated.Mode == store.AIControlPaused && s.ai != nil {
+				if err := s.ai.PausePendingPlans(r.Context()); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to cancel pending AI plans")
+					return
+				}
+			}
+		}
 		s.writeSettings(w, r)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -482,11 +563,45 @@ func (s *Server) writeSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	policy, err := s.settings.AIControlPolicy(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load settings")
+		return
+	}
+	var updatedAt *time.Time
+	if !policy.UpdatedAt.IsZero() {
+		value := policy.UpdatedAt
+		updatedAt = &value
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"metrics_retention":         store.FormatMetricsRetention(retention),
 		"metrics_retention_seconds": int64(retention.Seconds()),
 		"max_metrics_retention":     store.FormatMetricsRetention(store.MetricsRetentionMax),
+		"ai_control": aiControlSettingsResponse{
+			Mode: policy.Mode, AllowedActions: policy.AllowedActions, NodeScope: policy.NodeScope,
+			Revision: policy.Revision, UpdatedAt: updatedAt, ScopedNodeCount: len(policy.NodeScope),
+			EmergencyStopped: policy.Mode == store.AIControlPaused,
+		},
 	})
+}
+
+func (s *Server) validateAIControlNodeScope(ctx context.Context, policy store.AIControlPolicy) error {
+	if policy.Mode == store.AIControlPaused {
+		return nil
+	}
+	for _, nodeID := range policy.NodeScope {
+		node, err := s.nodes.Get(ctx, nodeID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("AI control node does not exist")
+		}
+		if err != nil {
+			return errors.New("failed to validate AI control node")
+		}
+		if policy.Mode == store.AIControlLowRiskAuto && node.Status != "online" {
+			return errors.New("AI control node must be online")
+		}
+	}
+	return nil
 }
 
 func (s *Server) currentMetricsRetention(ctx context.Context) (time.Duration, error) {

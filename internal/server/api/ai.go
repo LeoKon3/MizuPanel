@@ -736,6 +736,18 @@ func aiAuditCallback(r *http.Request) serverai.AuditCallback {
 		if event.ToolCall.Risk != "" {
 			metadata["risk"] = event.ToolCall.Risk
 		}
+		if event.ToolCall.PolicyDecision != "" {
+			metadata["policy_decision"] = event.ToolCall.PolicyDecision
+		}
+		if event.ToolCall.PolicyReason != "" {
+			metadata["policy_reason"] = event.ToolCall.PolicyReason
+		}
+		if event.ToolCall.PolicyRevision > 0 {
+			metadata["policy_revision"] = strconv.FormatInt(event.ToolCall.PolicyRevision, 10)
+		}
+		if event.ToolCall.VerificationStatus != "" {
+			metadata["verification_status"] = event.ToolCall.VerificationStatus
+		}
 		if event.ProviderID != "" {
 			metadata["provider_id"] = event.ProviderID
 		}
@@ -834,6 +846,8 @@ func writeAIError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, store.ErrAIConflict):
 		status = http.StatusConflict
+	case errors.Is(err, serverai.ErrAIControlPaused):
+		status = http.StatusLocked
 	case errors.Is(err, serverai.ErrMessageTooLarge):
 		status = http.StatusRequestEntityTooLarge
 	case errors.Is(err, serverai.ErrProviderCapability):

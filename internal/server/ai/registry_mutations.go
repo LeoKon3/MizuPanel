@@ -75,6 +75,7 @@ func (r *Registry) registerCreationTools() {
 		}, []string{"name", "script_id", "node_ids", "schedule_type", "enabled", "timeout_seconds", "notification_policy"}),
 		risk:       RiskConfirm,
 		capability: capabilityTaskCreation,
+		metadata:   classifiedPolicyMetadata("automation", "create_scheduled_task", "high", "multi_node"),
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createScheduledTaskArguments
 			if err := requireCreationParameters(raw, "create_scheduled_task", "name", "script_id", "node_ids", "schedule_type", "run_at", "cron_expression", "timezone", "enabled", "timeout_seconds", "notification_policy"); err != nil {
@@ -143,6 +144,7 @@ func (r *Registry) registerCreationTools() {
 		}, []string{"node_id", "image", "auto_name", "restart_policy", "network_mode", "ports", "environment", "mounts", "start"}),
 		risk:       RiskConfirm,
 		capability: capabilityDockerAgent,
+		metadata:   classifiedPolicyMetadata("docker", "create_docker_container", "high", "node"),
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createDockerContainerArguments
 			if err := requireCreationParameters(raw, "create_docker_container", "node_id", "image", "name", "auto_name", "restart_policy", "network_mode", "ports", "environment", "mounts", "start"); err != nil {
@@ -224,6 +226,7 @@ func (r *Registry) registerCreationTools() {
 		}, []string{"cluster_id", "namespace", "name", "image", "replicas", "container_port"}),
 		risk:       RiskConfirm,
 		capability: capabilityKubernetesMutation,
+		metadata:   classifiedPolicyMetadata("kubernetes", "create_k8s_deployment", "high", "cluster"),
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createK8sDeploymentArguments
 			if err := requireCreationParameters(raw, "create_k8s_deployment", "cluster_id", "namespace", "name", "image", "replicas", "container_port"); err != nil {

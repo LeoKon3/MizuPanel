@@ -1,5 +1,6 @@
 import { AIProviderSettings } from '../components/ai/AIProviderSettings'
-import type { RangeOption, SettingsResponse, SystemAboutResponse } from '../types'
+import { AIControlPlaneSettings } from '../components/ai/AIControlPlaneSettings'
+import type { AIControlSettings, AIControlSettingsUpdate, Node, RangeOption, SettingsResponse, SystemAboutResponse } from '../types'
 
 const retentionOptions: Array<{ value: RangeOption, label: string }> = [
   { value: '6h', label: '6 小时' },
@@ -8,7 +9,20 @@ const retentionOptions: Array<{ value: RangeOption, label: string }> = [
   { value: '7d', label: '7 天' }
 ]
 
-export function SystemSettingsPage({ settings, about, selectedRetention, saving, message, error, onSelectRetention, onSave }: { settings?: SettingsResponse, about?: SystemAboutResponse, selectedRetention: RangeOption, saving: boolean, message?: string, error?: string, onSelectRetention: (retention: RangeOption) => void, onSave: () => void }) {
+type SystemSettingsPageProps = {
+  settings?: SettingsResponse
+  about?: SystemAboutResponse
+  nodes: Node[]
+  selectedRetention: RangeOption
+  saving: boolean
+  message?: string
+  error?: string
+  onSelectRetention: (retention: RangeOption) => void
+  onSave: () => void
+  onSaveAIControl: (update: AIControlSettingsUpdate) => Promise<AIControlSettings>
+}
+
+export function SystemSettingsPage({ settings, about, nodes, selectedRetention, saving, message, error, onSelectRetention, onSave, onSaveAIControl }: SystemSettingsPageProps) {
   return (
     <section aria-label="系统设置" className="soft-panel">
       <div className="soft-panel-header flex flex-wrap items-center justify-between gap-4 px-5 py-4">
@@ -58,6 +72,7 @@ export function SystemSettingsPage({ settings, about, selectedRetention, saving,
         {message ? <p className="mt-3 text-sm font-black text-success">{message}</p> : null}
         {error ? <p className="mt-3 text-sm font-black text-danger">{error}</p> : null}
       </section>
+      <AIControlPlaneSettings policy={settings?.ai_control} nodes={nodes} onSave={onSaveAIControl} />
       <AIProviderSettings />
     </section>
   )

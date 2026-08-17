@@ -856,7 +856,7 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 	if err := Migrate(database); err != nil {
 		t.Fatalf("replay Migrate: %v", err)
 	}
-	for _, table := range []string{"ai_providers", "ai_provider_models", "ai_conversations", "ai_turns", "ai_messages", "ai_tool_calls"} {
+	for _, table := range []string{"ai_control_policy", "ai_providers", "ai_provider_models", "ai_conversations", "ai_turns", "ai_messages", "ai_tool_calls"} {
 		var name string
 		if err := database.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
 			t.Fatalf("missing AI table %s: %v", table, err)
@@ -866,7 +866,10 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 	if err := database.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_tool_calls'`).Scan(&toolCallSchema); err != nil {
 		t.Fatalf("read AI tool call schema: %v", err)
 	}
-	if !strings.Contains(toolCallSchema, "operation_id") || !strings.Contains(toolCallSchema, "step_index") || !strings.Contains(toolCallSchema, "DEFAULT -1") {
+	if !strings.Contains(toolCallSchema, "operation_id") || !strings.Contains(toolCallSchema, "step_index") ||
+		!strings.Contains(toolCallSchema, "policy_decision") || !strings.Contains(toolCallSchema, "policy_reason") ||
+		!strings.Contains(toolCallSchema, "policy_revision") || !strings.Contains(toolCallSchema, "verification_status") ||
+		!strings.Contains(toolCallSchema, "DEFAULT -1") {
 		t.Fatalf("AI tool call schema missing plan columns: %s", toolCallSchema)
 	}
 	var indexCount int
@@ -940,12 +943,68 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 	}
 }
 
+func TestMigrateSQLiteAddsAIControlColumnsToLegacyToolCalls(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+
+	if _, err := database.Exec(`CREATE TABLE ai_tool_calls (
+		id TEXT PRIMARY KEY,
+		turn_id TEXT NOT NULL,
+		provider_call_id TEXT NOT NULL DEFAULT '',
+		tool_name TEXT NOT NULL,
+		risk TEXT NOT NULL,
+		status TEXT NOT NULL,
+		arguments_json TEXT NOT NULL,
+		target_type TEXT NOT NULL DEFAULT '',
+		target_id TEXT NOT NULL DEFAULT '',
+		target_name TEXT NOT NULL DEFAULT '',
+		node_id TEXT NOT NULL DEFAULT '',
+		result_summary TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create legacy tool call table: %v", err)
+	}
+	const now = "2026-08-16T12:00:00Z"
+	if _, err := database.Exec(`INSERT INTO ai_tool_calls
+		(id, turn_id, tool_name, risk, status, arguments_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "legacy-call", "legacy-turn", "reboot_node", "confirm", "success", `{}`, now, now); err != nil {
+		t.Fatalf("insert legacy tool call: %v", err)
+	}
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("upgrade legacy AI control schema: %v", err)
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("replay legacy AI control upgrade: %v", err)
+	}
+	var stepIndex int
+	var operationID, decision, reason, verification string
+	var revision int64
+	if err := database.QueryRow(`SELECT step_index, operation_id, policy_decision, policy_reason,
+		policy_revision, verification_status FROM ai_tool_calls WHERE id = ?`, "legacy-call").
+		Scan(&stepIndex, &operationID, &decision, &reason, &revision, &verification); err != nil {
+		t.Fatalf("read migrated tool call: %v", err)
+	}
+	if stepIndex != -1 || operationID != "" || decision != "" || reason != "" || revision != 0 || verification != "" {
+		t.Fatalf("migrated defaults = step:%d operation:%q decision:%q reason:%q revision:%d verification:%q",
+			stepIndex, operationID, decision, reason, revision, verification)
+	}
+}
+
 func TestMySQLMigrationIncludesAISchemaAndSafeWidths(t *testing.T) {
 	statements := strings.Join(mysqlMigrationStatements(), "\n")
 	compatibility := strings.Join(aiCompatibilityColumnStatements(DialectMySQL), "\n")
 	upgrade := strings.Join(aiUpgradeStatements(DialectMySQL), "\n")
 	all := statements + "\n" + compatibility + "\n" + upgrade
 	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS ai_control_policy",
+		"allowed_actions_json TEXT NOT NULL",
+		"node_scope_json LONGTEXT NOT NULL",
 		"CREATE TABLE IF NOT EXISTS ai_providers",
 		"base_url VARCHAR(2048) NOT NULL",
 		"api_key_ciphertext LONGTEXT NOT NULL",
@@ -974,6 +1033,10 @@ func TestMySQLMigrationIncludesAISchemaAndSafeWidths(t *testing.T) {
 		"target_id VARCHAR(1024) NOT NULL DEFAULT ''",
 		"operation_id VARCHAR(191) NOT NULL DEFAULT ''",
 		"step_index INT NOT NULL DEFAULT -1",
+		"policy_decision VARCHAR(32) NOT NULL DEFAULT ''",
+		"policy_reason VARCHAR(64) NOT NULL DEFAULT ''",
+		"policy_revision BIGINT NOT NULL DEFAULT 0",
+		"verification_status VARCHAR(16) NOT NULL DEFAULT ''",
 		"INDEX idx_ai_tool_calls_turn_step (turn_id, step_index)",
 		"INSERT INTO ai_provider_models",
 		"migration.ai_provider_models_v1",

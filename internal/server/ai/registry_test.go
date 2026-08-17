@@ -52,6 +52,19 @@ func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
 		if registry.tools[definition.Name].capability == "" {
 			t.Fatalf("definition[%d] %q has no capability metadata", index, definition.Name)
 		}
+		tool := registry.tools[definition.Name]
+		if tool.metadata.ResourceDomain == "" || tool.metadata.Action == "" || tool.metadata.AutonomyClass == "" || tool.metadata.TargetScope == "" {
+			t.Fatalf("definition[%d] %q has incomplete policy metadata: %+v", index, definition.Name, tool.metadata)
+		}
+		if tool.risk == RiskRead && tool.metadata.AutonomyClass != "read" {
+			t.Fatalf("read tool %q has policy class %q", definition.Name, tool.metadata.AutonomyClass)
+		}
+		if tool.risk == RiskConfirm && tool.metadata.AutonomyClass != "low" && tool.metadata.AutonomyClass != "high" && tool.metadata.AutonomyClass != "critical" {
+			t.Fatalf("mutation tool %q has policy class %q", definition.Name, tool.metadata.AutonomyClass)
+		}
+		if tool.metadata.Autonomous && (tool.metadata.AutonomyClass != "low" || tool.metadata.Verifier == "" || tool.verify == nil || tool.actionKey == nil) {
+			t.Fatalf("autonomous tool %q is missing a low-risk action classifier or verifier: %+v", definition.Name, tool.metadata)
+		}
 		if additional, ok := definition.Parameters["additionalProperties"].(bool); !ok || additional {
 			t.Fatalf("tool %q permits additional properties: %#v", definition.Name, definition.Parameters)
 		}
@@ -73,6 +86,14 @@ func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
 				t.Fatalf("cc-switch configuration import concept is registered as %q", definition.Name)
 			}
 		}
+	}
+}
+
+func TestRegistryMissingPolicyMetadataRemainsUnclassified(t *testing.T) {
+	registry := &Registry{tools: make(map[string]registeredTool)}
+	registry.add(registeredTool{definition: noArgumentDefinition("new_mutation", "new mutation"), risk: RiskConfirm, capability: capabilityAgentNode})
+	if metadata := registry.tools["new_mutation"].metadata; metadata.ResourceDomain != "" || metadata.Action != "" || metadata.AutonomyClass != "" || metadata.Autonomous {
+		t.Fatalf("missing metadata was silently classified: %+v", metadata)
 	}
 }
 

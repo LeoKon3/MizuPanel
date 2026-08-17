@@ -25,7 +25,7 @@ import { TasksPage } from './pages/TasksPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { LogsPage } from './pages/LogsPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
-import type { AIRequestContext, DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
+import type { AIControlSettingsUpdate, AIRequestContext, DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
 function decodeRouteNodeID(value?: string) {
   if (!value) return undefined
@@ -864,6 +864,13 @@ export default function App() {
       .finally(() => setSettingsSaving(false))
   }
 
+  const saveAIControlSettings = (aiControl: AIControlSettingsUpdate) => {
+    return updateSettings({ ai_control: aiControl }).then((response) => {
+      setSettings(response)
+      return response.ai_control
+    })
+  }
+
   const handleLogin = () => {
     setLoginLoading(true)
     setLoginError(undefined)
@@ -1273,7 +1280,7 @@ export default function App() {
               ) : page === 'history' ? (
                 <HistoryPage nodes={nodes} selectedNodeID={selectedNodeID} metrics={metrics} range={range} settings={settings} onSelectNode={setSelectedNodeID} onRangeChange={setRange} />
               ) : page === 'settings' ? (
-                <SystemSettingsPage settings={settings} about={systemAbout} selectedRetention={settingsRetention} saving={settingsSaving} message={settingsMessage} error={settingsError} onSelectRetention={setSettingsRetention} onSave={saveSettings} />
+                <SystemSettingsPage settings={settings} about={systemAbout} nodes={nodes} selectedRetention={settingsRetention} saving={settingsSaving} message={settingsMessage} error={settingsError} onSelectRetention={setSettingsRetention} onSave={saveSettings} onSaveAIControl={saveAIControlSettings} />
               ) : page === 'alerts' ? (
                 <AlertsPage nodes={nodes} />
               ) : page === 'uptime' ? (

@@ -94,12 +94,27 @@ describe('api client', () => {
   })
 
   test('fetches and updates system settings', async () => {
+    const aiControl = {
+      mode: 'confirm_all', allowed_actions: [], node_scope: [], revision: 1,
+      updated_at: null, scoped_node_count: 0, emergency_stopped: false
+    }
     const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(JSON.stringify({ metrics_retention: '6h', metrics_retention_seconds: 21600, max_metrics_retention: '7d' })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ metrics_retention: '6h', metrics_retention_seconds: 21600, max_metrics_retention: '7d', ai_control: aiControl })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d', ai_control: aiControl })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d',
+        ai_control: { ...aiControl, mode: 'low_risk_auto', allowed_actions: ['docker.container.restart'], node_scope: ['node-1'], revision: 2, scoped_node_count: 1 }
+      })))
 
     const current = await getSettings()
     const updated = await updateSettings({ metrics_retention: '24h' })
+    const policy = await updateSettings({
+      ai_control: {
+        mode: 'low_risk_auto',
+        allowed_actions: ['docker.container.restart'],
+        node_scope: ['node-1']
+      }
+    })
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/settings')
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/settings', {
@@ -107,8 +122,20 @@ describe('api client', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ metrics_retention: '24h' })
     })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ai_control: {
+          mode: 'low_risk_auto',
+          allowed_actions: ['docker.container.restart'],
+          node_scope: ['node-1']
+        }
+      })
+    })
     expect(current.metrics_retention).toBe('6h')
     expect(updated.metrics_retention).toBe('24h')
+    expect(policy.ai_control.scoped_node_count).toBe(1)
   })
 
   test('fetches system about information', async () => {

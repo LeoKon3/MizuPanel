@@ -2,6 +2,31 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.26 - 2026-08-17
+
+### Added
+
+- Added a persisted AI Control Plane with confirmation-only, scoped low-risk
+  automation, and emergency-pause modes in System Settings.
+- Added Server-owned final-state verification for eligible Docker container,
+  Compose service, and Systemd service start/restart recovery actions.
+
+### Changed
+
+- Changed autonomous and manually confirmed mutations to use the same persisted
+  plan, atomic claim, per-step policy check, and accepted-operation recovery path.
+- Changed AI conversations to show concise localized policy decisions and
+  verification outcomes without exposing raw arguments or internal reason codes.
+
+### Security
+
+- Automatic recovery is limited to six explicitly allowed actions and selected
+  online nodes; all creates, stop/delete actions, reboot, upgrades, tasks, and
+  Kubernetes mutations still require confirmation.
+- Emergency pause cancels every pending confirmation while preserving accepted
+  remote work for bounded verification, and settings audit records only mode,
+  counts, and policy revision.
+
 ## v0.1.25 - 2026-08-14
 
 ### Added
