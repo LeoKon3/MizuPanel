@@ -280,11 +280,13 @@ func sqliteMigrationStatements() []string {
 				);`,
 		`CREATE INDEX IF NOT EXISTS idx_automation_scripts_updated ON automation_scripts(updated_at DESC, id DESC);`,
 		`CREATE TABLE IF NOT EXISTS scheduled_tasks (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					name TEXT NOT NULL,
-					normalized_name TEXT NOT NULL UNIQUE,
-					script_id INTEGER NOT NULL,
-					cron_expression TEXT NOT NULL,
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						name TEXT NOT NULL,
+						normalized_name TEXT NOT NULL UNIQUE,
+						script_id INTEGER NOT NULL,
+						schedule_type TEXT NOT NULL DEFAULT 'cron',
+						run_at DATETIME,
+						cron_expression TEXT NOT NULL,
 					timezone TEXT NOT NULL,
 					enabled INTEGER NOT NULL DEFAULT 1,
 					timeout_seconds INTEGER NOT NULL,
@@ -761,11 +763,13 @@ func mysqlMigrationStatements() []string {
 					INDEX idx_automation_scripts_updated (updated_at, id)
 				);`,
 		`CREATE TABLE IF NOT EXISTS scheduled_tasks (
-					id BIGINT AUTO_INCREMENT PRIMARY KEY,
-					name VARCHAR(255) NOT NULL,
-					normalized_name VARCHAR(255) NOT NULL,
-					script_id BIGINT NOT NULL,
-					cron_expression VARCHAR(128) NOT NULL,
+						id BIGINT AUTO_INCREMENT PRIMARY KEY,
+						name VARCHAR(255) NOT NULL,
+						normalized_name VARCHAR(255) NOT NULL,
+						script_id BIGINT NOT NULL,
+						schedule_type VARCHAR(16) NOT NULL DEFAULT 'cron',
+						run_at VARCHAR(64),
+						cron_expression VARCHAR(128) NOT NULL,
 					timezone VARCHAR(128) NOT NULL,
 					enabled BOOLEAN NOT NULL DEFAULT 1,
 					timeout_seconds INT NOT NULL,
@@ -1046,8 +1050,29 @@ func migrateStatements(db *sql.DB, dialect Dialect, statements []string) error {
 			return err
 		}
 	}
+	for _, statement := range scheduledTaskCompatibilityColumnStatements(dialect) {
+		if err := addColumnIfMissing(db, statement); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`UPDATE scheduled_tasks SET schedule_type = 'cron' WHERE schedule_type IS NULL OR TRIM(schedule_type) = ''`); err != nil {
+		return err
+	}
 	_, err := db.Exec(`UPDATE nodes SET agent_mode = COALESCE(NULLIF(agent_mode, ''), 'normal'), agent_user = COALESCE(agent_user, '')`)
 	return err
+}
+
+func scheduledTaskCompatibilityColumnStatements(dialect Dialect) []string {
+	if dialect == DialectMySQL {
+		return []string{
+			`ALTER TABLE scheduled_tasks ADD COLUMN schedule_type VARCHAR(16) NOT NULL DEFAULT 'cron'`,
+			`ALTER TABLE scheduled_tasks ADD COLUMN run_at VARCHAR(64)`,
+		}
+	}
+	return []string{
+		`ALTER TABLE scheduled_tasks ADD COLUMN schedule_type TEXT NOT NULL DEFAULT 'cron'`,
+		`ALTER TABLE scheduled_tasks ADD COLUMN run_at DATETIME`,
+	}
 }
 
 func aiPlanIndexStatements(dialect Dialect) []string {

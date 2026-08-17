@@ -232,6 +232,136 @@ func TestServiceIncompleteCreationCallAsksForParametersWithoutCreatingAPlan(t *t
 	}
 }
 
+func TestServiceSealsDockerEnvironmentBeforePersistingPlan(t *testing.T) {
+	const secret = "docker-environment-secret-marker"
+	definition := noArgumentDefinition("create_docker_container", "create a Docker container")
+	registry := &Registry{tools: make(map[string]registeredTool), ordered: []ToolDefinition{definition}}
+	registry.add(registeredTool{
+		definition: definition,
+		risk:       RiskConfirm,
+		validate: func(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
+			var args createDockerContainerArguments
+			if err := strictArguments(raw, &args); err != nil || len(args.Environment) != 1 {
+				return nil, ToolTarget{}, ErrInvalidArguments
+			}
+			return normalizedArguments(args), ToolTarget{Type: "docker_container", ID: "node-1/web", Name: "web", NodeID: "node-1"}, nil
+		},
+		execute: func(_ context.Context, raw json.RawMessage) (SafeToolResult, error) {
+			var args createDockerContainerArguments
+			if err := json.Unmarshal(raw, &args); err != nil || len(args.Environment) != 1 || args.Environment[0].Value != secret {
+				t.Fatalf("execution arguments did not recover the environment value: args=%+v err=%v", args, err)
+			}
+			return SafeToolResult{Status: "success", Summary: "Docker 容器创建成功"}, nil
+		},
+	})
+	arguments := json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"environment":[{"key":"TOKEN","value":"` + secret + `"}],"mounts":[],"start":true}`)
+	adapter := serviceTestAdapter{complete: func(context.Context, ProviderCredential, ChatRequest) (ChatResponse, error) {
+		return ChatResponse{ToolCalls: []ToolCall{{ID: "call-1", Name: definition.Name, Arguments: arguments}}}, nil
+	}}
+	service, aiStore, database := newServiceTestFixture(t, registry, adapter)
+	provider := createCapableServiceProvider(t, service, aiStore)
+	conversation, err := service.CreateConversation(t.Context(), "Docker secret persistence")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	var audits []AuditEvent
+	proposal, err := service.Send(t.Context(), conversation.ID, provider.ID, "create it", func(event AuditEvent) {
+		audits = append(audits, event)
+	})
+	if err != nil || proposal.Plan == nil || len(proposal.Plan.Steps) != 1 {
+		t.Fatalf("proposal = %+v err=%v", proposal, err)
+	}
+
+	var persisted string
+	if err := database.QueryRow(`SELECT arguments_json FROM ai_tool_calls WHERE id = ?`, proposal.Plan.Steps[0].ID).Scan(&persisted); err != nil {
+		t.Fatalf("query persisted arguments: %v", err)
+	}
+	if strings.Contains(persisted, secret) || !strings.HasPrefix(persisted, `{"sealed_tool_arguments":1,`) {
+		t.Fatalf("persisted arguments were not sealed: %s", persisted)
+	}
+	if count, err := aiStore.ToolArgumentSecretCount(t.Context()); err != nil || count != 1 {
+		t.Fatalf("tool argument secret count = %d, %v; want 1", count, err)
+	}
+	state, err := service.ConversationState(t.Context(), conversation.ID, 20)
+	if err != nil {
+		t.Fatalf("conversation state: %v", err)
+	}
+	for name, value := range map[string]any{"proposal": proposal, "state": state, "audits": audits} {
+		encoded, marshalErr := json.Marshal(value)
+		if marshalErr != nil || strings.Contains(string(encoded), secret) {
+			t.Fatalf("%s leaked environment value: %s (err=%v)", name, encoded, marshalErr)
+		}
+	}
+	for _, event := range audits {
+		if strings.Contains(event.ToolCall.ArgumentsJSON, secret) {
+			t.Fatalf("audit event leaked environment value: %+v", event)
+		}
+	}
+
+	confirmed, err := service.ConfirmPlan(t.Context(), proposal.Plan.ID, func(event AuditEvent) {
+		audits = append(audits, event)
+	})
+	if err != nil || confirmed.Plan == nil || confirmed.Plan.Status != "success" {
+		t.Fatalf("confirmed = %+v err=%v", confirmed, err)
+	}
+	encoded, err := json.Marshal(struct {
+		Result SendResult
+		Audits []AuditEvent
+	}{Result: confirmed, Audits: audits})
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("confirmation projection leaked environment value: %s (err=%v)", encoded, err)
+	}
+	if err := database.QueryRow(`SELECT arguments_json FROM ai_tool_calls WHERE id = ?`, proposal.Plan.Steps[0].ID).Scan(&persisted); err != nil {
+		t.Fatalf("query completed arguments: %v", err)
+	}
+	if strings.Contains(persisted, secret) {
+		t.Fatalf("completed tool call leaked environment value: %s", persisted)
+	}
+}
+
+func TestServiceInitializeRefusesNewKeyWhenToolArgumentCiphertextExists(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+	aiStore := store.NewAIStore(database, serverdb.DialectSQLite)
+	provider, err := aiStore.CreateProvider(t.Context(), store.AIProvider{
+		ID: "provider-no-secret", Name: "No secret", Protocol: ProtocolOpenAIChatCompletions,
+		BaseURL: "https://model.test/v1", Model: "model-a", Enabled: true, ProbeStatus: "unknown",
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	conversation, err := aiStore.CreateConversation(t.Context(), "Encrypted operation")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	turn, _, err := aiStore.StartTurn(t.Context(), conversation.ID, provider, "create container")
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+	if _, err := aiStore.CreateToolPlan(t.Context(), turn, []store.AIToolCall{{
+		ToolName: "create_docker_container", Risk: "confirm",
+		ArgumentsJSON: `{"sealed_tool_arguments":1,"ciphertext":"v1:ciphertext-marker"}`,
+		TargetType:    "docker_container", TargetID: "node-1/web", NodeID: "node-1",
+	}}); err != nil {
+		t.Fatalf("create encrypted tool plan: %v", err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "missing", "ai.key")
+	service := NewService(aiStore, NewSecretManager(keyPath), NewRegistry(RegistryDependencies{}), map[string]Adapter{})
+	if err := service.Initialize(t.Context()); !errors.Is(err, ErrMasterKeyUnavailable) {
+		t.Fatalf("initialize without tool-argument key error = %v, want ErrMasterKeyUnavailable", err)
+	}
+	if _, err := os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing key was unexpectedly replaced: %v", err)
+	}
+}
+
 func TestServiceIncompleteK8sCreationCallAsksForParametersWithoutCreatingAPlan(t *testing.T) {
 	const toolName = "create_k8s_deployment"
 	definition := objectDefinition(toolName, "create a Kubernetes Deployment", map[string]any{"image": map[string]any{"type": "string"}}, []string{"image"})

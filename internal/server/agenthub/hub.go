@@ -230,6 +230,7 @@ type agentConnection struct {
 	supportsDockerComposeDeployment     bool
 	supportsDockerResources             bool
 	supportsDockerContainerCreate       bool
+	supportsDockerContainerCreateV2     bool
 	supportsSystemdServices             bool
 	supportsTaskRunner                  bool
 	sessionMu                           sync.Mutex
@@ -467,7 +468,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.options.InstallAuth.CompleteBootstrap(nodeID, nodeToken)
 	}
 	sessionID := h.startSession(nodeID)
-	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerComposeDeployment: hello.DockerComposeDeployment, supportsDockerResources: hello.DockerResources, supportsDockerContainerCreate: hello.DockerContainerCreate, supportsSystemdServices: hello.SystemdServices, supportsTaskRunner: hello.TaskRunner, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage), pendingRPCs: make(map[string]chan rpcDelivery), closed: make(chan struct{})}
+	agent := &agentConnection{nodeID: nodeID, sessionID: sessionID, hostname: hello.Hostname, remoteAddr: r.RemoteAddr, agentVersion: hello.AgentVersion, protocolVersion: hello.ProtocolVersion, identitySource: hello.IdentitySource, conn: conn, terminalEnabled: hello.Terminal, supportsAgentManagement: hello.AgentManagement, supportsAgentUpgrade: hello.AgentUpgrade, supportsDockerCompose: hello.DockerCompose, supportsDockerComposeServiceActions: hello.DockerComposeServiceActions, supportsDockerComposeDeployment: hello.DockerComposeDeployment, supportsDockerResources: hello.DockerResources, supportsDockerContainerCreate: hello.DockerContainerCreate, supportsDockerContainerCreateV2: hello.DockerContainerCreateV2, supportsSystemdServices: hello.SystemdServices, supportsTaskRunner: hello.TaskRunner, terminals: make(map[string]*browserTerminal), containerExecs: make(map[string]*browserContainerExec), pendingLists: make(map[string]chan protocol.FileListResponse), pendingReads: make(map[string]chan protocol.FileReadResponse), pendingWrites: make(map[string]chan protocol.FileWriteResponse), pendingUploads: make(map[string]chan protocol.FileUploadResponse), pendingDeletes: make(map[string]chan protocol.FileDeleteResponse), pendingReboots: make(map[string]chan protocol.RebootResponse), pendingAgentStatuses: make(map[string]chan protocol.AgentStatusResponse), pendingAgentRestarts: make(map[string]chan protocol.AgentRestartResponse), pendingAgentLogs: make(map[string]chan protocol.AgentLogsResponse), pendingAgentUpgrades: make(map[string]chan protocol.AgentUpgradeResponse), pendingDockerExecs: make(map[string]chan protocol.DockerExecResponse), pendingContainerStarts: make(map[string]chan protocol.ContainerStartResponse), pendingContainerStops: make(map[string]chan protocol.ContainerStopResponse), pendingContainerRestarts: make(map[string]chan protocol.ContainerRestartResponse), pendingContainerDeletes: make(map[string]chan protocol.ContainerDeleteResponse), pendingK8sMessages: make(map[string]chan json.RawMessage), pendingRPCs: make(map[string]chan rpcDelivery), closed: make(chan struct{})}
 	h.recordConnectionEvent(agent, store.ConnectionEventConnected, "")
 	h.registerConnection(agent)
 	h.observeAgentUpgradeReconnect(nodeID, hello.AgentVersion)
@@ -1404,6 +1405,18 @@ func (h *Handler) DockerContainerCreate(ctx context.Context, nodeID string, requ
 		response.Error = "当前 Agent 不支持结构化 Docker 容器创建，请升级 Agent"
 		return response, nil
 	}
+	if (len(request.Environment) > 0 || len(request.Mounts) > 0) && !agent.supportsDockerContainerCreateV2 {
+		response.Error = "当前 Agent 不支持 Docker 环境变量和数据卷，请升级 Agent"
+		return response, nil
+	}
+	if err := protocol.ValidateDockerContainerEnvironment(request.Environment); err != nil {
+		response.Error = "Docker 环境变量配置无效"
+		return response, nil
+	}
+	if err := protocol.ValidateDockerContainerMounts(request.Mounts); err != nil {
+		response.Error = "Docker 数据卷配置无效"
+		return response, nil
+	}
 	requestID, err := randomTerminalSessionID()
 	if err != nil {
 		return protocol.DockerContainerCreateResponse{}, err
@@ -1424,6 +1437,11 @@ func (h *Handler) DockerContainerCreate(ctx context.Context, nodeID string, requ
 func (h *Handler) DockerContainerCreateSupported(nodeID string) bool {
 	agent := h.connection(nodeID)
 	return agent != nil && agent.supportsDockerContainerCreate
+}
+
+func (h *Handler) DockerContainerCreateV2Supported(nodeID string) bool {
+	agent := h.connection(nodeID)
+	return agent != nil && agent.supportsDockerContainerCreateV2
 }
 
 func (h *Handler) DockerComposeList(ctx context.Context, nodeID string) (protocol.DockerComposeListResponse, error) {

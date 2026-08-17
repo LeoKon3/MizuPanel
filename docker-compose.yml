@@ -1,6 +1,6 @@
 services:
   mizupanel:
-    image: ${MIZUPANEL_IMAGE:-leokon3/mizupanel:0.1.24}
+    image: ${MIZUPANEL_IMAGE:-leokon3/mizupanel:0.1.25}
     container_name: ${MIZUPANEL_CONTAINER_NAME:-mizupanel}
     restart: unless-stopped
     ports:

@@ -25,25 +25,29 @@ const (
 var dockerContainerNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 type createScheduledTaskArguments struct {
-	Name               string   `json:"name"`
-	ScriptID           int64    `json:"script_id"`
-	NodeIDs            []string `json:"node_ids"`
-	CronExpression     string   `json:"cron_expression"`
-	Timezone           string   `json:"timezone"`
-	Enabled            *bool    `json:"enabled"`
-	TimeoutSeconds     int      `json:"timeout_seconds"`
-	NotificationPolicy string   `json:"notification_policy"`
+	Name               string     `json:"name"`
+	ScriptID           int64      `json:"script_id"`
+	NodeIDs            []string   `json:"node_ids"`
+	ScheduleType       string     `json:"schedule_type"`
+	RunAt              *time.Time `json:"run_at"`
+	CronExpression     string     `json:"cron_expression"`
+	Timezone           string     `json:"timezone"`
+	Enabled            *bool      `json:"enabled"`
+	TimeoutSeconds     int        `json:"timeout_seconds"`
+	NotificationPolicy string     `json:"notification_policy"`
 }
 
 type createDockerContainerArguments struct {
-	NodeID        string                         `json:"node_id"`
-	Image         string                         `json:"image"`
-	Name          string                         `json:"name"`
-	AutoName      bool                           `json:"auto_name"`
-	RestartPolicy string                         `json:"restart_policy"`
-	NetworkMode   string                         `json:"network_mode"`
-	Ports         []protocol.DockerContainerPort `json:"ports"`
-	Start         bool                           `json:"start"`
+	NodeID        string                                `json:"node_id"`
+	Image         string                                `json:"image"`
+	Name          string                                `json:"name"`
+	AutoName      bool                                  `json:"auto_name"`
+	RestartPolicy string                                `json:"restart_policy"`
+	NetworkMode   string                                `json:"network_mode"`
+	Ports         []protocol.DockerContainerPort        `json:"ports"`
+	Environment   []protocol.DockerContainerEnvironment `json:"environment"`
+	Mounts        []protocol.DockerContainerMount       `json:"mounts"`
+	Start         bool                                  `json:"start"`
 }
 
 type createK8sDeploymentArguments struct {
@@ -57,21 +61,23 @@ type createK8sDeploymentArguments struct {
 
 func (r *Registry) registerCreationTools() {
 	r.add(registeredTool{
-		definition: objectDefinition("create_scheduled_task", "Create a scheduled task from an existing saved script after confirmation. Before calling, ask for and receive every creation setting: name, script, target nodes, Cron, timezone, enabled state, timeout, and notification policy. Script content and shell commands are not accepted.", map[string]any{
+		definition: objectDefinition("create_scheduled_task", "Create a one-time or recurring scheduled task from an existing saved script after confirmation. Use schedule_type=once with a future RFC3339 run_at, or schedule_type=cron with a five-field Cron expression and IANA timezone. Before calling, ask for every creation setting. Script content and shell commands are not accepted.", map[string]any{
 			"name":                map[string]any{"type": "string", "maxLength": store.MaxAutomationNameRunes},
 			"script_id":           map[string]any{"type": "integer", "minimum": 1},
 			"node_ids":            map[string]any{"type": "array", "minItems": 1, "maxItems": store.MaxTaskNodes, "uniqueItems": true, "items": map[string]any{"type": "string", "maxLength": store.MaxTaskNodeIDBytes}},
+			"schedule_type":       map[string]any{"type": "string", "enum": []string{store.ScheduleTypeCron, store.ScheduleTypeOnce}},
+			"run_at":              map[string]any{"type": "string", "format": "date-time"},
 			"cron_expression":     map[string]any{"type": "string", "maxLength": store.MaxCronExpressionBytes},
 			"timezone":            map[string]any{"type": "string", "maxLength": store.MaxTaskTimezoneBytes},
 			"enabled":             map[string]any{"type": "boolean"},
 			"timeout_seconds":     map[string]any{"type": "integer", "minimum": 0, "maximum": store.MaxTaskTimeoutSeconds},
 			"notification_policy": map[string]any{"type": "string", "enum": []string{store.NotificationPolicyNever, store.NotificationPolicyFailure, store.NotificationPolicyAlways}},
-		}, []string{"name", "script_id", "node_ids", "cron_expression", "timezone", "enabled", "timeout_seconds", "notification_policy"}),
+		}, []string{"name", "script_id", "node_ids", "schedule_type", "enabled", "timeout_seconds", "notification_policy"}),
 		risk:       RiskConfirm,
 		capability: capabilityTaskCreation,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createScheduledTaskArguments
-			if err := requireCreationParameters(raw, "create_scheduled_task", "name", "script_id", "node_ids", "cron_expression", "timezone", "enabled", "timeout_seconds", "notification_policy"); err != nil {
+			if err := requireCreationParameters(raw, "create_scheduled_task", "name", "script_id", "node_ids", "schedule_type", "run_at", "cron_expression", "timezone", "enabled", "timeout_seconds", "notification_policy"); err != nil {
 				return nil, ToolTarget{}, err
 			}
 			if err := strictArguments(raw, &args); err != nil || args.ScriptID <= 0 || len(args.NodeIDs) < 1 || len(args.NodeIDs) > store.MaxTaskNodes {
@@ -81,6 +87,7 @@ func (r *Registry) registerCreationTools() {
 				return nil, ToolTarget{}, ErrUnsupportedTool
 			}
 			args.Name = strings.TrimSpace(args.Name)
+			args.ScheduleType = strings.TrimSpace(args.ScheduleType)
 			args.CronExpression = strings.TrimSpace(args.CronExpression)
 			args.Timezone = strings.TrimSpace(args.Timezone)
 			args.NotificationPolicy = strings.TrimSpace(args.NotificationPolicy)
@@ -88,7 +95,7 @@ func (r *Registry) registerCreationTools() {
 				args.NodeIDs[index] = strings.TrimSpace(args.NodeIDs[index])
 			}
 			sort.Strings(args.NodeIDs)
-			if args.NotificationPolicy == "" || args.Enabled == nil {
+			if args.NotificationPolicy == "" || args.Enabled == nil || !oneOf(args.ScheduleType, store.ScheduleTypeCron, store.ScheduleTypeOnce) {
 				return nil, ToolTarget{}, ErrInvalidArguments
 			}
 			if err := validateScheduledTaskTargets(ctx, r, args); err != nil {
@@ -102,10 +109,8 @@ func (r *Registry) registerCreationTools() {
 			if err := taskrunner.ValidateScheduledTask(&task); err != nil {
 				return nil, ToolTarget{}, ErrInvalidArguments
 			}
-			if *args.Enabled {
-				if _, err := taskrunner.NextRun(args.CronExpression, args.Timezone, time.Now().UTC()); err != nil {
-					return nil, ToolTarget{}, ErrInvalidArguments
-				}
+			if err := taskrunner.SetNextRun(&task, time.Now().UTC()); err != nil {
+				return nil, ToolTarget{}, ErrInvalidArguments
 			}
 			return normalizedArguments(args), ToolTarget{Type: "scheduled_task", ID: scheduledTaskTargetID(args), Name: boundedString(args.Name, 128)}, nil
 		},
@@ -113,20 +118,18 @@ func (r *Registry) registerCreationTools() {
 			var args createScheduledTaskArguments
 			_ = json.Unmarshal(raw, &args)
 			task := scheduledTaskFromAIArgs(args)
-			if task.Enabled {
-				if err := taskrunner.SetNextRun(&task, time.Now().UTC()); err != nil {
-					return SafeToolResult{}, ErrInvalidArguments
-				}
+			if err := taskrunner.SetNextRun(&task, time.Now().UTC()); err != nil {
+				return SafeToolResult{}, ErrInvalidArguments
 			}
 			if err := r.dependencies.Tasks.CreateScheduledTask(ctx, &task); err != nil {
 				return SafeToolResult{}, safeAutomationError(err)
 			}
-			return SafeToolResult{Data: map[string]any{"success": true, "task_id": task.ID, "name": boundedString(task.Name, 128), "cron_expression": task.CronExpression, "timezone": task.Timezone, "node_count": len(task.NodeIDs), "status": "success"}, Summary: "计划任务创建成功", Status: "success"}, nil
+			return SafeToolResult{Data: map[string]any{"success": true, "task_id": task.ID, "name": boundedString(task.Name, 128), "schedule_type": task.ScheduleType, "run_at": task.RunAt, "cron_expression": task.CronExpression, "timezone": task.Timezone, "node_count": len(task.NodeIDs), "status": "success"}, Summary: "计划任务创建成功", Status: "success"}, nil
 		},
 	})
 
 	r.add(registeredTool{
-		definition: objectDefinition("create_docker_container", "Create a bounded Docker container through the structured Docker API after confirmation. Before calling, ask for and receive the target node, image, name or an explicit auto-name choice, restart policy, network mode, port mappings, and whether to start immediately. Shell commands, mounts, environment variables, and privileged mode are unavailable.", map[string]any{
+		definition: objectDefinition("create_docker_container", "Create a bounded Docker container through the structured Docker API after confirmation. Before calling, ask for the target node, image, name or auto-name, restart policy, network mode, port mappings, environment variables or an explicit empty list, typed mounts or an explicit empty list, and whether to start immediately. Shell commands, privileged mode, devices and Docker Socket mounts are unavailable.", map[string]any{
 			"node_id":        map[string]any{"type": "string", "maxLength": 191},
 			"image":          map[string]any{"type": "string", "maxLength": maxAIImageBytes},
 			"name":           map[string]any{"type": "string", "maxLength": 128},
@@ -134,13 +137,15 @@ func (r *Registry) registerCreationTools() {
 			"restart_policy": map[string]any{"type": "string", "enum": []string{"no", "always", "on-failure", "unless-stopped"}},
 			"network_mode":   map[string]any{"type": "string", "enum": []string{"bridge", "host", "none"}},
 			"ports":          map[string]any{"type": "array", "maxItems": maxAICreatePorts, "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"host_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "container_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}, "protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}}}, "required": []string{"host_port", "container_port", "protocol"}}},
+			"environment":    map[string]any{"type": "array", "maxItems": protocol.DockerContainerMaxEnvironment, "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"key": map[string]any{"type": "string", "maxLength": 128}, "value": map[string]any{"type": "string", "maxLength": protocol.DockerContainerMaxEnvValue}}, "required": []string{"key", "value"}}},
+			"mounts":         map[string]any{"type": "array", "maxItems": protocol.DockerContainerMaxMounts, "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"type": map[string]any{"type": "string", "enum": []string{"bind", "volume"}}, "source": map[string]any{"type": "string", "maxLength": 4096}, "target": map[string]any{"type": "string", "maxLength": 4096}, "read_only": map[string]any{"type": "boolean"}}, "required": []string{"type", "source", "target", "read_only"}}},
 			"start":          map[string]any{"type": "boolean"},
-		}, []string{"node_id", "image", "auto_name", "restart_policy", "network_mode", "ports", "start"}),
+		}, []string{"node_id", "image", "auto_name", "restart_policy", "network_mode", "ports", "environment", "mounts", "start"}),
 		risk:       RiskConfirm,
 		capability: capabilityDockerAgent,
 		validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
 			var args createDockerContainerArguments
-			if err := requireCreationParameters(raw, "create_docker_container", "node_id", "image", "name", "auto_name", "restart_policy", "network_mode", "ports", "start"); err != nil {
+			if err := requireCreationParameters(raw, "create_docker_container", "node_id", "image", "name", "auto_name", "restart_policy", "network_mode", "ports", "environment", "mounts", "start"); err != nil {
 				return nil, ToolTarget{}, err
 			}
 			if err := strictArguments(raw, &args); err != nil {
@@ -158,10 +163,16 @@ func (r *Registry) registerCreationTools() {
 			if err := validateDockerPorts(args.Ports); err != nil {
 				return nil, ToolTarget{}, err
 			}
+			if protocol.ValidateDockerContainerEnvironment(args.Environment) != nil || protocol.ValidateDockerContainerMounts(args.Mounts) != nil {
+				return nil, ToolTarget{}, ErrInvalidArguments
+			}
 			if _, err := r.onlineNode(ctx, args.NodeID, true); err != nil {
 				return nil, ToolTarget{}, err
 			}
 			if !r.dependencies.AgentOps.DockerContainerCreateSupported(args.NodeID) {
+				return nil, ToolTarget{}, ErrUnsupportedTool
+			}
+			if (len(args.Environment) > 0 || len(args.Mounts) > 0) && !r.dependencies.AgentOps.DockerContainerCreateV2Supported(args.NodeID) {
 				return nil, ToolTarget{}, ErrUnsupportedTool
 			}
 			name := args.Name
@@ -173,7 +184,7 @@ func (r *Registry) registerCreationTools() {
 		execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
 			var args createDockerContainerArguments
 			_ = json.Unmarshal(raw, &args)
-			response, err := r.dependencies.AgentOps.DockerContainerCreate(ctx, args.NodeID, protocol.DockerContainerCreateRequest{Image: args.Image, Name: args.Name, RestartPolicy: args.RestartPolicy, NetworkMode: args.NetworkMode, Ports: args.Ports, Start: args.Start})
+			response, err := r.dependencies.AgentOps.DockerContainerCreate(ctx, args.NodeID, protocol.DockerContainerCreateRequest{Image: args.Image, Name: args.Name, RestartPolicy: args.RestartPolicy, NetworkMode: args.NetworkMode, Ports: args.Ports, Environment: args.Environment, Mounts: args.Mounts, Start: args.Start})
 			if err != nil {
 				return SafeToolResult{}, safeRemoteError(err)
 			}
@@ -274,7 +285,7 @@ func scheduledTaskFromAIArgs(args createScheduledTaskArguments) store.ScheduledT
 	if policy == "" {
 		policy = store.NotificationPolicyFailure
 	}
-	return store.ScheduledTask{Name: args.Name, ScriptID: args.ScriptID, NodeIDs: append([]string(nil), args.NodeIDs...), CronExpression: args.CronExpression, Timezone: args.Timezone, Enabled: enabled, TimeoutSeconds: args.TimeoutSeconds, NotificationPolicy: policy, NotificationChannels: []store.NotificationChannel{}}
+	return store.ScheduledTask{Name: args.Name, ScriptID: args.ScriptID, NodeIDs: append([]string(nil), args.NodeIDs...), ScheduleType: args.ScheduleType, RunAt: args.RunAt, CronExpression: args.CronExpression, Timezone: args.Timezone, Enabled: enabled, TimeoutSeconds: args.TimeoutSeconds, NotificationPolicy: policy, NotificationChannels: []store.NotificationChannel{}}
 }
 
 func toolPlanSummary(call ValidatedToolCall) string {
@@ -282,7 +293,10 @@ func toolPlanSummary(call ValidatedToolCall) string {
 	case "create_scheduled_task":
 		var args createScheduledTaskArguments
 		if json.Unmarshal(call.Arguments, &args) == nil {
-			return fmt.Sprintf("计划：创建计划任务 %s，Cron %s，目标 %d 个节点", boundedString(args.Name, 128), boundedString(args.CronExpression, 128), len(args.NodeIDs))
+			if args.ScheduleType == store.ScheduleTypeOnce && args.RunAt != nil {
+				return fmt.Sprintf("计划：创建一次性任务 %s，于 %s 执行，目标 %d 个节点", boundedString(args.Name, 128), args.RunAt.UTC().Format(time.RFC3339), len(args.NodeIDs))
+			}
+			return fmt.Sprintf("计划：创建周期任务 %s，Cron %s，目标 %d 个节点", boundedString(args.Name, 128), boundedString(args.CronExpression, 128), len(args.NodeIDs))
 		}
 	case "create_docker_container":
 		var args createDockerContainerArguments
@@ -291,7 +305,7 @@ func toolPlanSummary(call ValidatedToolCall) string {
 			if name == "" {
 				name = "自动命名"
 			}
-			return fmt.Sprintf("计划：创建 Docker 容器 %s，镜像 %s，启动=%t", boundedString(name, 128), boundedString(args.Image, maxAIImageBytes), args.Start)
+			return fmt.Sprintf("计划：创建 Docker 容器 %s，镜像 %s，端口 %d 项、环境变量 %d 项、数据卷 %d 项，立即启动=%t", boundedString(name, 128), boundedString(args.Image, maxAIImageBytes), len(args.Ports), len(args.Environment), len(args.Mounts), args.Start)
 		}
 	case "create_k8s_deployment":
 		var args createK8sDeploymentArguments
@@ -379,6 +393,16 @@ func creationParameterValueMissing(toolName, field string, value json.RawMessage
 			return false
 		}
 	}
+	if toolName == "create_scheduled_task" {
+		var scheduleType string
+		_ = json.Unmarshal(values["schedule_type"], &scheduleType)
+		if field == "run_at" && scheduleType != store.ScheduleTypeOnce {
+			return false
+		}
+		if field == "cron_expression" && scheduleType != store.ScheduleTypeCron {
+			return false
+		}
+	}
 	if len(value) == 0 || strings.TrimSpace(string(value)) == "null" {
 		return true
 	}
@@ -392,7 +416,7 @@ func creationParameterValueMissing(toolName, field string, value json.RawMessage
 	case "replicas":
 		var replicas int32
 		return json.Unmarshal(value, &replicas) != nil || replicas < 1
-	case "name", "cluster_id", "namespace", "image", "cron_expression", "timezone", "restart_policy", "network_mode", "notification_policy":
+	case "name", "cluster_id", "namespace", "image", "schedule_type", "run_at", "cron_expression", "timezone", "restart_policy", "network_mode", "notification_policy":
 		var text string
 		return json.Unmarshal(value, &text) != nil || strings.TrimSpace(text) == ""
 	default:
@@ -417,6 +441,8 @@ func creationParameterPrompt(fields []string) string {
 		"restart_policy":      "重启策略",
 		"network_mode":        "网络模式",
 		"ports":               "端口映射（或确认不映射）",
+		"environment":         "环境变量（或确认不配置）",
+		"mounts":              "数据卷（或确认不配置）",
 		"start":               "是否立即启动",
 		"cluster_id":          "Kubernetes 集群",
 		"namespace":           "命名空间",
@@ -424,6 +450,8 @@ func creationParameterPrompt(fields []string) string {
 		"container_port":      "端口暴露选择（或确认不暴露）",
 		"script_id":           "已有脚本",
 		"node_ids":            "目标节点",
+		"schedule_type":       "调度类型（一次性或周期）",
+		"run_at":              "一次性执行时间",
 		"cron_expression":     "Cron 表达式",
 		"timezone":            "时区",
 		"enabled":             "是否启用",

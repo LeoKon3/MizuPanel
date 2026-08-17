@@ -22,6 +22,7 @@ const (
 	maxReadToolCalls       = 8
 	maxOperationPlanSteps  = 5
 	maxOperationPlanBytes  = 4 * 1024
+	sealedArgumentsVersion = 1
 )
 
 var (
@@ -105,6 +106,11 @@ type SendResult struct {
 	Message  *store.AIMessage  `json:"message,omitempty"`
 	ToolCall *store.AIToolCall `json:"tool_call,omitempty"`
 	Plan     *OperationPlan    `json:"plan,omitempty"`
+}
+
+type sealedToolArguments struct {
+	SealedToolArguments int    `json:"sealed_tool_arguments"`
+	Ciphertext          string `json:"ciphertext"`
 }
 
 func operationPlans(calls []store.AIToolCall) []OperationPlan {
@@ -236,11 +242,15 @@ func (s *Service) Initialize(ctx context.Context) error {
 	if err := s.store.RecoverInterrupted(ctx); err != nil {
 		return err
 	}
-	count, err := s.store.ProviderSecretCount(ctx)
+	providerSecretCount, err := s.store.ProviderSecretCount(ctx)
 	if err != nil {
 		return err
 	}
-	return s.secrets.Initialize(count)
+	toolArgumentSecretCount, err := s.store.ToolArgumentSecretCount(ctx)
+	if err != nil {
+		return err
+	}
+	return s.secrets.Initialize(providerSecretCount + toolArgumentSecretCount)
 }
 
 func (s *Service) CreateProvider(ctx context.Context, input ProviderInput) (store.AIProvider, error) {
@@ -762,9 +772,14 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 					planError = "变更计划摘要过大。"
 				}
 				proposed := response.ToolCalls[index]
-				storedCalls = append(storedCalls, store.AIToolCall{ProviderCallID: proposed.ID, ToolName: call.Definition.Name,
-					Risk: string(call.Risk), Status: "pending", ArgumentsJSON: arguments, TargetType: call.Target.Type,
-					TargetID: call.Target.ID, TargetName: call.Target.Name, NodeID: call.Target.NodeID, ResultSummary: summary})
+				storedCall := store.AIToolCall{ID: uuid.NewString(), ProviderCallID: proposed.ID, ToolName: call.Definition.Name,
+					Risk: string(call.Risk), Status: "pending", TargetType: call.Target.Type, TargetID: call.Target.ID,
+					TargetName: call.Target.Name, NodeID: call.Target.NodeID, ResultSummary: summary}
+				storedCall.ArgumentsJSON, err = s.persistedToolArguments(storedCall.ID, call)
+				if err != nil {
+					return result, err
+				}
+				storedCalls = append(storedCalls, storedCall)
 			}
 			if planError != "" {
 				if audit != nil {
@@ -892,8 +907,18 @@ func (s *Service) Confirm(ctx context.Context, id string, audit AuditCallback) (
 			RequestedProviderID: turn.RequestedProviderID, RequestedModelID: pointerString(turn.RequestedModelID), RequestedModel: turn.RequestedModel,
 			FallbackUsed: turn.FallbackUsed, ToolCall: call, Status: "running"})
 	}
-	validated, err := s.registry.Validate(ctx, call.ToolName, json.RawMessage(call.ArgumentsJSON))
-	if err != nil || validated.Risk != RiskConfirm || validated.Target.ID != call.TargetID || validated.Target.NodeID != call.NodeID {
+	arguments, err := s.toolArguments(call)
+	if err == nil {
+		validated, validateErr := s.registry.Validate(ctx, call.ToolName, arguments)
+		err = validateErr
+		if err == nil && (validated.Risk != RiskConfirm || validated.Target.ID != call.TargetID || validated.Target.NodeID != call.NodeID) {
+			err = store.ErrAIConflict
+		}
+		if err == nil {
+			return s.executeConfirmedToolCall(ctx, call, turn, validated, audit)
+		}
+	}
+	{
 		status, summary, assistant := "failure", "目标已变化，操作未执行", "目标状态已变化，操作未执行。"
 		if errors.Is(err, ErrUnsupportedTool) {
 			status, summary, assistant = "unsupported", "当前操作不受支持", "当前操作不受支持，未执行。"
@@ -911,6 +936,9 @@ func (s *Service) Confirm(ctx context.Context, id string, audit AuditCallback) (
 		}
 		return SendResult{Turn: turn, Message: &message, ToolCall: &call}, nil
 	}
+}
+
+func (s *Service) executeConfirmedToolCall(ctx context.Context, call store.AIToolCall, turn store.AITurn, validated ValidatedToolCall, audit AuditCallback) (SendResult, error) {
 	started := s.now()
 	toolResult, executeErr := s.registry.Execute(ctx, validated)
 	status, summary, assistant := toolResult.Status, toolResult.Summary, "操作执行成功。"
@@ -1090,15 +1118,57 @@ func (s *Service) advancePlan(ctx context.Context, turn store.AITurn, audit Audi
 }
 
 func (s *Service) revalidatePlanStep(ctx context.Context, step store.AIToolCall) (ValidatedToolCall, error) {
-	validated, err := s.registry.Validate(ctx, step.ToolName, json.RawMessage(step.ArgumentsJSON))
+	arguments, err := s.toolArguments(step)
 	if err != nil {
 		return ValidatedToolCall{}, err
 	}
-	if validated.Risk != RiskConfirm || string(validated.Arguments) != step.ArgumentsJSON ||
+	validated, err := s.registry.Validate(ctx, step.ToolName, arguments)
+	if err != nil {
+		return ValidatedToolCall{}, err
+	}
+	if validated.Risk != RiskConfirm || string(validated.Arguments) != string(arguments) ||
 		validated.Target.Type != step.TargetType || validated.Target.ID != step.TargetID || validated.Target.NodeID != step.NodeID {
 		return ValidatedToolCall{}, store.ErrAIConflict
 	}
 	return validated, nil
+}
+
+func (s *Service) persistedToolArguments(toolCallID string, call ValidatedToolCall) (string, error) {
+	if call.Definition.Name != "create_docker_container" {
+		return string(call.Arguments), nil
+	}
+	var args createDockerContainerArguments
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return "", ErrInvalidArguments
+	}
+	if len(args.Environment) == 0 {
+		return string(call.Arguments), nil
+	}
+	ciphertext, err := s.secrets.EncryptToolArguments(toolCallID, string(call.Arguments))
+	if err != nil {
+		return "", err
+	}
+	envelope, err := json.Marshal(sealedToolArguments{SealedToolArguments: sealedArgumentsVersion, Ciphertext: ciphertext})
+	if err != nil {
+		return "", err
+	}
+	return string(envelope), nil
+}
+
+func (s *Service) toolArguments(call store.AIToolCall) (json.RawMessage, error) {
+	if !strings.HasPrefix(call.ArgumentsJSON, `{"sealed_tool_arguments":`) {
+		return json.RawMessage(call.ArgumentsJSON), nil
+	}
+	var envelope sealedToolArguments
+	if err := json.Unmarshal([]byte(call.ArgumentsJSON), &envelope); err != nil ||
+		envelope.SealedToolArguments != sealedArgumentsVersion || envelope.Ciphertext == "" {
+		return nil, ErrSecretDecrypt
+	}
+	plaintext, err := s.secrets.DecryptToolArguments(call.ID, envelope.Ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(plaintext), nil
 }
 
 func (s *Service) finishPlan(ctx context.Context, turnID string) (SendResult, error) {

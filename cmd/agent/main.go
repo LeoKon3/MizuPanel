@@ -139,6 +139,7 @@ func runAgent(ctx context.Context, configPath string) error {
 		DockerComposeDeployment:     composeHandler != nil && composeHandler.SupportsDeployment(),
 		DockerResources:             dockerCollector != nil,
 		DockerContainerCreate:       dockerCollector != nil && dockerCollector.SupportsContainerCreate(),
+		DockerContainerCreateV2:     dockerCollector != nil && dockerCollector.SupportsContainerCreate(),
 		SystemdServices:             systemdHandler.Supported(),
 		TaskRunner:                  taskRunner.Supported(),
 		AgentMode:                   cfg.AgentMode,

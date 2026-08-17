@@ -2,6 +2,25 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.25 - 2026-08-14
+
+### Added
+
+- Added AI-driven task-center orchestration for immediate, recurring Cron, and
+  one-time saved-script runs with atomic one-time claiming and restart-safe
+  recovery.
+- Added confirmation-gated Docker container creation with bounded environment
+  variables, typed data mounts, Agent capability negotiation, and Kubernetes
+  Deployment parameter guidance.
+
+### Changed
+
+- Changed AI operation plans to persist secret-bearing Docker arguments only as
+  authenticated ciphertext and to keep environment values out of summaries,
+  audit projections, API responses, and logs.
+- Changed AI operation plans to render as compact natural-language conversation
+  summaries with one clear confirmation flow.
+
 ## v0.1.24 - 2026-08-11
 
 ### Added

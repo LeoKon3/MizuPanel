@@ -736,6 +736,88 @@ func TestEngineSweepCollapsesMissedOccurrencesAndClaimsOnce(t *testing.T) {
 	}
 }
 
+func TestEngineConcurrentSweepClaimsOneTimeTaskExactlyOnce(t *testing.T) {
+	taskStore, nodeStore := newEngineTestStores(t)
+	runAt := time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC)
+	createEngineTestNode(t, nodeStore, "once-node", "online")
+	script := createEngineTestScript(t, taskStore, "Once script", "exit 0", 30)
+	task := store.ScheduledTask{
+		Name: "Once task", ScriptID: script.ID, ScheduleType: store.ScheduleTypeOnce,
+		RunAt: &runAt, Timezone: "UTC", Enabled: true, TimeoutSeconds: 30,
+		NotificationPolicy: store.NotificationPolicyNever, NotificationChannels: []store.NotificationChannel{},
+		NodeIDs: []string{"once-node"}, NextRunAt: &runAt,
+	}
+	if err := taskStore.CreateScheduledTask(context.Background(), &task); err != nil {
+		t.Fatalf("create one-time task: %v", err)
+	}
+	executor := newEngineTestExecutor()
+	barrierStore := &engineTestListBarrierStore{RunStore: taskStore, parties: 2, release: make(chan struct{})}
+	first := NewEngineWithDependencies(barrierStore, nodeStore, executor, nil, nil, EngineOptions{Now: func() time.Time { return runAt }})
+	second := NewEngineWithDependencies(barrierStore, nodeStore, executor, nil, nil, EngineOptions{Now: func() time.Time { return runAt }})
+
+	errors := make(chan error, 2)
+	go func() { errors <- first.Sweep(context.Background(), runAt) }()
+	go func() { errors <- second.Sweep(context.Background(), runAt) }()
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatalf("concurrent one-time sweep: %v", err)
+		}
+	}
+	page := waitEngineTestRunCount(t, taskStore, 1)
+	waitEngineTestRunStatus(t, taskStore, page.Runs[0].ID, store.RunStatusSuccess)
+	loaded, err := taskStore.GetScheduledTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("get one-time task: %v", err)
+	}
+	if loaded.Enabled || loaded.NextRunAt != nil || loaded.LastScheduledAt == nil || !loaded.LastScheduledAt.Equal(runAt) {
+		t.Fatalf("claimed one-time task = %+v", loaded)
+	}
+	calls, _, _ := executor.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("one-time executor calls = %d, want 1", len(calls))
+	}
+}
+
+func TestEngineRestartRecoveryDoesNotReplayClaimedOneTimeTask(t *testing.T) {
+	taskStore, nodeStore := newEngineTestStores(t)
+	runAt := time.Date(2026, 8, 14, 11, 0, 0, 0, time.UTC)
+	createEngineTestNode(t, nodeStore, "restart-once-node", "online")
+	script := createEngineTestScript(t, taskStore, "Restart once script", "exit 0", 30)
+	task := store.ScheduledTask{
+		Name: "Restart once task", ScriptID: script.ID, ScheduleType: store.ScheduleTypeOnce,
+		RunAt: &runAt, Timezone: "UTC", Enabled: true, TimeoutSeconds: 30,
+		NotificationPolicy: store.NotificationPolicyNever, NotificationChannels: []store.NotificationChannel{},
+		NodeIDs: []string{"restart-once-node"}, NextRunAt: &runAt,
+	}
+	if err := taskStore.CreateScheduledTask(context.Background(), &task); err != nil {
+		t.Fatalf("create restart one-time task: %v", err)
+	}
+	claimed, err := taskStore.ClaimDueTask(context.Background(), task.ID, runAt, time.Time{}, runAt)
+	if err != nil {
+		t.Fatalf("claim one-time task before restart: %v", err)
+	}
+	executor := newEngineTestExecutor()
+	restarted := NewEngineWithDependencies(taskStore, nodeStore, executor, nil, nil, EngineOptions{Now: func() time.Time { return runAt.Add(time.Minute) }})
+	if err := restarted.Initialize(context.Background()); err != nil {
+		t.Fatalf("initialize restarted engine: %v", err)
+	}
+	if err := restarted.Sweep(context.Background(), runAt.Add(time.Minute)); err != nil {
+		t.Fatalf("sweep restarted engine: %v", err)
+	}
+	detail := waitEngineTestRunStatus(t, taskStore, claimed.ID, store.RunStatusInterrupted)
+	if detail.Status != store.RunStatusInterrupted {
+		t.Fatalf("recovered run = %+v", detail.TaskRun)
+	}
+	page := waitEngineTestRunCount(t, taskStore, 1)
+	if len(page.Runs) != 1 {
+		t.Fatalf("restart replayed one-time task: %+v", page.Runs)
+	}
+	calls, _, _ := executor.snapshot()
+	if len(calls) != 0 {
+		t.Fatalf("restart executed claimed one-time task %d time(s)", len(calls))
+	}
+}
+
 func TestEngineNotificationFailureDoesNotChangeCompletedRunStatus(t *testing.T) {
 	taskStore, nodeStore := newEngineTestStores(t)
 	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)

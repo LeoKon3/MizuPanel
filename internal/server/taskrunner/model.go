@@ -32,7 +32,15 @@ func ValidateScheduledTask(task *store.ScheduledTask) error {
 	if err := store.ValidateTaskInput(task); err != nil {
 		return err
 	}
-	if _, _, err := ParseCronSchedule(task.CronExpression, task.Timezone); err != nil {
+	scheduleType := task.ScheduleType
+	if scheduleType == "" {
+		scheduleType = store.ScheduleTypeCron
+	}
+	if scheduleType == store.ScheduleTypeCron {
+		if _, _, err := ParseCronSchedule(task.CronExpression, task.Timezone); err != nil {
+			return err
+		}
+	} else if _, err := taskLocation(task.Timezone); err != nil {
 		return err
 	}
 	return ValidateNotificationChannels(task.NotificationChannels)
@@ -71,7 +79,7 @@ func ValidateNotificationChannels(channels []store.NotificationChannel) error {
 }
 
 func ParseCronSchedule(expression string, timezone string) (cron.Schedule, *time.Location, error) {
-	if strings.ContainsAny(expression, "\r\n") || strings.ContainsAny(timezone, "\r\n") {
+	if strings.ContainsAny(expression, "\r\n") {
 		return nil, nil, invalid("cron expression")
 	}
 	expression = strings.TrimSpace(expression)
@@ -87,15 +95,23 @@ func ParseCronSchedule(expression string, timezone string) (cron.Schedule, *time
 	if err != nil {
 		return nil, nil, invalid("cron expression")
 	}
+	location, err := taskLocation(timezone)
+	if err != nil {
+		return nil, nil, err
+	}
+	return schedule, location, nil
+}
+
+func taskLocation(timezone string) (*time.Location, error) {
 	timezone = strings.TrimSpace(timezone)
-	if timezone == "" || timezone == "Local" || len(timezone) > store.MaxTaskTimezoneBytes {
-		return nil, nil, invalid("timezone")
+	if timezone == "" || timezone == "Local" || len(timezone) > store.MaxTaskTimezoneBytes || strings.ContainsAny(timezone, "\r\n") {
+		return nil, invalid("timezone")
 	}
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
-		return nil, nil, invalid("timezone")
+		return nil, invalid("timezone")
 	}
-	return schedule, location, nil
+	return location, nil
 }
 
 func NextRun(expression string, timezone string, after time.Time) (time.Time, error) {
@@ -116,6 +132,22 @@ func NextRun(expression string, timezone string, after time.Time) (time.Time, er
 func SetNextRun(task *store.ScheduledTask, after time.Time) error {
 	if err := ValidateScheduledTask(task); err != nil {
 		return err
+	}
+	scheduleType := task.ScheduleType
+	if scheduleType == "" {
+		scheduleType = store.ScheduleTypeCron
+	}
+	if scheduleType == store.ScheduleTypeOnce {
+		if !task.RunAt.After(after.UTC()) {
+			return invalid("run at")
+		}
+		if !task.Enabled {
+			task.NextRunAt = nil
+			return nil
+		}
+		next := task.RunAt.UTC()
+		task.NextRunAt = &next
+		return nil
 	}
 	if !task.Enabled {
 		task.NextRunAt = nil

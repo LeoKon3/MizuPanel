@@ -141,6 +141,12 @@ func (s *AIStore) ProviderSecretCount(ctx context.Context) (int, error) {
 	return count, err
 }
 
+func (s *AIStore) ToolArgumentSecretCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_tool_calls WHERE arguments_json LIKE '{"sealed_tool_arguments":1,%'`).Scan(&count)
+	return count, err
+}
+
 func (s *AIStore) CreateProvider(ctx context.Context, provider AIProvider) (AIProvider, error) {
 	if provider.ID == "" {
 		provider.ID = uuid.NewString()

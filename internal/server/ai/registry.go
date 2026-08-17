@@ -81,6 +81,7 @@ type NodeOperations interface {
 	SystemdServiceList(context.Context, string) (protocol.SystemdServiceListResponse, error)
 	SystemdServiceAction(context.Context, string, string, string, int) (protocol.SystemdServiceActionResponse, error)
 	DockerContainerCreateSupported(string) bool
+	DockerContainerCreateV2Supported(string) bool
 	TaskRunnerSupported(string) bool
 }
 
@@ -245,7 +246,7 @@ func (r *Registry) registerReadTools() {
 	})
 
 	r.add(registeredTool{
-		definition: noArgumentDefinition("list_nodes", "List nodes with safe identity, online state, platform, Agent version, and latest metrics."),
+		definition: noArgumentDefinition("list_nodes", "List nodes with safe identity, online state, IP address, platform, Agent version, and latest metrics."),
 		risk:       RiskRead,
 		capability: capabilityNodes,
 		validate:   noArguments,
@@ -260,7 +261,8 @@ func (r *Registry) registerReadTools() {
 			}
 			result := make([]map[string]any, 0, len(nodes))
 			for _, node := range nodes {
-				item := map[string]any{"id": node.ID, "name": boundedString(node.Name, 128), "status": node.Status,
+				item := map[string]any{"id": node.ID, "name": boundedString(node.Name, 128), "status": boundedString(node.Status, 32),
+					"ip": boundedString(node.IP, 64),
 					"os": boundedString(node.OS, 64), "arch": boundedString(node.Arch, 64), "agent_version": boundedString(node.AgentVersion, 64)}
 				if r.dependencies.Metrics != nil {
 					metric, ok, err := r.dependencies.Metrics.Latest(ctx, node.ID)

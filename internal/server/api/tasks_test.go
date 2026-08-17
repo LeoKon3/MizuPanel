@@ -332,6 +332,37 @@ func TestAutomationAPIEmptyCollectionsCRUDExecutionHistoryAndAuditSecrets(t *tes
 	}
 }
 
+func TestAutomationAPIOneTimeTaskRoundTrip(t *testing.T) {
+	fixture := newAutomationAPIFixture(t, AuthConfig{})
+	runAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	if err := fixture.nodes.Upsert(t.Context(), store.Node{ID: "once-node", Name: "Once Node", Status: "online", LastSeenAt: runAt}); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	script := store.AutomationScript{Name: "One-time script", Content: "echo once", TimeoutSeconds: 30}
+	if err := fixture.tasks.CreateScript(t.Context(), &script); err != nil {
+		t.Fatalf("create script: %v", err)
+	}
+	created := automationRequest(t, fixture.handler, http.MethodPost, "/api/automation/tasks", map[string]any{
+		"name": "One-time task", "script_id": script.ID, "node_ids": []string{"once-node"},
+		"schedule_type": "once", "run_at": runAt, "timezone": "Asia/Shanghai", "cron_expression": "",
+		"enabled": true, "timeout_seconds": 30, "notification_policy": "never", "notification_channels": []any{},
+	}, true)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create one-time task = %d %s", created.Code, created.Body.String())
+	}
+	var projected store.ScheduledTask
+	if err := json.NewDecoder(created.Body).Decode(&projected); err != nil {
+		t.Fatalf("decode one-time task: %v", err)
+	}
+	if projected.ScheduleType != store.ScheduleTypeOnce || projected.RunAt == nil || !projected.RunAt.Equal(runAt) || projected.CronExpression != "" || projected.NextRunAt == nil || !projected.NextRunAt.Equal(runAt) {
+		t.Fatalf("created one-time projection = %+v", projected)
+	}
+	listed := automationRequest(t, fixture.handler, http.MethodGet, "/api/automation/tasks", nil, false)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"schedule_type":"once"`) || !strings.Contains(listed.Body.String(), runAt.Format(time.RFC3339)) {
+		t.Fatalf("listed one-time task = %d %s", listed.Code, listed.Body.String())
+	}
+}
+
 func TestAutomationAPIScheduledTaskLatestRunProjection(t *testing.T) {
 	fixture := newAutomationAPIFixture(t, AuthConfig{})
 	base := time.Date(2026, 7, 26, 10, 0, 0, 500_000_000, time.UTC)

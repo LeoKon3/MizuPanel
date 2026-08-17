@@ -27,8 +27,8 @@ func TestOperationalContextProjectsResolvedResourceInventoryAndUnavailableSource
 	}
 	nodes := store.NewNodeStore(database)
 	for _, node := range []store.Node{
-		{ID: "node-online", Name: "Online Node", Status: "online", OS: "linux", Arch: "amd64"},
-		{ID: "node-offline", Name: "Offline Node", Status: "offline", OS: "linux", Arch: "arm64"},
+		{ID: "node-online", Name: "Online Node", IP: "192.0.2.10", Status: "online", OS: "linux", Arch: "amd64"},
+		{ID: "node-offline", Name: "Offline Node", IP: "192.0.2.11", Status: "offline", OS: "linux", Arch: "arm64"},
 	} {
 		if err := nodes.Upsert(t.Context(), node); err != nil {
 			t.Fatalf("upsert node: %v", err)
@@ -49,7 +49,8 @@ func TestOperationalContextProjectsResolvedResourceInventoryAndUnavailableSource
 	for _, want := range []string{
 		`"selected_resource":{"type":"k8s_cluster","id":"cluster-1","name":"Production Cluster","route":"/k8s/clusters/cluster-1","available":true`,
 		`"nodes":{"available":true,"count":1,"unavailable_count":1`,
-		`{"arch":"arm64","available":false,"id":"node-offline","name":"Offline Node","os":"linux","status":"offline"}`,
+		`{"arch":"amd64","available":true,"id":"node-online","ip":"192.0.2.10","name":"Online Node","os":"linux","status":"online"}`,
+		`{"arch":"arm64","available":false,"id":"node-offline","ip":"192.0.2.11","name":"Offline Node","os":"linux","status":"offline"}`,
 		`"kubernetes_clusters":{"available":true,"count":1`,
 		`"docker":{"available":false,"reason":"source_unavailable"`,
 		`"application_services":{"available":false,"reason":"source_unavailable"`,
@@ -133,7 +134,7 @@ func TestOperationalContextRequiresAgentDockerCreateCapability(t *testing.T) {
 	if hasToolDefinition(definitions, "create_docker_container") {
 		t.Fatal("Docker create was advertised for a legacy Agent")
 	}
-	if _, err := legacy.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:latest","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"start":true}`)); !errors.Is(err, ErrUnsupportedTool) {
+	if _, err := legacy.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:latest","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"environment":[],"mounts":[],"start":true}`)); !errors.Is(err, ErrUnsupportedTool) {
 		t.Fatalf("legacy Docker create validation error = %v, want unsupported", err)
 	}
 

@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.24-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.25-14B8A6">
 </p>
 
 <p align="center">
@@ -148,11 +148,11 @@ Provider API Keys are encrypted by the Server using `data/ai.key`; read APIs ret
 
 <strong>Deploy With Docker</strong>
 
-Release images are published on Docker Hub. A target host needs only Docker Engine and Docker Compose—no repository checkout, Go, or Node.js. The repository Compose file pins the immutable `leokon3/mizupanel:0.1.24` image:
+Release images are published on Docker Hub. A target host needs only Docker Engine and Docker Compose—no repository checkout, Go, or Node.js. The repository Compose file pins the immutable `leokon3/mizupanel:0.1.25` image:
 
 ```bash
 mkdir -p mizupanel && cd mizupanel
-curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.24/docker-compose.yml
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.25/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```

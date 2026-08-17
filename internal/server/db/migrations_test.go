@@ -476,6 +476,14 @@ func TestMigrateSQLiteCreatesReplaySafeAutomationSchema(t *testing.T) {
 		t.Fatalf("insert task: %v", err)
 	}
 	taskID, _ := result.LastInsertId()
+	var scheduleType string
+	var runAt sql.NullString
+	if err := database.QueryRow(`SELECT schedule_type, run_at FROM scheduled_tasks WHERE id = ?`, taskID).Scan(&scheduleType, &runAt); err != nil {
+		t.Fatalf("query legacy task schedule fields: %v", err)
+	}
+	if scheduleType != "cron" || runAt.Valid {
+		t.Fatalf("legacy task schedule fields = type:%q run_at:%v, want cron/null", scheduleType, runAt)
+	}
 	if _, err := database.Exec(`DELETE FROM automation_scripts WHERE id = ?`, scriptID); err == nil {
 		t.Fatal("deleted script referenced by scheduled task")
 	}
@@ -531,6 +539,8 @@ func TestMySQLMigrationIncludesAutomationSchema(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS automation_scripts",
 		"UNIQUE KEY uq_automation_scripts_normalized_name",
 		"CREATE TABLE IF NOT EXISTS scheduled_tasks",
+		"schedule_type VARCHAR(16) NOT NULL DEFAULT 'cron'",
+		"run_at VARCHAR(64)",
 		"INDEX idx_scheduled_tasks_due (enabled, next_run_at, id)",
 		"CREATE TABLE IF NOT EXISTS scheduled_task_nodes",
 		"CREATE TABLE IF NOT EXISTS task_runs",

@@ -51,6 +51,8 @@ type scheduledTaskRequest struct {
 	Name                 string                      `json:"name"`
 	ScriptID             int64                       `json:"script_id"`
 	NodeIDs              []string                    `json:"node_ids"`
+	ScheduleType         string                      `json:"schedule_type"`
+	RunAt                *time.Time                  `json:"run_at"`
 	CronExpression       string                      `json:"cron_expression"`
 	Timezone             string                      `json:"timezone"`
 	TimeoutSeconds       int                         `json:"timeout_seconds"`
@@ -66,6 +68,7 @@ func (request scheduledTaskRequest) task(id int64, enabledDefault bool) store.Sc
 	}
 	return store.ScheduledTask{
 		ID: id, Name: request.Name, ScriptID: request.ScriptID,
+		ScheduleType: request.ScheduleType, RunAt: request.RunAt,
 		NodeIDs: request.NodeIDs, CronExpression: request.CronExpression,
 		Timezone: request.Timezone, TimeoutSeconds: request.TimeoutSeconds,
 		Enabled: enabled, NotificationPolicy: request.NotificationPolicy,
@@ -80,6 +83,8 @@ type scheduledTaskResponse struct {
 	ScriptName           string                      `json:"script_name"`
 	ScriptRevision       int                         `json:"script_revision"`
 	NodeIDs              []string                    `json:"node_ids"`
+	ScheduleType         string                      `json:"schedule_type"`
+	RunAt                *time.Time                  `json:"run_at"`
 	CronExpression       string                      `json:"cron_expression"`
 	Timezone             string                      `json:"timezone"`
 	Enabled              bool                        `json:"enabled"`
@@ -98,6 +103,7 @@ func projectScheduledTask(task store.ScheduledTask) scheduledTaskResponse {
 	return scheduledTaskResponse{
 		ID: task.ID, Name: task.Name, ScriptID: task.ScriptID,
 		ScriptName: task.ScriptName, ScriptRevision: task.ScriptRevision,
+		ScheduleType: task.ScheduleType, RunAt: task.RunAt,
 		NodeIDs: task.NodeIDs, CronExpression: task.CronExpression, Timezone: task.Timezone,
 		Enabled: task.Enabled, TimeoutSeconds: task.TimeoutSeconds,
 		NotificationPolicy: task.NotificationPolicy, NotificationChannels: task.NotificationChannels,
@@ -490,12 +496,12 @@ func (s *Server) handleAutomationTaskToggle(w http.ResponseWriter, r *http.Reque
 	setAuditTarget(r, "scheduled_task", strconv.FormatInt(taskID, 10), task.Name)
 	nextRunAt := (*time.Time)(nil)
 	if *request.Enabled {
-		next, nextErr := servertasks.NextRun(task.CronExpression, task.Timezone, time.Now().UTC())
-		if nextErr != nil {
-			writeAutomationError(w, nextErr)
+		task.Enabled = true
+		if err := servertasks.SetNextRun(task, time.Now().UTC()); err != nil {
+			writeAutomationError(w, err)
 			return
 		}
-		nextRunAt = &next
+		nextRunAt = task.NextRunAt
 		setAuditAction(r, "task_enable")
 	} else {
 		setAuditAction(r, "task_pause")

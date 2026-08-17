@@ -69,6 +69,30 @@ func TestSetNextRunAndValidation(t *testing.T) {
 	}
 }
 
+func TestSetNextRunSupportsFutureOnceSchedule(t *testing.T) {
+	base := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+	runAt := base.Add(time.Hour)
+	task := validTask()
+	task.ScheduleType = store.ScheduleTypeOnce
+	task.CronExpression = ""
+	task.RunAt = &runAt
+	if err := SetNextRun(&task, base); err != nil {
+		t.Fatalf("SetNextRun once: %v", err)
+	}
+	if task.NextRunAt == nil || !task.NextRunAt.Equal(runAt) {
+		t.Fatalf("once next run = %v, want %v", task.NextRunAt, runAt)
+	}
+	task.Timezone = "Local"
+	if err := SetNextRun(&task, base); !errors.Is(err, store.ErrInvalid) {
+		t.Fatalf("invalid once timezone error = %v, want ErrInvalid", err)
+	}
+	task.Timezone = "UTC"
+	task.RunAt = &base
+	if err := SetNextRun(&task, base); !errors.Is(err, store.ErrInvalid) {
+		t.Fatalf("past once run error = %v, want ErrInvalid", err)
+	}
+}
+
 func TestValidateScriptAndNotificationChannels(t *testing.T) {
 	script := store.AutomationScript{Name: "Cleanup", Content: "echo ok"}
 	if err := ValidateScript(&script); err != nil {

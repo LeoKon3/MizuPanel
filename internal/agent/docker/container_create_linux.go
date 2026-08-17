@@ -32,6 +32,12 @@ func (c *socketClient) CreateContainer(ctx context.Context, request protocol.Doc
 	if request.NetworkMode != "bridge" && request.NetworkMode != "host" && request.NetworkMode != "none" {
 		return containerCreateResult{}, errors.New("invalid Docker network mode")
 	}
+	if err := protocol.ValidateDockerContainerEnvironment(request.Environment); err != nil {
+		return containerCreateResult{}, errors.New("invalid Docker environment")
+	}
+	if err := protocol.ValidateDockerContainerMounts(request.Mounts); err != nil {
+		return containerCreateResult{}, errors.New("invalid Docker mounts")
+	}
 	exposed := make(map[string]struct{}, len(request.Ports))
 	bindings := make(map[string][]map[string]string, len(request.Ports))
 	for _, port := range request.Ports {
@@ -42,13 +48,23 @@ func (c *socketClient) CreateContainer(ctx context.Context, request protocol.Doc
 		exposed[key] = struct{}{}
 		bindings[key] = append(bindings[key], map[string]string{"HostPort": fmt.Sprintf("%d", port.HostPort)})
 	}
+	environment := make([]string, 0, len(request.Environment))
+	for _, item := range request.Environment {
+		environment = append(environment, item.Key+"="+item.Value)
+	}
+	mounts := make([]map[string]any, 0, len(request.Mounts))
+	for _, mount := range request.Mounts {
+		mounts = append(mounts, map[string]any{"Type": mount.Type, "Source": mount.Source, "Target": mount.Target, "ReadOnly": mount.ReadOnly})
+	}
 	payload := map[string]any{
 		"Image":        image,
+		"Env":          environment,
 		"ExposedPorts": exposed,
 		"HostConfig": map[string]any{
 			"RestartPolicy": map[string]string{"Name": request.RestartPolicy},
 			"NetworkMode":   request.NetworkMode,
 			"PortBindings":  bindings,
+			"Mounts":        mounts,
 		},
 	}
 	path := "/containers/create"

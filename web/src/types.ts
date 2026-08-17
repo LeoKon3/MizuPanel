@@ -803,6 +803,8 @@ export type ScheduledTask = {
   script_id: number
   script_name: string
   script_revision: number
+  schedule_type: 'cron' | 'once'
+  run_at: string | null
   node_ids: string[]
   cron_expression: string
   timezone: string
@@ -821,6 +823,8 @@ export type ScheduledTask = {
 export type ScheduledTaskInput = {
   name: string
   script_id: number
+  schedule_type?: 'cron' | 'once'
+  run_at?: string | null
   node_ids: string[]
   cron_expression: string
   timezone: string

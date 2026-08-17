@@ -21,6 +21,8 @@ type TaskDraft = {
   name: string
   scriptID: string
   nodeIDs: Set<string>
+  scheduleType: 'cron' | 'once'
+  runAt: string
   cronExpression: string
   timezone: string
   timeoutSeconds: string
@@ -286,6 +288,8 @@ export function TasksPage({ nodes }: TasksPageProps) {
             name: task.name,
             scriptID: String(task.script_id),
             nodeIDs: new Set(task.node_ids || []),
+            scheduleType: task.schedule_type || 'cron',
+            runAt: dateTimeLocalValue(task.run_at),
             cronExpression: task.cron_expression,
             timezone: task.timezone,
             timeoutSeconds: String(task.timeout_seconds),
@@ -297,6 +301,8 @@ export function TasksPage({ nodes }: TasksPageProps) {
             name: '',
             scriptID: defaultScript ? String(defaultScript.id) : '',
             nodeIDs: new Set(),
+            scheduleType: 'cron',
+            runAt: '',
             cronExpression: '0 * * * *',
             timezone: defaultTimezone(),
             timeoutSeconds: String(defaultScript?.timeout_seconds || 300),
@@ -599,7 +605,7 @@ function TasksTable({ tasks, nodes, loading, error, busyAction, onRun, onToggle,
               <td className="px-3 py-3"><button type="button" role="switch" aria-checked={task.enabled} aria-label={`${task.enabled ? '暂停' : '启用'}计划任务 ${task.name}`} onClick={() => onToggle(task)} disabled={busyAction === `toggle-task-${task.id}`} className={`relative h-7 w-12 rounded-full focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:opacity-50 ${task.enabled ? 'bg-success' : 'bg-muted'}`}><span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${task.enabled ? 'translate-x-5' : ''}`} /></button><p className="mt-1 text-[10px] font-black text-muted-foreground">{task.enabled ? '已启用' : '已暂停'}</p></td>
               <td className="px-3 py-3"><p className="max-w-44 truncate text-sm font-bold text-foreground" title={task.script_name}>{task.script_name}</p><p className="mt-0.5 text-[11px] font-semibold text-muted-foreground">rev {task.script_revision}</p></td>
               <td className="max-w-56 px-3 py-3"><p className="truncate text-xs font-bold text-foreground" title={task.node_ids.map((id) => names.get(id) || id).join(', ')}>{task.node_ids.slice(0, 2).map((id) => names.get(id) || id).join('、') || '—'}{task.node_ids.length > 2 ? ` +${task.node_ids.length - 2}` : ''}</p><p className="mt-0.5 text-[11px] font-semibold text-muted-foreground">{task.node_ids.length} 台</p></td>
-              <td className="px-3 py-3"><p className="whitespace-nowrap font-mono text-xs font-black text-foreground">{task.cron_expression}</p><p className="mt-0.5 text-[11px] font-semibold text-muted-foreground">{task.timezone}</p></td>
+              <td className="px-3 py-3"><p className="whitespace-nowrap font-mono text-xs font-black text-foreground">{task.schedule_type === 'once' ? '一次性' : task.cron_expression}</p><p className="mt-0.5 text-[11px] font-semibold text-muted-foreground">{task.schedule_type === 'once' ? formatAutomationDate(task.run_at) : task.timezone}</p></td>
               <td className="whitespace-nowrap px-3 py-3 text-xs font-bold text-muted-foreground">{task.enabled ? formatAutomationDate(task.next_run_at) : '已暂停'}</td>
               <td className="whitespace-nowrap px-3 py-3"><div>{task.latest_run_status ? <TaskStatusBadge status={task.latest_run_status} compact /> : <span className="text-xs font-bold text-muted-foreground">暂无结果</span>}</div><p className="mt-1 text-[11px] font-semibold text-muted-foreground">{formatAutomationDate(task.latest_run_at ?? task.last_scheduled_at)}</p></td>
               <td className="px-3 py-3"><div className="flex justify-end gap-1"><IconAction label={`立即执行 ${task.name}`} title="立即执行" icon={<Play size={14} />} onClick={(trigger) => onRun(task, trigger)} /><IconAction label={`编辑 ${task.name}`} title="编辑" icon={<Pencil size={14} />} onClick={(trigger) => onEdit(task, trigger)} /><IconAction label={`删除 ${task.name}`} title="删除" icon={<Trash2 size={14} />} danger onClick={(trigger) => onDelete(task, trigger)} /></div></td>
@@ -719,7 +725,8 @@ function ScheduledTaskFormModal({ form, setForm, scripts, nodes, saving, returnF
           <FormField label="脚本"><select aria-label="计划任务脚本" value={form.draft.scriptID} onChange={(event) => { const script = scripts.find((item) => String(item.id) === event.target.value); setForm({ ...form, draft: { ...form.draft, scriptID: event.target.value, timeoutSeconds: form.mode === 'create' && script ? String(script.timeout_seconds) : form.draft.timeoutSeconds } }) }} disabled={saving} className="soft-input min-h-10 w-full px-3 text-sm font-bold">{scripts.map((script) => <option key={script.id} value={script.id}>{script.name} · rev {script.revision}</option>)}</select></FormField>
         </div>
         <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_160px]">
-          <FormField label="五段 Cron"><input aria-label="Cron 表达式" value={form.draft.cronExpression} onChange={(event) => update('cronExpression', event.target.value)} placeholder="0 2 * * *" disabled={saving} className="soft-input min-h-10 w-full px-3 font-mono text-sm font-bold" /></FormField>
+          <FormField label="调度类型"><select aria-label="调度类型" value={form.draft.scheduleType} onChange={(event) => update('scheduleType', event.target.value as 'cron' | 'once')} disabled={saving} className="soft-input min-h-10 w-full px-3 text-sm font-bold"><option value="cron">周期 Cron</option><option value="once">一次性执行</option></select></FormField>
+          {form.draft.scheduleType === 'cron' ? <FormField label="五段 Cron"><input aria-label="Cron 表达式" value={form.draft.cronExpression} onChange={(event) => update('cronExpression', event.target.value)} placeholder="0 2 * * *" disabled={saving} className="soft-input min-h-10 w-full px-3 font-mono text-sm font-bold" /></FormField> : <FormField label="执行时间（本地）"><input aria-label="一次性执行时间" type="datetime-local" value={form.draft.runAt} onChange={(event) => update('runAt', event.target.value)} disabled={saving} className="soft-input min-h-10 w-full px-3 text-sm font-bold" /></FormField>}
           <FormField label="IANA 时区"><input aria-label="计划任务时区" list="automation-timezones" value={form.draft.timezone} onChange={(event) => update('timezone', event.target.value)} disabled={saving} className="soft-input min-h-10 w-full px-3 text-sm font-bold" /><datalist id="automation-timezones">{timezones.map((timezone) => <option key={timezone} value={timezone} />)}</datalist></FormField>
           <FormField label="超时（秒）"><input aria-label="计划任务超时" type="number" min={1} max={1800} value={form.draft.timeoutSeconds} onChange={(event) => update('timeoutSeconds', event.target.value)} disabled={saving} className="soft-input min-h-10 w-full px-3 text-sm font-bold" /></FormField>
         </div>
@@ -783,12 +790,15 @@ function validateScript(draft: ScriptDraft): { input: AutomationScriptInput, err
 function validateTask(draft: TaskDraft): { input: ScheduledTaskInput, error?: undefined } | { input: ScheduledTaskInput, error: string } {
   const timeout = Number.parseInt(draft.timeoutSeconds, 10)
   const scriptID = Number.parseInt(draft.scriptID, 10)
-  const input = { name: draft.name.trim(), script_id: scriptID, node_ids: [...draft.nodeIDs], cron_expression: draft.cronExpression.trim().replace(/\s+/g, ' '), timezone: draft.timezone.trim(), timeout_seconds: timeout, enabled: draft.enabled, notification_policy: draft.notificationPolicy, notification_channels: draft.notificationChannels }
+  const localRunAt = draft.scheduleType === 'once' && draft.runAt ? new Date(draft.runAt) : null
+  const runAt = localRunAt && !Number.isNaN(localRunAt.getTime()) ? localRunAt.toISOString() : null
+  const input = { name: draft.name.trim(), script_id: scriptID, node_ids: [...draft.nodeIDs], schedule_type: draft.scheduleType, run_at: runAt, cron_expression: draft.scheduleType === 'cron' ? draft.cronExpression.trim().replace(/\s+/g, ' ') : '', timezone: draft.timezone.trim(), timeout_seconds: timeout, enabled: draft.enabled, notification_policy: draft.notificationPolicy, notification_channels: draft.notificationChannels }
   if (!input.name) return { input, error: '名称不能为空' }
   if (!Number.isInteger(scriptID) || scriptID < 1) return { input, error: '请选择脚本' }
   if (input.node_ids.length === 0) return { input, error: '至少选择一个节点' }
   if (input.node_ids.length > 100) return { input, error: '目标节点不能超过 100 台' }
-  if (input.cron_expression.split(' ').length !== 5) return { input, error: 'Cron 必须是标准五段表达式' }
+  if (draft.scheduleType === 'cron' && input.cron_expression.split(' ').length !== 5) return { input, error: 'Cron 必须是标准五段表达式' }
+  if (draft.scheduleType === 'once' && (!runAt || !localRunAt || localRunAt.getTime() <= Date.now())) return { input, error: '一次性执行时间必须是未来时间' }
   if (!input.timezone) return { input, error: '时区不能为空' }
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 1800) return { input, error: '超时必须在 1 到 1800 秒之间' }
   return { input }
@@ -796,6 +806,14 @@ function validateTask(draft: TaskDraft): { input: ScheduledTaskInput, error?: un
 
 function defaultTimezone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai'
+}
+
+function dateTimeLocalValue(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const part = (number: number) => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}T${part(date.getHours())}:${part(date.getMinutes())}`
 }
 
 function uniqueTimezones(current: string) {

@@ -84,6 +84,22 @@ func (m *SecretManager) Initialize(encryptedSecretCount int) error {
 }
 
 func (m *SecretManager) Encrypt(providerID, protocol, plaintext string) (string, error) {
+	return m.encrypt(plaintext, secretAAD(providerID, protocol))
+}
+
+func (m *SecretManager) Decrypt(providerID, protocol, encrypted string) (string, error) {
+	return m.decrypt(encrypted, secretAAD(providerID, protocol))
+}
+
+func (m *SecretManager) EncryptToolArguments(toolCallID, plaintext string) (string, error) {
+	return m.encrypt(plaintext, toolArgumentsAAD(toolCallID))
+}
+
+func (m *SecretManager) DecryptToolArguments(toolCallID, encrypted string) (string, error) {
+	return m.decrypt(encrypted, toolArgumentsAAD(toolCallID))
+}
+
+func (m *SecretManager) encrypt(plaintext string, aad []byte) (string, error) {
 	if plaintext == "" {
 		return "", nil
 	}
@@ -95,12 +111,12 @@ func (m *SecretManager) Encrypt(providerID, protocol, plaintext string) (string,
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("generate AI secret nonce: %w", err)
 	}
-	sealed := aead.Seal(nil, nonce, []byte(plaintext), secretAAD(providerID, protocol))
+	sealed := aead.Seal(nil, nonce, []byte(plaintext), aad)
 	payload := append(nonce, sealed...)
 	return "v1:" + base64.RawStdEncoding.EncodeToString(payload), nil
 }
 
-func (m *SecretManager) Decrypt(providerID, protocol, encrypted string) (string, error) {
+func (m *SecretManager) decrypt(encrypted string, aad []byte) (string, error) {
 	if encrypted == "" {
 		return "", nil
 	}
@@ -119,7 +135,7 @@ func (m *SecretManager) Decrypt(providerID, protocol, encrypted string) (string,
 	if len(decoded) <= aead.NonceSize() {
 		return "", ErrSecretDecrypt
 	}
-	plaintext, err := aead.Open(nil, decoded[:aead.NonceSize()], decoded[aead.NonceSize():], secretAAD(providerID, protocol))
+	plaintext, err := aead.Open(nil, decoded[:aead.NonceSize()], decoded[aead.NonceSize():], aad)
 	if err != nil {
 		return "", ErrSecretDecrypt
 	}
@@ -141,4 +157,8 @@ func (m *SecretManager) aead() (cipher.AEAD, error) {
 
 func secretAAD(providerID, protocol string) []byte {
 	return []byte("mizupanel-ai-provider\x00" + providerID + "\x00" + protocol)
+}
+
+func toolArgumentsAAD(toolCallID string) []byte {
+	return []byte("mizupanel-ai-tool-call\x00" + toolCallID + "\x00arguments-v1")
 }

@@ -46,6 +46,8 @@ const task: ScheduledTask = {
   script_id: 7,
   script_name: 'Cleanup',
   script_revision: 2,
+  schedule_type: 'cron',
+  run_at: null,
   node_ids: ['node-1'],
   cron_expression: '0 2 * * *',
   timezone: 'Asia/Shanghai',
@@ -187,6 +189,8 @@ describe('TasksPage', () => {
       name: 'Nightly cleanup',
       script_id: 7,
       node_ids: ['node-1'],
+      schedule_type: 'cron',
+      run_at: null,
       cron_expression: '0 2 * * *',
       timezone: 'Asia/Shanghai',
       timeout_seconds: 300,
@@ -196,6 +200,50 @@ describe('TasksPage', () => {
     })))
     expect(await screen.findByText('计划任务创建成功')).toBeInTheDocument()
     expect(await screen.findByText('Nightly cleanup')).toBeInTheDocument()
+  })
+
+  test('creates a one-time schedule with an explicit future execution time', async () => {
+    const onceTask: ScheduledTask = {
+      ...task,
+      id: 10,
+      name: 'One-time cleanup',
+      schedule_type: 'once',
+      run_at: '2099-01-02T03:04:00Z',
+      cron_expression: '',
+      next_run_at: '2099-01-02T03:04:00Z',
+      latest_run_status: null,
+      latest_run_at: null
+    }
+    vi.mocked(api.getAutomationScripts).mockResolvedValue({ scripts: [script] })
+    vi.mocked(api.getScheduledTasks)
+      .mockResolvedValueOnce({ tasks: [] })
+      .mockResolvedValue({ tasks: [onceTask] })
+    vi.mocked(api.createScheduledTask).mockResolvedValue(onceTask)
+    render(<TasksPage nodes={nodes} />)
+    await screen.findByText('还没有计划任务')
+
+    fireEvent.click(screen.getAllByRole('button', { name: '创建计划' })[0])
+    const dialog = screen.getByRole('dialog', { name: '创建计划任务' })
+    fireEvent.change(within(dialog).getByLabelText('计划任务名称'), { target: { value: 'One-time cleanup' } })
+    fireEvent.change(within(dialog).getByLabelText('调度类型'), { target: { value: 'once' } })
+    const localRunAt = '2099-01-02T03:04'
+    fireEvent.change(within(dialog).getByLabelText('一次性执行时间'), { target: { value: localRunAt } })
+    fireEvent.change(within(dialog).getByLabelText('计划任务时区'), { target: { value: 'Asia/Shanghai' } })
+    fireEvent.click(within(dialog).getByLabelText('选择 Oracle SG'))
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(api.createScheduledTask).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'One-time cleanup',
+      script_id: 7,
+      node_ids: ['node-1'],
+      schedule_type: 'once',
+      run_at: new Date(localRunAt).toISOString(),
+      cron_expression: '',
+      timezone: 'Asia/Shanghai',
+      enabled: true
+    })))
+    expect(await screen.findByText('计划任务创建成功')).toBeInTheDocument()
+    expect(await screen.findByText('One-time cleanup')).toBeInTheDocument()
   })
 
   test('runs a script on multiple explicit nodes and shows bounded per-target output', async () => {

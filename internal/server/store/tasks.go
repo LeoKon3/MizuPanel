@@ -40,6 +40,9 @@ const (
 	RunTriggerManual    = "manual"
 	RunTriggerScheduled = "scheduled"
 
+	ScheduleTypeCron = "cron"
+	ScheduleTypeOnce = "once"
+
 	RunStatusQueued      = "queued"
 	RunStatusRunning     = "running"
 	RunStatusSuccess     = "success"
@@ -100,6 +103,8 @@ type ScheduledTask struct {
 	ScriptID             int64                 `json:"script_id"`
 	ScriptName           string                `json:"script_name"`
 	ScriptRevision       int                   `json:"script_revision"`
+	ScheduleType         string                `json:"schedule_type"`
+	RunAt                *time.Time            `json:"run_at"`
 	CronExpression       string                `json:"cron_expression"`
 	Timezone             string                `json:"timezone"`
 	Enabled              bool                  `json:"enabled"`
@@ -202,7 +207,7 @@ const automationScriptColumns = `id, name, normalized_name, description, content
 	timeout_seconds, revision, created_at, updated_at`
 
 const scheduledTaskColumns = `t.id, t.name, t.normalized_name, t.script_id, s.name,
-	s.revision, t.cron_expression, t.timezone, t.enabled, t.timeout_seconds,
+	s.revision, t.schedule_type, t.run_at, t.cron_expression, t.timezone, t.enabled, t.timeout_seconds,
 	t.notification_policy, t.notification_channels, t.next_run_at,
 	t.last_scheduled_at, latest_run.status, latest_run.created_at,
 	t.created_at, t.updated_at`
@@ -379,11 +384,11 @@ func (s *TaskStore) CreateScheduledTask(ctx context.Context, task *ScheduledTask
 	}
 	now := time.Now().UTC()
 	result, err := tx.ExecContext(ctx, `INSERT INTO scheduled_tasks (
-		name, normalized_name, script_id, cron_expression, timezone, enabled,
+		name, normalized_name, script_id, schedule_type, run_at, cron_expression, timezone, enabled,
 		timeout_seconds, notification_policy, notification_channels, next_run_at,
 		last_scheduled_at, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, task.Name, task.NormalizedName,
-		task.ScriptID, task.CronExpression, task.Timezone, task.Enabled, task.TimeoutSeconds,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, task.Name, task.NormalizedName,
+		task.ScriptID, task.ScheduleType, nullableTaskTime(task.RunAt), task.CronExpression, task.Timezone, task.Enabled, task.TimeoutSeconds,
 		task.NotificationPolicy, channelsJSON, nullableTaskTime(task.NextRunAt),
 		nullableTaskTime(task.LastScheduledAt), formatTaskTime(now), formatTaskTime(now))
 	if err != nil {
@@ -521,10 +526,10 @@ func (s *TaskStore) UpdateScheduledTask(ctx context.Context, task *ScheduledTask
 	}
 	now := time.Now().UTC()
 	result, err := tx.ExecContext(ctx, `UPDATE scheduled_tasks SET
-		name = ?, normalized_name = ?, script_id = ?, cron_expression = ?, timezone = ?,
+		name = ?, normalized_name = ?, script_id = ?, schedule_type = ?, run_at = ?, cron_expression = ?, timezone = ?,
 		enabled = ?, timeout_seconds = ?, notification_policy = ?, notification_channels = ?,
 		next_run_at = ?, updated_at = ? WHERE id = ?`, task.Name, task.NormalizedName,
-		task.ScriptID, task.CronExpression, task.Timezone, task.Enabled, task.TimeoutSeconds,
+		task.ScriptID, task.ScheduleType, nullableTaskTime(task.RunAt), task.CronExpression, task.Timezone, task.Enabled, task.TimeoutSeconds,
 		task.NotificationPolicy, channelsJSON, nullableTaskTime(task.NextRunAt),
 		formatTaskTime(now), task.ID)
 	if err != nil {
@@ -627,7 +632,7 @@ func (s *TaskStore) HasActiveTaskRun(ctx context.Context, taskID int64) (bool, e
 }
 
 func (s *TaskStore) ClaimDueTask(ctx context.Context, taskID int64, expectedDueAt time.Time, nextRunAt time.Time, claimedAt time.Time) (TaskRunDetail, error) {
-	if taskID <= 0 || expectedDueAt.IsZero() || nextRunAt.IsZero() {
+	if taskID <= 0 || expectedDueAt.IsZero() {
 		return TaskRunDetail{}, invalidError("scheduled claim")
 	}
 	if claimedAt.IsZero() {
@@ -637,18 +642,31 @@ func (s *TaskStore) ClaimDueTask(ctx context.Context, taskID int64, expectedDueA
 	}
 	expectedDueAt = expectedDueAt.UTC()
 	nextRunAt = nextRunAt.UTC()
-	if !nextRunAt.After(claimedAt) || !nextRunAt.After(expectedDueAt) {
+	if !nextRunAt.IsZero() {
+		if !nextRunAt.After(claimedAt) || !nextRunAt.After(expectedDueAt) {
+			return TaskRunDetail{}, invalidError("next run time")
+		}
+	}
+	isOnce := nextRunAt.IsZero()
+	if isOnce && claimedAt.Before(expectedDueAt) {
 		return TaskRunDetail{}, invalidError("next run time")
+	}
+	var nextRunValue *time.Time
+	if !isOnce {
+		nextRunValue = &nextRunAt
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return TaskRunDetail{}, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE scheduled_tasks SET next_run_at = ?,
+	result, err := tx.ExecContext(ctx, `UPDATE scheduled_tasks SET next_run_at = CASE WHEN schedule_type = ? THEN NULL ELSE ? END,
+		enabled = CASE WHEN schedule_type = ? THEN 0 ELSE enabled END,
 		last_scheduled_at = ?, updated_at = ?
-		WHERE id = ? AND enabled = 1 AND next_run_at = ?`, formatTaskTime(nextRunAt),
-		formatTaskTime(expectedDueAt), formatTaskTime(claimedAt), taskID, formatTaskTime(expectedDueAt))
+		WHERE id = ? AND enabled = 1 AND next_run_at = ?
+		AND ((schedule_type = ? AND ? = 1) OR (schedule_type <> ? AND ? = 0))`, ScheduleTypeOnce, nullableTaskTime(nextRunValue),
+		ScheduleTypeOnce, formatTaskTime(expectedDueAt), formatTaskTime(claimedAt), taskID, formatTaskTime(expectedDueAt),
+		ScheduleTypeOnce, isOnce, ScheduleTypeOnce, isOnce)
 	if err != nil {
 		return TaskRunDetail{}, err
 	}
@@ -1405,9 +1423,9 @@ func scanAutomationScript(scanner taskScanner) (AutomationScript, error) {
 func scanScheduledTask(scanner taskScanner) (ScheduledTask, error) {
 	var task ScheduledTask
 	var channelsJSON, createdAt, updatedAt string
-	var nextRunAt, lastScheduledAt, latestRunStatus, latestRunAt sql.NullString
+	var runAt, nextRunAt, lastScheduledAt, latestRunStatus, latestRunAt sql.NullString
 	err := scanner.Scan(&task.ID, &task.Name, &task.NormalizedName, &task.ScriptID,
-		&task.ScriptName, &task.ScriptRevision, &task.CronExpression, &task.Timezone,
+		&task.ScriptName, &task.ScriptRevision, &task.ScheduleType, &runAt, &task.CronExpression, &task.Timezone,
 		&task.Enabled, &task.TimeoutSeconds, &task.NotificationPolicy, &channelsJSON,
 		&nextRunAt, &lastScheduledAt, &latestRunStatus, &latestRunAt, &createdAt, &updatedAt)
 	if err != nil {
@@ -1418,6 +1436,12 @@ func scanScheduledTask(scanner taskScanner) (ScheduledTask, error) {
 	}
 	task.NotificationChannels = nonNilNotificationChannels(task.NotificationChannels)
 	task.NodeIDs = make([]string, 0)
+	if task.ScheduleType == "" {
+		task.ScheduleType = ScheduleTypeCron
+	}
+	if task.RunAt, err = parseNullableTime(runAt); err != nil {
+		return ScheduledTask{}, err
+	}
 	if task.NextRunAt, err = parseNullableTime(nextRunAt); err != nil {
 		return ScheduledTask{}, err
 	}
@@ -1545,13 +1569,30 @@ func prepareScheduledTask(task *ScheduledTask, requireNext bool) error {
 	if task.ScriptID <= 0 {
 		return invalidError("task script")
 	}
-	task.CronExpression = strings.TrimSpace(task.CronExpression)
-	if !utf8.ValidString(task.CronExpression) || len(task.CronExpression) == 0 || len(task.CronExpression) > MaxCronExpressionBytes {
-		return invalidError("cron expression")
+	task.ScheduleType = strings.TrimSpace(task.ScheduleType)
+	if task.ScheduleType == "" {
+		task.ScheduleType = ScheduleTypeCron
 	}
+	if task.ScheduleType != ScheduleTypeCron && task.ScheduleType != ScheduleTypeOnce {
+		return invalidError("schedule type")
+	}
+	task.CronExpression = strings.TrimSpace(task.CronExpression)
 	task.Timezone = strings.TrimSpace(task.Timezone)
 	if !utf8.ValidString(task.Timezone) || len(task.Timezone) == 0 || len(task.Timezone) > MaxTaskTimezoneBytes {
 		return invalidError("timezone")
+	}
+	if task.ScheduleType == ScheduleTypeCron {
+		if !utf8.ValidString(task.CronExpression) || len(task.CronExpression) == 0 || len(task.CronExpression) > MaxCronExpressionBytes {
+			return invalidError("cron expression")
+		}
+		task.RunAt = nil
+	} else {
+		if task.RunAt == nil || task.RunAt.IsZero() {
+			return invalidError("run at")
+		}
+		runAt := task.RunAt.UTC()
+		task.RunAt = &runAt
+		task.CronExpression = ""
 	}
 	if task.TimeoutSeconds != 0 {
 		if err := validateTimeout(task.TimeoutSeconds); err != nil {
@@ -1577,6 +1618,9 @@ func prepareScheduledTask(task *ScheduledTask, requireNext bool) error {
 	}
 	if !task.Enabled {
 		task.NextRunAt = nil
+	} else if task.ScheduleType == ScheduleTypeOnce {
+		next := task.RunAt.UTC()
+		task.NextRunAt = &next
 	}
 	if task.NextRunAt != nil && !task.NextRunAt.IsZero() {
 		value := task.NextRunAt.UTC()

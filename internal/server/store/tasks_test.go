@@ -281,6 +281,39 @@ func TestTaskStoreDueClaimAdvancesOnceAndKeepsImmutableSnapshots(t *testing.T) {
 	}
 }
 
+func TestTaskStoreOnceClaimDisablesScheduleAndCannotReplay(t *testing.T) {
+	taskStore, database := testTaskStore(t)
+	runAt := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	insertTestNode(t, database, "node-once", "Once Node", runAt)
+	script := createTestScript(t, taskStore, "Run once", "echo once")
+	task := ScheduledTask{
+		Name: "One-time task", ScriptID: script.ID, ScheduleType: ScheduleTypeOnce,
+		RunAt: &runAt, Timezone: "UTC", Enabled: true, TimeoutSeconds: 30,
+		NotificationPolicy: NotificationPolicyNever, NotificationChannels: []NotificationChannel{},
+		NodeIDs: []string{"node-once"}, NextRunAt: &runAt,
+	}
+	if err := taskStore.CreateScheduledTask(t.Context(), &task); err != nil {
+		t.Fatalf("create once task: %v", err)
+	}
+	detail, err := taskStore.ClaimDueTask(t.Context(), task.ID, runAt, time.Time{}, runAt.Add(time.Second))
+	if err != nil {
+		t.Fatalf("claim once task: %v", err)
+	}
+	if detail.ScheduledFor == nil || !detail.ScheduledFor.Equal(runAt) || detail.Status != RunStatusQueued {
+		t.Fatalf("once run = %+v", detail.TaskRun)
+	}
+	loaded, err := taskStore.GetScheduledTask(t.Context(), task.ID)
+	if err != nil {
+		t.Fatalf("get once task: %v", err)
+	}
+	if loaded.Enabled || loaded.NextRunAt != nil || loaded.LastScheduledAt == nil || !loaded.LastScheduledAt.Equal(runAt) {
+		t.Fatalf("claimed once task = %+v", loaded)
+	}
+	if _, err := taskStore.ClaimDueTask(t.Context(), task.ID, runAt, time.Time{}, runAt.Add(2*time.Second)); !errors.Is(err, ErrClaimLost) {
+		t.Fatalf("replayed once claim error = %v, want ErrClaimLost", err)
+	}
+}
+
 func TestTaskStoreScheduledOverlapIsPersistedAsSkipped(t *testing.T) {
 	taskStore, _ := testTaskStore(t)
 	base := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)

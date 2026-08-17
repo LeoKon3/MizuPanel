@@ -151,6 +151,7 @@ type HelloMessage struct {
 	DockerComposeDeployment     bool   `json:"docker_compose_deployment,omitempty"`
 	DockerResources             bool   `json:"docker_resources,omitempty"`
 	DockerContainerCreate       bool   `json:"docker_container_create,omitempty"`
+	DockerContainerCreateV2     bool   `json:"docker_container_create_v2,omitempty"`
 	SystemdServices             bool   `json:"systemd_services,omitempty"`
 	TaskRunner                  bool   `json:"task_runner,omitempty"`
 	AgentMode                   string `json:"agent_mode,omitempty"`
@@ -675,19 +676,40 @@ type DockerContainerPort struct {
 	Protocol      string `json:"protocol"`
 }
 
+const (
+	DockerContainerMaxEnvironment = 32
+	DockerContainerMaxMounts      = 16
+	DockerContainerMaxEnvValue    = 4096
+	DockerContainerMaxEnvBytes    = 32 * 1024
+)
+
+type DockerContainerEnvironment struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type DockerContainerMount struct {
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
+}
+
 // DockerContainerCreateRequest is a deliberately small Docker Engine API
-// contract. It is not a shell command and must not grow arbitrary argv, env,
-// mount, or host-path fields.
+// contract. It is not a shell command and must not grow arbitrary argv,
+// privileged, device, capability, or Docker Socket fields.
 type DockerContainerCreateRequest struct {
-	Type          string                `json:"type"`
-	RequestID     string                `json:"request_id,omitempty"`
-	NodeID        string                `json:"node_id,omitempty"`
-	Image         string                `json:"image"`
-	Name          string                `json:"name,omitempty"`
-	RestartPolicy string                `json:"restart_policy"`
-	NetworkMode   string                `json:"network_mode"`
-	Ports         []DockerContainerPort `json:"ports,omitempty"`
-	Start         bool                  `json:"start"`
+	Type          string                       `json:"type"`
+	RequestID     string                       `json:"request_id,omitempty"`
+	NodeID        string                       `json:"node_id,omitempty"`
+	Image         string                       `json:"image"`
+	Name          string                       `json:"name,omitempty"`
+	RestartPolicy string                       `json:"restart_policy"`
+	NetworkMode   string                       `json:"network_mode"`
+	Ports         []DockerContainerPort        `json:"ports,omitempty"`
+	Environment   []DockerContainerEnvironment `json:"environment,omitempty"`
+	Mounts        []DockerContainerMount       `json:"mounts,omitempty"`
+	Start         bool                         `json:"start"`
 }
 
 type DockerContainerCreateResponse struct {

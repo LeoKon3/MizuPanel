@@ -67,6 +67,11 @@ function planStepStatusText(status: AIToolCall['status']) {
   return '失败'
 }
 
+function planStepSummary(step: AIToolCall) {
+  const summary = step.result_summary?.trim().replace(/^计划：/, '')
+  return summary || (toolLabels[step.tool_name] ?? step.tool_name)
+}
+
 function progressText(progress: AIProgress, labels: Record<string, string>) {
   if (progress.phase === 'model') return '思考中...'
   if (progress.phase === 'fallback') return `当前请求模型暂时不可用，切换到 ${[progress.provider_name, progress.model].filter(Boolean).join(' / ') || '回退模型'}...`
@@ -111,25 +116,18 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   messages.forEach((message, index) => lastMessageIndexByTurn.set(message.turn_id, index))
 
   const renderPlan = (plan: AIOperationPlan) => (
-    <section key={plan.id} aria-label="AI 变更计划" className={`border px-3 py-3 ${plan.status === 'pending' ? 'border-warning/40 bg-warning/10' : 'border-border bg-surface/70'}`}>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-black text-foreground">变更计划 · {plan.steps.length} 步</p>
-          <p className="mt-1 text-xs font-semibold text-muted-foreground">按顺序执行，任一步失败后停止</p>
-        </div>
+    <section key={plan.id} aria-label="AI 变更计划" className={`border-l-2 py-1 pl-3 ${plan.status === 'pending' ? 'border-warning' : plan.status === 'success' ? 'border-success' : 'border-border'}`}>
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <p className="text-xs font-black text-foreground">执行计划 · {plan.steps.length} 步</p>
         <span className={`shrink-0 text-xs font-black ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
       </div>
-      <ol className="mt-3 border-t border-border/70">
+      <ol className="mt-2 space-y-2">
         {plan.steps.map((step, index) => (
-          <li key={step.id} className="flex min-w-0 gap-2 border-b border-border/70 py-2 last:border-b-0">
+          <li key={step.id} className="flex min-w-0 gap-2">
             <span className="mt-0.5 shrink-0"><PlanStepIcon status={step.status} /></span>
             <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-start justify-between gap-2">
-                <p className="min-w-0 break-words text-xs font-black text-foreground">{index + 1}. {toolLabels[step.tool_name] ?? step.tool_name}</p>
-                <span className="shrink-0 text-[11px] font-bold text-muted-foreground">{planStepStatusText(step.status)}</span>
-              </div>
-              <p className="mt-0.5 break-words text-xs font-semibold text-muted-foreground">{toolTarget(step)}</p>
-              {step.result_summary ? <p className="mt-0.5 break-words text-xs font-semibold text-muted-foreground">{step.result_summary}</p> : null}
+              <p className="break-words text-xs font-bold text-foreground">{plan.steps.length > 1 ? `${index + 1}. ` : ''}{planStepSummary(step)}</p>
+              <p className="mt-0.5 break-words text-[11px] font-semibold text-muted-foreground">{toolTarget(step)} · {planStepStatusText(step.status)}</p>
             </div>
           </li>
         ))}
@@ -144,7 +142,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   )
 
   const renderLegacyCall = (call: AIToolCall) => (
-    <div key={call.id} className="border border-warning/40 bg-warning/10 px-3 py-3">
+    <div key={call.id} className="border-l-2 border-warning py-1 pl-3">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-black text-foreground">{toolLabels[call.tool_name] ?? call.tool_name}</p>

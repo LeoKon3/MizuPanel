@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/mizupanel/mizupanel/internal/server/store"
 )
 
 func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
@@ -71,6 +73,47 @@ func TestRegistryExposesOnlyFixedSafeToolWhitelist(t *testing.T) {
 				t.Fatalf("cc-switch configuration import concept is registered as %q", definition.Name)
 			}
 		}
+	}
+}
+
+func TestRegistryListNodesIncludesIP(t *testing.T) {
+	_, nodes, _ := newMutationDatabase(t)
+	for _, node := range []store.Node{
+		{ID: "node-1", Name: "worker", IP: "192.0.2.10", Status: "online"},
+		{ID: "node-2", Name: "untrusted", IP: "192.0.2.11", Status: strings.Repeat("s", 64)},
+	} {
+		if err := nodes.Upsert(t.Context(), node); err != nil {
+			t.Fatalf("upsert node: %v", err)
+		}
+	}
+
+	registry := NewRegistry(RegistryDependencies{Nodes: nodes})
+	validated, err := registry.Validate(t.Context(), "list_nodes", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("validate list_nodes: %v", err)
+	}
+	result, err := registry.Execute(t.Context(), validated)
+	if err != nil {
+		t.Fatalf("execute list_nodes: %v", err)
+	}
+
+	data, ok := result.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("list_nodes data = %T, want map[string]any", result.Data)
+	}
+	items, ok := data["nodes"].([]map[string]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("list_nodes nodes = %#v, want two nodes", data["nodes"])
+	}
+	byID := make(map[string]map[string]any, len(items))
+	for _, item := range items {
+		byID[item["id"].(string)] = item
+	}
+	if byID["node-1"]["status"] != "online" || byID["node-1"]["ip"] != "192.0.2.10" {
+		t.Fatalf("list_nodes node = %#v, want online node with IP", byID["node-1"])
+	}
+	if byID["node-2"]["status"] != strings.Repeat("s", 32) || byID["node-2"]["ip"] != "192.0.2.11" {
+		t.Fatalf("list_nodes node = %#v, want bounded status and IP", byID["node-2"])
 	}
 }
 

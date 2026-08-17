@@ -19,10 +19,11 @@ import (
 
 type mutationNodeOperationsStub struct {
 	platformNodeOperationsStub
-	dockerResponse protocol.DockerContainerCreateResponse
-	dockerNodeID   string
-	dockerRequest  protocol.DockerContainerCreateRequest
-	taskRunner     bool
+	dockerResponse      protocol.DockerContainerCreateResponse
+	dockerNodeID        string
+	dockerRequest       protocol.DockerContainerCreateRequest
+	dockerV2Unsupported bool
+	taskRunner          bool
 }
 
 func (s *mutationNodeOperationsStub) DockerContainerCreate(_ context.Context, nodeID string, request protocol.DockerContainerCreateRequest) (protocol.DockerContainerCreateResponse, error) {
@@ -32,6 +33,10 @@ func (s *mutationNodeOperationsStub) DockerContainerCreate(_ context.Context, no
 }
 
 func (*mutationNodeOperationsStub) DockerContainerCreateSupported(string) bool { return true }
+
+func (s *mutationNodeOperationsStub) DockerContainerCreateV2Supported(string) bool {
+	return !s.dockerV2Unsupported
+}
 
 func (s *mutationNodeOperationsStub) TaskRunnerSupported(string) bool { return s.taskRunner }
 
@@ -70,7 +75,7 @@ func TestRegistryCreateDockerContainerUsesTypedRequestAndConfirmationRisk(t *tes
 	ops := &mutationNodeOperationsStub{dockerResponse: protocol.DockerContainerCreateResponse{Supported: true, Success: true, ContainerID: "container-1", Name: "web", Started: true}}
 	registry := NewRegistry(RegistryDependencies{Nodes: nodes, AgentOps: ops})
 
-	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[{"host_port":8080,"container_port":80,"protocol":"tcp"}],"start":true}`))
+	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[{"host_port":8080,"container_port":80,"protocol":"tcp"}],"environment":[],"mounts":[],"start":true}`))
 	if err != nil {
 		t.Fatalf("validate Docker create: %v", err)
 	}
@@ -108,7 +113,7 @@ func TestRegistryCreateDockerContainerPreservesPartialIdentityOnStartFailure(t *
 		Supported: true, Created: true, ContainerID: "container-1", Name: "web", Error: "Docker container created but start failed",
 	}}
 	registry := NewRegistry(RegistryDependencies{Nodes: nodes, AgentOps: ops})
-	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"start":true}`))
+	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"environment":[],"mounts":[],"start":true}`))
 	if err != nil {
 		t.Fatalf("validate Docker create: %v", err)
 	}
@@ -133,7 +138,7 @@ func TestRegistryCreateDockerContainerAllowsExplicitAutoNameWithoutNameField(t *
 	ops := &mutationNodeOperationsStub{dockerResponse: protocol.DockerContainerCreateResponse{Supported: true, Success: true, ContainerID: "container-1", Name: "generated-name", Started: true}}
 	registry := NewRegistry(RegistryDependencies{Nodes: nodes, AgentOps: ops})
 
-	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","auto_name":true,"restart_policy":"no","network_mode":"bridge","ports":[],"start":true}`))
+	validated, err := registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","auto_name":true,"restart_policy":"no","network_mode":"bridge","ports":[],"environment":[],"mounts":[],"start":true}`))
 	if err != nil {
 		t.Fatalf("validate auto-named Docker create: %v", err)
 	}
@@ -146,7 +151,7 @@ func TestRegistryCreateDockerContainerAllowsExplicitAutoNameWithoutNameField(t *
 	if ops.dockerRequest.Name != "" {
 		t.Fatalf("auto-named Docker request name = %q, want empty", ops.dockerRequest.Name)
 	}
-	_, err = registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"start":true}`))
+	_, err = registry.Validate(t.Context(), "create_docker_container", json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"environment":[],"mounts":[],"start":true}`))
 	var missing *missingCreationParametersError
 	if !errors.As(err, &missing) || !slices.Equal(missing.Fields, []string{"name"}) {
 		t.Fatalf("unnamed Docker create error = %v, missing = %+v", err, missing)
@@ -163,6 +168,48 @@ func TestRegistryCreateDockerContainerAllowsExplicitAutoNameWithoutNameField(t *
 	}
 }
 
+func TestRegistryCreateDockerContainerForwardsV2FieldsWithoutLeakingValues(t *testing.T) {
+	_, nodes, _ := newMutationDatabase(t)
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "worker", Status: "online"}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	const secretValue = "registry-secret-marker"
+	ops := &mutationNodeOperationsStub{dockerResponse: protocol.DockerContainerCreateResponse{Supported: true, Success: true, ContainerID: "container-1", Name: "web", Started: true}}
+	registry := NewRegistry(RegistryDependencies{Nodes: nodes, AgentOps: ops})
+	raw := json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"environment":[{"key":"API_TOKEN","value":"` + secretValue + `"}],"mounts":[{"type":"volume","source":"web-data","target":"/data","read_only":true}],"start":true}`)
+
+	validated, err := registry.Validate(t.Context(), "create_docker_container", raw)
+	if err != nil {
+		t.Fatalf("validate Docker V2 create: %v", err)
+	}
+	if strings.Contains(toolPlanSummary(validated), secretValue) {
+		t.Fatalf("Docker plan summary leaked environment value: %s", toolPlanSummary(validated))
+	}
+	result, err := registry.Execute(t.Context(), validated)
+	if err != nil {
+		t.Fatalf("execute Docker V2 create: %v", err)
+	}
+	if len(ops.dockerRequest.Environment) != 1 || ops.dockerRequest.Environment[0].Value != secretValue || len(ops.dockerRequest.Mounts) != 1 || ops.dockerRequest.Mounts[0].Target != "/data" {
+		t.Fatalf("Docker V2 request = %+v", ops.dockerRequest)
+	}
+	encoded, _ := json.Marshal(result.Data)
+	if strings.Contains(string(encoded), secretValue) || strings.Contains(result.Summary, secretValue) {
+		t.Fatalf("Docker result leaked environment value: %s / %s", encoded, result.Summary)
+	}
+}
+
+func TestRegistryCreateDockerContainerRejectsV2FieldsForOldAgent(t *testing.T) {
+	_, nodes, _ := newMutationDatabase(t)
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "worker", Status: "online"}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	registry := NewRegistry(RegistryDependencies{Nodes: nodes, AgentOps: &mutationNodeOperationsStub{dockerV2Unsupported: true}})
+	raw := json.RawMessage(`{"node_id":"node-1","image":"nginx:1.27","name":"web","auto_name":false,"restart_policy":"no","network_mode":"bridge","ports":[],"environment":[{"key":"MODE","value":"production"}],"mounts":[],"start":true}`)
+	if _, err := registry.Validate(t.Context(), "create_docker_container", raw); !errors.Is(err, ErrUnsupportedTool) {
+		t.Fatalf("old-Agent Docker V2 validation error = %v, want ErrUnsupportedTool", err)
+	}
+}
+
 func TestRegistryCreateScheduledTaskUsesExistingScriptAndOnlineTaskRunner(t *testing.T) {
 	_, nodes, tasks := newMutationDatabase(t)
 	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "worker", Status: "online"}); err != nil {
@@ -173,7 +220,7 @@ func TestRegistryCreateScheduledTaskUsesExistingScriptAndOnlineTaskRunner(t *tes
 		t.Fatalf("create script: %v", err)
 	}
 	registry := NewRegistry(RegistryDependencies{Nodes: nodes, Tasks: tasks, AgentOps: &mutationNodeOperationsStub{taskRunner: true}})
-	validated, err := registry.Validate(t.Context(), "create_scheduled_task", json.RawMessage(`{"name":"nightly check","script_id":1,"node_ids":["node-1"],"cron_expression":"*/5 * * * *","timezone":"UTC","enabled":true,"timeout_seconds":30,"notification_policy":"never"}`))
+	validated, err := registry.Validate(t.Context(), "create_scheduled_task", json.RawMessage(`{"name":"nightly check","script_id":1,"node_ids":["node-1"],"schedule_type":"cron","cron_expression":"*/5 * * * *","timezone":"UTC","enabled":true,"timeout_seconds":30,"notification_policy":"never"}`))
 	if err != nil {
 		t.Fatalf("validate scheduled task: %v", err)
 	}
@@ -191,7 +238,7 @@ func TestRegistryCreateScheduledTaskUsesExistingScriptAndOnlineTaskRunner(t *tes
 	if err != nil {
 		t.Fatalf("get scheduled task: %v", err)
 	}
-	if task.Name != "nightly check" || task.ScriptID != script.ID || task.NextRunAt == nil || len(task.NodeIDs) != 1 {
+	if task.Name != "nightly check" || task.ScriptID != script.ID || task.ScheduleType != store.ScheduleTypeCron || task.NextRunAt == nil || len(task.NodeIDs) != 1 {
 		t.Fatalf("scheduled task = %+v", task)
 	}
 	encoded, _ := json.Marshal(result.Data)
@@ -232,8 +279,8 @@ func TestRegistryCreationToolsRequireExplicitMaterialParameters(t *testing.T) {
 		raw        string
 		wantFields []string
 	}{
-		{name: "scheduled task", raw: `{}`, wantFields: []string{"name", "script_id", "node_ids", "cron_expression", "timezone", "enabled", "timeout_seconds", "notification_policy"}},
-		{name: "docker container", raw: `{"node_id":"node-1","image":"nginx"}`, wantFields: []string{"name", "auto_name", "restart_policy", "network_mode", "ports", "start"}},
+		{name: "scheduled task", raw: `{}`, wantFields: []string{"name", "script_id", "node_ids", "schedule_type", "timezone", "enabled", "timeout_seconds", "notification_policy"}},
+		{name: "docker container", raw: `{"node_id":"node-1","image":"nginx"}`, wantFields: []string{"name", "auto_name", "restart_policy", "network_mode", "ports", "environment", "mounts", "start"}},
 		{name: "kubernetes deployment", raw: `{"cluster_id":"cluster-1","namespace":"default","name":"web","image":"nginx"}`, wantFields: []string{"replicas", "container_port"}},
 	}
 	for _, test := range cases {

@@ -538,6 +538,10 @@ describe('AI assistant', () => {
     })
     render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
 
+    const planRegion = screen.getByRole('region', { name: 'AI 变更计划' })
+    expect(planRegion).toHaveTextContent('重启节点')
+    expect(planRegion).toHaveTextContent('升级 Agent')
+    expect(planRegion).not.toHaveTextContent('按顺序执行')
     expect(screen.getAllByRole('region', { name: 'AI 变更计划' })).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: '检查并确认' })).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: '检查并确认' }))

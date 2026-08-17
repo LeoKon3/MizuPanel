@@ -400,7 +400,8 @@ func (r *Registry) platformCapabilities(ctx context.Context) (PlatformCapability
 			for _, node := range nodes {
 				items = append(items, map[string]any{
 					"id": node.ID, "name": boundedString(node.Name, 128), "status": boundedString(node.Status, 32),
-					"available": node.Status == "online", "os": boundedString(node.OS, 64), "arch": boundedString(node.Arch, 64),
+					"ip": boundedString(node.IP, 64), "available": node.Status == "online",
+					"os": boundedString(node.OS, 64), "arch": boundedString(node.Arch, 64),
 				})
 				if len(items) == maxCapabilityItems {
 					break

@@ -516,7 +516,10 @@ func TestDockerContainerCreateMessagesJSON(t *testing.T) {
 	request := DockerContainerCreateRequest{
 		Type: MessageTypeDockerContainerCreateRequest, RequestID: "req-create", NodeID: "node-1",
 		Image: "nginx:1.27", Name: "web", RestartPolicy: "unless-stopped", NetworkMode: "bridge",
-		Ports: []DockerContainerPort{{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"}}, Start: true,
+		Ports:       []DockerContainerPort{{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"}},
+		Environment: []DockerContainerEnvironment{{Key: "MODE", Value: "production"}},
+		Mounts:      []DockerContainerMount{{Type: "volume", Source: "web-data", Target: "/data", ReadOnly: true}},
+		Start:       true,
 	}
 	data, err := json.Marshal(request)
 	if err != nil {
@@ -526,7 +529,7 @@ func TestDockerContainerCreateMessagesJSON(t *testing.T) {
 	if err := json.Unmarshal(data, &gotRequest); err != nil {
 		t.Fatalf("unmarshal Docker create request: %v", err)
 	}
-	if gotRequest.Type != MessageTypeDockerContainerCreateRequest || gotRequest.Image != "nginx:1.27" || gotRequest.Name != "web" || gotRequest.RestartPolicy != "unless-stopped" || len(gotRequest.Ports) != 1 || !gotRequest.Start {
+	if gotRequest.Type != MessageTypeDockerContainerCreateRequest || gotRequest.Image != "nginx:1.27" || gotRequest.Name != "web" || gotRequest.RestartPolicy != "unless-stopped" || len(gotRequest.Ports) != 1 || len(gotRequest.Environment) != 1 || gotRequest.Environment[0].Value != "production" || len(gotRequest.Mounts) != 1 || gotRequest.Mounts[0].Target != "/data" || !gotRequest.Start {
 		t.Fatalf("unexpected Docker create request: %#v", gotRequest)
 	}
 

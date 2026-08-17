@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.24-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.25-14B8A6">
 </p>
 
 <p align="center">
@@ -148,11 +148,11 @@ Provider API Key 由 Server 使用 `data/ai.key` 加密后保存，读取接口�
 
 <strong>Docker 镜像部署</strong>
 
-正式镜像发布在 Docker Hub。目标机只需要 Docker Engine 与 Docker Compose，不需要仓库源码、Go 或 Node.js；仓库 Compose 默认锁定不可变版本 `leokon3/mizupanel:0.1.24`：
+正式镜像发布在 Docker Hub。目标机只需要 Docker Engine 与 Docker Compose，不需要仓库源码、Go 或 Node.js；仓库 Compose 默认锁定不可变版本 `leokon3/mizupanel:0.1.25`：
 
 ```bash
 mkdir -p mizupanel && cd mizupanel
-curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.24/docker-compose.yml
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.25/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```

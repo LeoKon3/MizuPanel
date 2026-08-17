@@ -181,12 +181,16 @@ func (e *Engine) Sweep(ctx context.Context, now time.Time) error {
 			if task.NextRunAt == nil || task.NextRunAt.IsZero() {
 				return
 			}
-			nextRun, nextErr := NextRun(task.CronExpression, task.Timezone, now)
-			if nextErr != nil {
-				if firstErr == nil {
-					firstErr = nextErr
+			nextRun := time.Time{}
+			if task.ScheduleType == store.ScheduleTypeCron {
+				var nextErr error
+				nextRun, nextErr = NextRun(task.CronExpression, task.Timezone, now)
+				if nextErr != nil {
+					if firstErr == nil {
+						firstErr = nextErr
+					}
+					return
 				}
-				return
 			}
 			detail, claimErr := e.store.ClaimDueTask(ctx, task.ID, task.NextRunAt.UTC(), nextRun, now)
 			if errors.Is(claimErr, store.ErrClaimLost) {

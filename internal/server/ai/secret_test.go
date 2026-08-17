@@ -40,6 +40,17 @@ func TestSecretManagerLifecycleAndAAD(t *testing.T) {
 	if _, err := manager.Decrypt("provider-2", ProtocolOpenAIChatCompletions, first); !errors.Is(err, ErrSecretDecrypt) {
 		t.Fatalf("wrong provider error = %v, want ErrSecretDecrypt", err)
 	}
+	toolArguments, err := manager.EncryptToolArguments("tool-call-1", `{"environment":[{"value":"secret-marker"}]}`)
+	if err != nil || strings.Contains(toolArguments, "secret-marker") {
+		t.Fatalf("EncryptToolArguments = %q, %v", toolArguments, err)
+	}
+	if _, err := manager.DecryptToolArguments("tool-call-2", toolArguments); !errors.Is(err, ErrSecretDecrypt) {
+		t.Fatalf("wrong tool call error = %v, want ErrSecretDecrypt", err)
+	}
+	plaintext, err = manager.DecryptToolArguments("tool-call-1", toolArguments)
+	if err != nil || !strings.Contains(plaintext, "secret-marker") {
+		t.Fatalf("DecryptToolArguments = %q, %v", plaintext, err)
+	}
 }
 
 func TestSecretManagerRefusesMissingOrWeakExistingKey(t *testing.T) {

@@ -45,6 +45,49 @@ func TestDockerContainerCreateSupportedRequiresOnlineCapableAgent(t *testing.T) 
 	}
 }
 
+func TestDockerContainerCreateV2SupportedUsesHelloCapability(t *testing.T) {
+	handler, _, nodeID := newAgentHubTestConnection(t, protocol.HelloMessage{
+		Type:                    protocol.MessageTypeHello,
+		NodeID:                  "docker-v2-node",
+		Hostname:                "docker-v2-host",
+		Name:                    "Docker V2 Host",
+		OS:                      "linux",
+		Arch:                    "amd64",
+		DockerContainerCreate:   true,
+		DockerContainerCreateV2: true,
+	})
+	if !handler.DockerContainerCreateSupported(nodeID) || !handler.DockerContainerCreateV2Supported(nodeID) {
+		t.Fatal("live Agent Hello did not project Docker container-create V2 capability")
+	}
+	if handler.DockerContainerCreateV2Supported("offline") {
+		t.Fatal("offline Agent reported Docker container-create V2 support")
+	}
+}
+
+func TestDockerContainerCreateRejectsV2FieldsForOldAgentWithoutNetworkActivity(t *testing.T) {
+	handler := &Handler{connections: map[string]*agentConnection{
+		"old-agent": {supportsDockerContainerCreate: true},
+	}}
+	tests := []struct {
+		name    string
+		request protocol.DockerContainerCreateRequest
+	}{
+		{name: "environment", request: protocol.DockerContainerCreateRequest{Environment: []protocol.DockerContainerEnvironment{{Key: "API_TOKEN", Value: "hub-secret-marker"}}}},
+		{name: "mount", request: protocol.DockerContainerCreateRequest{Mounts: []protocol.DockerContainerMount{{Type: "volume", Source: "web-data", Target: "/data", ReadOnly: true}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, err := handler.DockerContainerCreate(t.Context(), "old-agent", test.request)
+			if err != nil {
+				t.Fatalf("DockerContainerCreate error = %v", err)
+			}
+			if response.Supported || !strings.Contains(response.Error, "升级 Agent") || strings.Contains(response.Error, "hub-secret-marker") {
+				t.Fatalf("old-Agent Docker V2 response = %#v", response)
+			}
+		})
+	}
+}
+
 func TestRunScriptReturnsStableOfflineAndUnsupportedResults(t *testing.T) {
 	handler := &Handler{connections: make(map[string]*agentConnection)}
 	request := protocol.ScriptExecutionRequest{ExecutionID: 41, Script: "true", TimeoutSeconds: 5}
@@ -264,6 +307,15 @@ func TestGenericRPCLateResponseAndDisconnectRace(t *testing.T) {
 
 func newTaskRunnerAgent(t *testing.T, capable bool) (*Handler, *websocket.Conn, string) {
 	t.Helper()
+	handler, conn, nodeID := newAgentHubTestConnection(t, protocol.HelloMessage{Type: protocol.MessageTypeHello, NodeID: "task-node", Hostname: "task-host", Name: "Task Host", OS: "linux", Arch: "amd64", TaskRunner: capable})
+	if handler.TaskRunnerSupported(nodeID) != capable {
+		t.Fatalf("task runner capability = %v, want %v", handler.TaskRunnerSupported(nodeID), capable)
+	}
+	return handler, conn, nodeID
+}
+
+func newAgentHubTestConnection(t *testing.T, hello protocol.HelloMessage) (*Handler, *websocket.Conn, string) {
+	t.Helper()
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -283,15 +335,15 @@ func newTaskRunnerAgent(t *testing.T, capable bool) (*Handler, *websocket.Conn, 
 		t.Fatalf("dial websocket: %v", err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	if err := conn.WriteJSON(protocol.HelloMessage{Type: protocol.MessageTypeHello, NodeID: "task-node", Hostname: "task-host", Name: "Task Host", OS: "linux", Arch: "amd64", TaskRunner: capable}); err != nil {
+	if err := conn.WriteJSON(hello); err != nil {
 		t.Fatalf("write hello: %v", err)
 	}
 	var ack protocol.HelloAckMessage
 	if err := conn.ReadJSON(&ack); err != nil {
 		t.Fatalf("read ack: %v", err)
 	}
-	if ack.NodeID == "" || handler.TaskRunnerSupported(ack.NodeID) != capable {
-		t.Fatalf("ack/capability = %#v/%v", ack, handler.TaskRunnerSupported(ack.NodeID))
+	if ack.NodeID == "" {
+		t.Fatalf("ack = %#v", ack)
 	}
 	return handler, conn, ack.NodeID
 }

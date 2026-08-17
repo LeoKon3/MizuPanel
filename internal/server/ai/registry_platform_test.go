@@ -22,8 +22,9 @@ type platformKubernetesStub struct {
 }
 
 type platformNodeOperationsStub struct {
-	systemd               protocol.SystemdServiceListResponse
-	dockerCreateSupported bool
+	systemd                 protocol.SystemdServiceListResponse
+	dockerCreateSupported   bool
+	dockerCreateV2Supported bool
 }
 
 func (platformNodeOperationsStub) Reboot(context.Context, string) (protocol.RebootResponse, error) {
@@ -55,6 +56,10 @@ func (platformNodeOperationsStub) DockerContainerCreate(context.Context, string,
 
 func (s platformNodeOperationsStub) DockerContainerCreateSupported(string) bool {
 	return s.dockerCreateSupported
+}
+
+func (s platformNodeOperationsStub) DockerContainerCreateV2Supported(string) bool {
+	return s.dockerCreateV2Supported
 }
 
 func (platformNodeOperationsStub) DockerComposeList(context.Context, string) (protocol.DockerComposeListResponse, error) {
