@@ -18,7 +18,7 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.26-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.27-14B8A6">
 </p>
 
 <p align="center">
@@ -142,17 +142,17 @@ Dashboard 顶层的 **日志中心**（`/logs`）以一次一个具体目标的�
 
 顶部栏的 **AI 运维助手** 可打开覆盖式右侧抽屉，也可展开到 `/ai` 完整工作台。每个 OpenAI Chat Completions 兼容 Provider 只保存一份 Base URL 和可选 API Key，并可管理多个子模型；可先检测模型列表、按需导入或手动添加，再逐个验证聊天与工具能力。会话中先选 Provider，再选择该 Provider 下的模型；每个会话持久化自己的模型选择，刷新或重新打开旧会话后仍会恢复，也可配置全局默认模型和一次性的前置故障回退模型。
 
-AI 只能调用 Server 内置的固定运维工具。故障、告警、节点、服务、拨测、指标和有界日志查询可自动执行；主机重启、Agent 升级、Docker/Compose/Systemd 状态变更和已有脚本执行必须先展示目标与影响，再由管理员在自定义确认窗口中批准。任意 Shell、文件写删、资源删除和 Kubernetes 写操作不在工具范围内。
+AI 只能调用 Server 内置的固定运维工具。它可以按需搜索节点、Docker、Compose、Systemd、Kubernetes、应用服务、任务、告警和拨测资源，查看基于真实标识的直接关系，并在变更计划中保留提案时的已知影响。故障、告警、节点、服务、拨测、指标和有界日志查询可自动执行；主机重启、Agent 升级、Docker/Compose/Systemd 状态变更和已有脚本执行必须先展示目标与影响，再由管理员在自定义确认窗口中批准。资源图只用于发现和影响提示，不改变确认、暂停和自动执行策略。任意 Shell、文件写删、资源删除和 Kubernetes 写操作不在工具范围内。
 
 Provider API Key 由 Server 使用 `data/ai.key` 加密后保存，读取接口不会返回明文或密文。回退只适用于首次模型调用在任何工具执行前发生的超时、限流或上游不可用，并且只重试一次；认证、协议、取消和工具执行后的错误不会触发回退。备份或迁移时必须同时保留数据库和 `ai.key`。模型提示词、原始响应、工具原始输出和日志内容不会作为会话历史持久化。完整配置与数据边界见 [配置部署文档](docs/configuration.md)。
 
 <strong>Docker 镜像部署</strong>
 
-正式镜像发布在 Docker Hub。目标机只需要 Docker Engine 与 Docker Compose，不需要仓库源码、Go 或 Node.js；仓库 Compose 默认锁定不可变版本 `leokon3/mizupanel:0.1.26`：
+正式镜像发布在 Docker Hub。目标机只需要 Docker Engine 与 Docker Compose，不需要仓库源码、Go 或 Node.js；仓库 Compose 默认锁定不可变版本 `leokon3/mizupanel:0.1.27`：
 
 ```bash
 mkdir -p mizupanel && cd mizupanel
-curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.26/docker-compose.yml
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.27/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```

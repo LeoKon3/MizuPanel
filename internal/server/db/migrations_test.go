@@ -869,6 +869,7 @@ func TestMigrateSQLiteCreatesReplaySafeAISchema(t *testing.T) {
 	if !strings.Contains(toolCallSchema, "operation_id") || !strings.Contains(toolCallSchema, "step_index") ||
 		!strings.Contains(toolCallSchema, "policy_decision") || !strings.Contains(toolCallSchema, "policy_reason") ||
 		!strings.Contains(toolCallSchema, "policy_revision") || !strings.Contains(toolCallSchema, "verification_status") ||
+		!strings.Contains(toolCallSchema, "impact_json") ||
 		!strings.Contains(toolCallSchema, "DEFAULT -1") {
 		t.Fatalf("AI tool call schema missing plan columns: %s", toolCallSchema)
 	}
@@ -984,15 +985,16 @@ func TestMigrateSQLiteAddsAIControlColumnsToLegacyToolCalls(t *testing.T) {
 	}
 	var stepIndex int
 	var operationID, decision, reason, verification string
+	var impact sql.NullString
 	var revision int64
 	if err := database.QueryRow(`SELECT step_index, operation_id, policy_decision, policy_reason,
-		policy_revision, verification_status FROM ai_tool_calls WHERE id = ?`, "legacy-call").
-		Scan(&stepIndex, &operationID, &decision, &reason, &revision, &verification); err != nil {
+		policy_revision, verification_status, impact_json FROM ai_tool_calls WHERE id = ?`, "legacy-call").
+		Scan(&stepIndex, &operationID, &decision, &reason, &revision, &verification, &impact); err != nil {
 		t.Fatalf("read migrated tool call: %v", err)
 	}
-	if stepIndex != -1 || operationID != "" || decision != "" || reason != "" || revision != 0 || verification != "" {
-		t.Fatalf("migrated defaults = step:%d operation:%q decision:%q reason:%q revision:%d verification:%q",
-			stepIndex, operationID, decision, reason, revision, verification)
+	if stepIndex != -1 || operationID != "" || decision != "" || reason != "" || revision != 0 || verification != "" || impact.Valid {
+		t.Fatalf("migrated defaults = step:%d operation:%q decision:%q reason:%q revision:%d verification:%q impact:%+v",
+			stepIndex, operationID, decision, reason, revision, verification, impact)
 	}
 }
 
@@ -1037,6 +1039,7 @@ func TestMySQLMigrationIncludesAISchemaAndSafeWidths(t *testing.T) {
 		"policy_reason VARCHAR(64) NOT NULL DEFAULT ''",
 		"policy_revision BIGINT NOT NULL DEFAULT 0",
 		"verification_status VARCHAR(16) NOT NULL DEFAULT ''",
+		"impact_json LONGTEXT NULL",
 		"INDEX idx_ai_tool_calls_turn_step (turn_id, step_index)",
 		"INSERT INTO ai_provider_models",
 		"migration.ai_provider_models_v1",

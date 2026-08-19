@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -102,6 +103,16 @@ type OperationPlan struct {
 	PolicyReason   string             `json:"policy_reason,omitempty"`
 	PolicyRevision int64              `json:"policy_revision,omitempty"`
 	Steps          []store.AIToolCall `json:"steps"`
+	Impact         PlanImpact         `json:"impact"`
+}
+
+type PlanImpact struct {
+	Available bool                     `json:"available"`
+	Complete  bool                     `json:"complete"`
+	Related   []store.AIImpactResource `json:"related"`
+	Total     int                      `json:"total"`
+	Overflow  int                      `json:"overflow"`
+	Sources   []store.AIImpactSource   `json:"sources"`
 }
 
 type SendResult struct {
@@ -134,6 +145,7 @@ func operationPlans(calls []store.AIToolCall) []OperationPlan {
 	for index := range plans {
 		plans[index].Status, plans[index].CurrentStep = aggregatePlanStatus(plans[index].Steps)
 		plans[index].PolicyDecision, plans[index].PolicyReason, plans[index].PolicyRevision = planPolicyProjection(plans[index].Steps)
+		plans[index].Impact = planImpactProjection(plans[index].Steps)
 	}
 	return plans
 }
@@ -181,7 +193,61 @@ func planFromSteps(turnID string, steps []store.AIToolCall) OperationPlan {
 	plan := OperationPlan{ID: turnID, TurnID: turnID, Steps: append([]store.AIToolCall(nil), steps...)}
 	plan.Status, plan.CurrentStep = aggregatePlanStatus(plan.Steps)
 	plan.PolicyDecision, plan.PolicyReason, plan.PolicyRevision = planPolicyProjection(plan.Steps)
+	plan.Impact = planImpactProjection(plan.Steps)
 	return plan
+}
+
+func planImpactProjection(steps []store.AIToolCall) PlanImpact {
+	impact := PlanImpact{Complete: len(steps) > 0, Related: []store.AIImpactResource{}, Sources: []store.AIImpactSource{}}
+	related := map[string]store.AIImpactResource{}
+	sources := map[string]store.AIImpactSource{}
+	hidden := 0
+	for _, step := range steps {
+		stepImpact := step.Impact
+		impact.Available = impact.Available || stepImpact.Available
+		if !stepImpact.Complete {
+			impact.Complete = false
+		}
+		hidden += stepImpact.Overflow
+		for _, resource := range stepImpact.Related {
+			key := strings.Join([]string{resource.Type, resource.Name, resource.State, resource.Route}, "\x00")
+			related[key] = resource
+		}
+		for _, source := range stepImpact.Sources {
+			current, exists := sources[source.Name]
+			if !exists {
+				sources[source.Name] = source
+				continue
+			}
+			current.Available = current.Available && source.Available
+			current.Truncated = current.Truncated || source.Truncated
+			if current.Reason == "" {
+				current.Reason = source.Reason
+			}
+			sources[source.Name] = current
+		}
+	}
+	allRelated := make([]store.AIImpactResource, 0, len(related))
+	for _, resource := range related {
+		allRelated = append(allRelated, resource)
+	}
+	sort.Slice(allRelated, func(i, j int) bool {
+		if allRelated[i].Type != allRelated[j].Type {
+			return allRelated[i].Type < allRelated[j].Type
+		}
+		if allRelated[i].Name != allRelated[j].Name {
+			return allRelated[i].Name < allRelated[j].Name
+		}
+		return allRelated[i].Route < allRelated[j].Route
+	})
+	impact.Total = len(allRelated) + hidden
+	impact.Related = append(impact.Related, allRelated[:min(len(allRelated), 5)]...)
+	impact.Overflow = impact.Total - len(impact.Related)
+	for _, source := range sources {
+		impact.Sources = append(impact.Sources, source)
+	}
+	sort.Slice(impact.Sources, func(i, j int) bool { return impact.Sources[i].Name < impact.Sources[j].Name })
+	return impact
 }
 
 func planPolicyProjection(steps []store.AIToolCall) (string, string, int64) {
@@ -778,6 +844,10 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 				planError = "变更计划最多包含五个步骤。"
 			}
 			storedCalls := make([]store.AIToolCall, 0, len(validated))
+			graphSnapshot, graphErr := s.registry.resourceGraphSnapshot(ctx)
+			if graphErr != nil {
+				return result, graphErr
+			}
 			seen := make(map[string]struct{}, len(validated))
 			summaryBytes := 0
 			allAutonomous := len(validated) > 0
@@ -808,7 +878,8 @@ func (s *Service) send(ctx context.Context, conversationID, providerID, content 
 				storedCall := store.AIToolCall{ID: uuid.NewString(), ProviderCallID: proposed.ID, ToolName: call.Definition.Name,
 					Risk: string(call.Risk), Status: "pending", TargetType: call.Target.Type, TargetID: call.Target.ID,
 					TargetName: call.Target.Name, NodeID: call.Target.NodeID, ResultSummary: summary,
-					PolicyDecision: string(policy.Decision), PolicyReason: policy.SafeReason(), PolicyRevision: policy.Revision}
+					PolicyDecision: string(policy.Decision), PolicyReason: policy.SafeReason(), PolicyRevision: policy.Revision,
+					Impact: s.registry.impactForToolCall(graphSnapshot, call)}
 				storedCall.ArgumentsJSON, err = s.persistedToolArguments(storedCall.ID, call)
 				if err != nil {
 					return result, err

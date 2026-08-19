@@ -162,6 +162,9 @@ func TestServiceMixedPlanNeverPartiallyAutoExecutes(t *testing.T) {
 	if executions.Load() != 0 || proposal.Plan == nil || proposal.Plan.Status != "pending" || proposal.Plan.PolicyDecision != string(PolicyManual) {
 		t.Fatalf("proposal = %+v, executions=%d", proposal, executions.Load())
 	}
+	if len(proposal.Plan.Steps) != 2 || proposal.Plan.Steps[0].Impact.Version == 0 || !proposal.Plan.Impact.Available || proposal.Plan.Impact.Complete {
+		t.Fatalf("proposal impact = %+v, want persisted available but incomplete snapshot", proposal.Plan.Impact)
+	}
 	confirmed, err := service.ConfirmPlan(t.Context(), proposal.Plan.ID, nil)
 	if err != nil {
 		t.Fatalf("ConfirmPlan: %v", err)

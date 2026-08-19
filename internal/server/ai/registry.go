@@ -59,6 +59,7 @@ const (
 	capabilityAutomation          operationCapability = "automation"
 	capabilityTaskCreation        operationCapability = "task_creation"
 	capabilityKubernetesMutation  operationCapability = "kubernetes_mutation"
+	capabilityResourceGraph       operationCapability = "resource_graph"
 )
 
 var (
@@ -174,6 +175,7 @@ type Registry struct {
 func NewRegistry(dependencies RegistryDependencies) *Registry {
 	r := &Registry{dependencies: dependencies, tools: make(map[string]registeredTool)}
 	r.registerReadTools()
+	r.registerResourceGraphTools()
 	r.registerConfirmTools()
 	r.registerCreationTools()
 	return r

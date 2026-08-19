@@ -3,10 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -108,26 +111,54 @@ type AIMessage struct {
 }
 
 type AIToolCall struct {
-	ID                 string    `json:"id"`
-	TurnID             string    `json:"turn_id"`
-	StepIndex          int       `json:"step_index"`
-	ProviderCallID     string    `json:"-"`
-	ToolName           string    `json:"tool_name"`
-	Risk               string    `json:"risk"`
-	Status             string    `json:"status"`
-	ArgumentsJSON      string    `json:"-"`
-	TargetType         string    `json:"target_type"`
-	TargetID           string    `json:"target_id"`
-	TargetName         string    `json:"target_name"`
-	NodeID             string    `json:"node_id"`
-	OperationID        string    `json:"-"`
-	ResultSummary      string    `json:"result_summary"`
-	PolicyDecision     string    `json:"policy_decision,omitempty"`
-	PolicyReason       string    `json:"policy_reason,omitempty"`
-	PolicyRevision     int64     `json:"policy_revision,omitempty"`
-	VerificationStatus string    `json:"verification_status,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                 string       `json:"id"`
+	TurnID             string       `json:"turn_id"`
+	StepIndex          int          `json:"step_index"`
+	ProviderCallID     string       `json:"-"`
+	ToolName           string       `json:"tool_name"`
+	Risk               string       `json:"risk"`
+	Status             string       `json:"status"`
+	ArgumentsJSON      string       `json:"-"`
+	TargetType         string       `json:"target_type"`
+	TargetID           string       `json:"target_id"`
+	TargetName         string       `json:"target_name"`
+	NodeID             string       `json:"node_id"`
+	OperationID        string       `json:"-"`
+	ResultSummary      string       `json:"result_summary"`
+	PolicyDecision     string       `json:"policy_decision,omitempty"`
+	PolicyReason       string       `json:"policy_reason,omitempty"`
+	PolicyRevision     int64        `json:"policy_revision,omitempty"`
+	VerificationStatus string       `json:"verification_status,omitempty"`
+	Impact             AIToolImpact `json:"impact"`
+	ImpactJSON         string       `json:"-"`
+	CreatedAt          time.Time    `json:"created_at"`
+	UpdatedAt          time.Time    `json:"updated_at"`
+}
+
+type AIImpactResource struct {
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	Available bool   `json:"available"`
+	Route     string `json:"route,omitempty"`
+}
+
+type AIImpactSource struct {
+	Name      string `json:"name"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+type AIToolImpact struct {
+	Version   int                `json:"version"`
+	Available bool               `json:"available"`
+	Complete  bool               `json:"complete"`
+	Target    AIImpactResource   `json:"target"`
+	Related   []AIImpactResource `json:"related"`
+	Total     int                `json:"total"`
+	Overflow  int                `json:"overflow"`
+	Sources   []AIImpactSource   `json:"sources"`
 }
 
 type AIStore struct {
@@ -1042,15 +1073,19 @@ func (s *AIStore) CreateToolPlan(ctx context.Context, turn AITurn, calls []AIToo
 }
 
 func insertAIToolCallTx(ctx context.Context, tx *sql.Tx, call AIToolCall) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO ai_tool_calls
+	impactJSON, err := normalizedAIToolImpactJSON(call)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO ai_tool_calls
 		(id, turn_id, step_index, provider_call_id, tool_name, risk, status, arguments_json, target_type,
 		 target_id, target_name, node_id, operation_id, result_summary, policy_decision, policy_reason,
-		 policy_revision, verification_status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, call.ID, call.TurnID, call.StepIndex,
+		 policy_revision, verification_status, impact_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, call.ID, call.TurnID, call.StepIndex,
 		call.ProviderCallID, call.ToolName, call.Risk, call.Status, call.ArgumentsJSON,
 		call.TargetType, call.TargetID, call.TargetName, call.NodeID, call.OperationID, call.ResultSummary,
 		call.PolicyDecision, call.PolicyReason, call.PolicyRevision, call.VerificationStatus,
-		formatTime(call.CreatedAt), formatTime(call.UpdatedAt))
+		impactJSON, formatTime(call.CreatedAt), formatTime(call.UpdatedAt))
 	return err
 }
 
@@ -1109,7 +1144,7 @@ func (s *AIStore) CompleteToolCallAndTurn(ctx context.Context, id string, turn A
 func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITurn, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name, c.risk,
 		c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
-		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status,
+		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status, COALESCE(c.impact_json, ''),
 		c.created_at, c.updated_at, t.conversation_id, t.model_id, t.provider_id,
 		t.provider_name, t.protocol, t.model, t.requested_provider_id, t.requested_provider_name,
 		t.requested_model_id, t.requested_model, t.fallback_used, t.status, t.error_code, t.created_at, t.updated_at
@@ -1121,7 +1156,7 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 	err := row.Scan(&call.ID, &call.TurnID, &call.StepIndex, &call.ProviderCallID, &call.ToolName, &call.Risk,
 		&call.Status, &call.ArgumentsJSON, &call.TargetType, &call.TargetID, &call.TargetName,
 		&call.NodeID, &call.OperationID, &call.ResultSummary, &call.PolicyDecision, &call.PolicyReason,
-		&call.PolicyRevision, &call.VerificationStatus, &callCreated, &callUpdated, &turn.ConversationID, &modelID,
+		&call.PolicyRevision, &call.VerificationStatus, &call.ImpactJSON, &callCreated, &callUpdated, &turn.ConversationID, &modelID,
 		&turn.ProviderID, &turn.ProviderName, &turn.Protocol, &turn.Model, &turn.RequestedProviderID,
 		&turn.RequestedProviderName, &requestedModelID, &turn.RequestedModel, &turn.FallbackUsed, &turn.Status,
 		&turn.ErrorCode, &turnCreated, &turnUpdated)
@@ -1131,6 +1166,7 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 	if err != nil {
 		return AIToolCall{}, AITurn{}, err
 	}
+	call.Impact = decodeAIToolImpact(call.ImpactJSON)
 	turn.ID = call.TurnID
 	turn.ModelID = nullableStringPointer(modelID)
 	turn.RequestedModelID = nullableStringPointer(requestedModelID)
@@ -1152,7 +1188,7 @@ func (s *AIStore) GetToolCall(ctx context.Context, id string) (AIToolCall, AITur
 func (s *AIStore) ListToolCalls(ctx context.Context, conversationID string) ([]AIToolCall, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name,
 		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
-		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status,
+		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status, COALESCE(c.impact_json, ''),
 		c.created_at, c.updated_at FROM ai_tool_calls c
 		JOIN ai_turns t ON t.id = c.turn_id WHERE t.conversation_id = ? ORDER BY c.created_at, c.step_index, c.id`, conversationID)
 	if err != nil {
@@ -1496,7 +1532,7 @@ type aiQueryer interface {
 func listPlanSteps(ctx context.Context, queryer aiQueryer, turnID string) ([]AIToolCall, error) {
 	rows, err := queryer.QueryContext(ctx, `SELECT id, turn_id, step_index, provider_call_id, tool_name,
 		risk, status, arguments_json, target_type, target_id, target_name, node_id, operation_id,
-		result_summary, policy_decision, policy_reason, policy_revision, verification_status,
+		result_summary, policy_decision, policy_reason, policy_revision, verification_status, COALESCE(impact_json, ''),
 		created_at, updated_at FROM ai_tool_calls
 		WHERE turn_id = ? AND step_index >= 0 ORDER BY step_index`, turnID)
 	if err != nil {
@@ -1520,7 +1556,7 @@ func (s *AIStore) ListAcceptedToolCalls(ctx context.Context, limit int) ([]AIToo
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.turn_id, c.step_index, c.provider_call_id, c.tool_name,
 		c.risk, c.status, c.arguments_json, c.target_type, c.target_id, c.target_name, c.node_id, c.operation_id,
-		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status,
+		c.result_summary, c.policy_decision, c.policy_reason, c.policy_revision, c.verification_status, COALESCE(c.impact_json, ''),
 		c.created_at, c.updated_at FROM ai_tool_calls c
 		WHERE c.status = 'accepted' ORDER BY c.updated_at, c.id LIMIT ?`, limit)
 	if err != nil {
@@ -1854,9 +1890,10 @@ func scanAIToolCall(scanner aiScanner) (AIToolCall, error) {
 	if err := scanner.Scan(&call.ID, &call.TurnID, &call.StepIndex, &call.ProviderCallID, &call.ToolName,
 		&call.Risk, &call.Status, &call.ArgumentsJSON, &call.TargetType, &call.TargetID,
 		&call.TargetName, &call.NodeID, &call.OperationID, &call.ResultSummary, &call.PolicyDecision,
-		&call.PolicyReason, &call.PolicyRevision, &call.VerificationStatus, &created, &updated); err != nil {
+		&call.PolicyReason, &call.PolicyRevision, &call.VerificationStatus, &call.ImpactJSON, &created, &updated); err != nil {
 		return AIToolCall{}, err
 	}
+	call.Impact = decodeAIToolImpact(call.ImpactJSON)
 	var err error
 	if call.CreatedAt, err = parseTime(created); err != nil {
 		return AIToolCall{}, err
@@ -1865,6 +1902,115 @@ func scanAIToolCall(scanner aiScanner) (AIToolCall, error) {
 		return AIToolCall{}, err
 	}
 	return call, nil
+}
+
+func unknownAIToolImpact() AIToolImpact {
+	return AIToolImpact{Version: 1, Available: false, Complete: false, Related: []AIImpactResource{}, Sources: []AIImpactSource{}}
+}
+
+func decodeAIToolImpact(raw string) AIToolImpact {
+	if len(raw) == 0 || len(raw) > 8192 {
+		return unknownAIToolImpact()
+	}
+	impact, err := parseAIToolImpact(raw)
+	if err != nil {
+		return unknownAIToolImpact()
+	}
+	if impact.Related == nil {
+		impact.Related = []AIImpactResource{}
+	}
+	if impact.Sources == nil {
+		impact.Sources = []AIImpactSource{}
+	}
+	return impact
+}
+
+func normalizedAIToolImpactJSON(call AIToolCall) (string, error) {
+	impact := call.Impact
+	if call.ImpactJSON != "" {
+		parsed, err := parseAIToolImpact(call.ImpactJSON)
+		if err != nil {
+			return "", ErrAIInvalid
+		}
+		impact = parsed
+	}
+	if impact.Version == 0 {
+		return "", nil
+	}
+	if !validAIToolImpact(impact) {
+		return "", ErrAIInvalid
+	}
+	encoded, err := json.Marshal(impact)
+	if err != nil || len(encoded) > 8192 {
+		return "", ErrAIInvalid
+	}
+	return string(encoded), nil
+}
+
+func parseAIToolImpact(raw string) (AIToolImpact, error) {
+	if len(raw) == 0 || len(raw) > 8192 {
+		return AIToolImpact{}, ErrAIInvalid
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var impact AIToolImpact
+	if err := decoder.Decode(&impact); err != nil {
+		return AIToolImpact{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return AIToolImpact{}, ErrAIInvalid
+	}
+	if !validAIToolImpact(impact) {
+		return AIToolImpact{}, ErrAIInvalid
+	}
+	return impact, nil
+}
+
+func validAIToolImpact(impact AIToolImpact) bool {
+	if impact.Version != 1 || len(impact.Related) > 5 || len(impact.Sources) > 32 || impact.Total < len(impact.Related) || impact.Overflow != impact.Total-len(impact.Related) {
+		return false
+	}
+	if !validAIImpactResource(impact.Target) {
+		return false
+	}
+	for _, resource := range impact.Related {
+		if !validAIImpactResource(resource) {
+			return false
+		}
+	}
+	for _, source := range impact.Sources {
+		if source.Name == "" || !validAIImpactText(source.Name, 64) || !validAIImpactText(source.Reason, 64) {
+			return false
+		}
+	}
+	return true
+}
+
+func validAIImpactResource(resource AIImpactResource) bool {
+	if !validAIImpactText(resource.Type, 64) || resource.Type == "" || !validAIImpactText(resource.Name, 256) || resource.Name == "" || !validAIImpactText(resource.State, 64) {
+		return false
+	}
+	if resource.Route == "" {
+		return true
+	}
+	if !validAIImpactText(resource.Route, 512) || strings.ContainsAny(resource.Route, "?#") {
+		return false
+	}
+	for _, exact := range []string{"/tasks", "/alerts", "/uptime"} {
+		if resource.Route == exact {
+			return true
+		}
+	}
+	for _, prefix := range []string{"/nodes/", "/k8s/clusters/", "/services/"} {
+		if suffix := strings.TrimPrefix(resource.Route, prefix); suffix != resource.Route && suffix != "" && suffix != "." && suffix != ".." && !strings.Contains(suffix, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+func validAIImpactText(value string, limit int) bool {
+	return utf8.ValidString(value) && len(value) <= limit && !strings.ContainsAny(value, "\x00\r\n")
 }
 
 func (s *AIStore) compatibilityModel(ctx context.Context, providerID string) (AIProviderModel, error) {

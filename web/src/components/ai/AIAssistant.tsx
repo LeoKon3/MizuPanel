@@ -1,7 +1,7 @@
 import { Fragment, type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, CheckCircle2, ChevronRight, Circle, CircleAlert, CircleX, Clock3, LoaderCircle, Maximize2, MessageSquarePlus, PanelRightClose, Plus, Send, Settings2, Square, Trash2, X } from 'lucide-react'
 
-import type { AIOperationPlan, AIPolicyDecision, AIProgress, AIToolCall, AIVerificationStatus } from '../../types'
+import type { AIImpactResource, AIOperationPlan, AIPolicyDecision, AIProgress, AIToolCall, AIVerificationStatus } from '../../types'
 import { Toast } from '../Toast'
 import { AIModelSelector } from './AIModelSelector'
 import type { AIAssistantState } from './useAIAssistantState'
@@ -31,7 +31,42 @@ const toolLabels: Record<string, string> = {
   run_saved_script: '运行已有脚本',
   create_scheduled_task: '创建计划任务',
   create_docker_container: '创建 Docker 容器',
-  create_k8s_deployment: '创建 Kubernetes Deployment'
+  create_k8s_deployment: '创建 Kubernetes Deployment',
+  search_resources: '搜索平台资源',
+  get_resource_topology: '查询资源关系'
+}
+
+const impactTypeLabels: Record<string, string> = {
+  node: '节点',
+  docker_container: '容器',
+  compose_project: 'Compose 项目',
+  compose_service: 'Compose 服务',
+  systemd_service: 'Systemd 服务',
+  k8s_cluster: 'Kubernetes 集群',
+  k8s_workload: 'Kubernetes 工作负载',
+  application_service: '应用服务',
+  scheduled_task: '计划任务',
+  alert_rule: '告警规则',
+  uptime_monitor: '拨测监控'
+}
+
+function normalizedPlanImpact(plan: AIOperationPlan) {
+  const impact = plan.impact
+  if (!impact || typeof impact !== 'object') return undefined
+  const related = Array.isArray(impact.related)
+    ? impact.related
+      .filter((resource): resource is AIImpactResource => Boolean(resource && typeof resource.name === 'string' && typeof resource.type === 'string'))
+      .slice(0, 5)
+      .map((resource) => ({ ...resource, route: safeImpactRoute(resource.route) }))
+    : []
+  const overflow = Number.isInteger(impact.overflow) && impact.overflow > 0 ? impact.overflow : 0
+  return { available: impact.available === true, complete: impact.complete === true, related, overflow }
+}
+
+function safeImpactRoute(route?: string) {
+  if (route === '/tasks' || route === '/alerts' || route === '/uptime') return route
+  if (typeof route !== 'string' || route.includes('?') || route.includes('#')) return undefined
+  return /^\/(?:nodes|services)\/[^/]+$/.test(route) || /^\/k8s\/clusters\/[^/]+$/.test(route) ? route : undefined
 }
 
 function toolTarget(call: AIToolCall) {
@@ -158,35 +193,62 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   const lastMessageIndexByTurn = new Map<string, number>()
   messages.forEach((message, index) => lastMessageIndexByTurn.set(message.turn_id, index))
 
-  const renderPlan = (plan: AIOperationPlan) => (
-    <section key={plan.id} aria-label="AI 变更计划" className={`border-l-2 py-1 pl-3 ${plan.status === 'pending' ? 'border-warning' : plan.status === 'success' ? 'border-success' : 'border-border'}`}>
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <p className="text-xs font-black text-foreground">执行计划 · {plan.steps.length} 步</p>
-        <span className={`shrink-0 text-xs font-black ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
-      </div>
-      {!plan.steps.some((step) => step.policy_decision) && (policyDecisionText(plan.policy_decision) || policyReasonText(plan.policy_reason)) ? (
-        <p className="mt-1 break-words text-[11px] font-bold text-muted-foreground">{[policyDecisionText(plan.policy_decision), policyReasonText(plan.policy_reason)].filter(Boolean).join(' · ')}</p>
-      ) : null}
-      <ol className="mt-2 space-y-2">
-        {plan.steps.map((step, index) => (
-          <li key={step.id} className="flex min-w-0 gap-2">
-            <span className="mt-0.5 shrink-0"><PlanStepIcon status={step.status} /></span>
-            <div className="min-w-0 flex-1">
-              <p className="break-words text-xs font-bold text-foreground">{plan.steps.length > 1 ? `${index + 1}. ` : ''}{planStepSummary(step)}</p>
-              <p className="mt-0.5 break-words text-[11px] font-semibold text-muted-foreground">{toolTarget(step)} · {planStepStatusText(step.status)}</p>
-              {policyStatusText(step) ? <p className="mt-0.5 break-words text-[11px] font-bold text-muted-foreground">{policyStatusText(step)}</p> : null}
-            </div>
-          </li>
-        ))}
-      </ol>
-      {plan.status === 'pending' ? (
-        <div className="mt-3 flex flex-wrap justify-end gap-2">
-          <button type="button" disabled={assistant.operationID === plan.id} onClick={() => void assistant.rejectPlan(plan)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
-          <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmPlan(plan)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
+  const renderPlan = (plan: AIOperationPlan) => {
+    const impact = normalizedPlanImpact(plan)
+    return (
+      <section key={plan.id} aria-label="AI 变更计划" className={`border-l-2 py-1 pl-3 ${plan.status === 'pending' ? 'border-warning' : plan.status === 'success' ? 'border-success' : 'border-border'}`}>
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <p className="text-xs font-black text-foreground">执行计划 · {plan.steps.length} 步</p>
+          <span className={`shrink-0 text-xs font-black ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
         </div>
-      ) : null}
-    </section>
-  )
+        {!plan.steps.some((step) => step.policy_decision) && (policyDecisionText(plan.policy_decision) || policyReasonText(plan.policy_reason)) ? (
+          <p className="mt-1 break-words text-[11px] font-bold text-muted-foreground">{[policyDecisionText(plan.policy_decision), policyReasonText(plan.policy_reason)].filter(Boolean).join(' · ')}</p>
+        ) : null}
+        <ol className="mt-2 space-y-2">
+          {plan.steps.map((step, index) => (
+            <li key={step.id} className="flex min-w-0 gap-2">
+              <span className="mt-0.5 shrink-0"><PlanStepIcon status={step.status} /></span>
+              <div className="min-w-0 flex-1">
+                <p className="break-words text-xs font-bold text-foreground">{plan.steps.length > 1 ? `${index + 1}. ` : ''}{planStepSummary(step)}</p>
+                <p className="mt-0.5 break-words text-[11px] font-semibold text-muted-foreground">{toolTarget(step)} · {planStepStatusText(step.status)}</p>
+                {policyStatusText(step) ? <p className="mt-0.5 break-words text-[11px] font-bold text-muted-foreground">{policyStatusText(step)}</p> : null}
+              </div>
+            </li>
+          ))}
+        </ol>
+        {impact ? (
+          <div className="mt-3 border-t border-border pt-2" aria-label="已知影响">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] font-black text-foreground">已知影响</p>
+              {impact.overflow > 0 ? <span className="text-[11px] font-bold text-muted-foreground">另有 {impact.overflow} 项</span> : null}
+            </div>
+            {impact.related.length > 0 ? (
+              <ul className="mt-1.5 space-y-1">
+                {impact.related.map((resource, index) => (
+                  <li key={`${resource.type}-${resource.name}-${index}`} className="flex min-w-0 items-center gap-2 text-[11px] font-semibold text-muted-foreground">
+                    <span className="min-w-0 flex-1 break-words"><span className="font-bold text-foreground">{resource.name}</span> · {impactTypeLabels[resource.type] ?? resource.type}{resource.state ? ` · ${resource.state}` : ''}</span>
+                    {resource.route ? (
+                      <a href={resource.route} title={`打开${resource.name}`} className="soft-button flex h-7 w-7 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground">
+                        <ChevronRight size={14} aria-hidden="true" />
+                        <span className="sr-only">打开{resource.name}</span>
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="mt-1.5 text-[11px] font-semibold text-muted-foreground">{impact.available ? '未发现直接关联资源' : '影响信息不可用'}</p>}
+            {!impact.complete ? <p className="mt-1.5 text-[11px] font-bold text-warning">部分资源来源不可用，影响范围可能不完整</p> : null}
+          </div>
+        ) : null}
+        {plan.status === 'pending' ? (
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            <button type="button" disabled={assistant.operationID === plan.id} onClick={() => void assistant.rejectPlan(plan)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
+            <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmPlan(plan)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
+          </div>
+        ) : null}
+      </section>
+    )
+  }
 
   const renderLegacyCall = (call: AIToolCall) => (
     <div key={call.id} className="border-l-2 border-warning py-1 pl-3">

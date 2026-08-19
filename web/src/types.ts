@@ -1337,6 +1337,7 @@ export type AIToolCall = {
   policy_reason?: string
   policy_revision?: number
   verification_status?: AIVerificationStatus
+  impact?: AIToolImpact
   created_at: string
   updated_at: string
 }
@@ -1354,6 +1355,34 @@ export type AIPolicyDecision =
 
 export type AIVerificationStatus = 'success' | 'failure' | 'unknown'
 
+export type AIImpactResource = {
+  type: string
+  name: string
+  state: string
+  available: boolean
+  route?: string
+}
+
+export type AIImpactSource = {
+  name: string
+  available: boolean
+  reason?: string
+  truncated?: boolean
+}
+
+export type AIToolImpact = {
+  version: number
+  available: boolean
+  complete: boolean
+  target: AIImpactResource
+  related: AIImpactResource[]
+  total: number
+  overflow: number
+  sources: AIImpactSource[]
+}
+
+export type AIPlanImpact = Pick<AIToolImpact, 'available' | 'complete' | 'related' | 'total' | 'overflow' | 'sources'>
+
 export type AIOperationPlanStep = AIToolCall & { step_index: number }
 
 export type AIOperationPlan = {
@@ -1365,6 +1394,7 @@ export type AIOperationPlan = {
   policy_reason?: string
   policy_revision?: number
   steps: AIOperationPlanStep[]
+  impact?: AIPlanImpact
 }
 
 export type AIConversationState = {

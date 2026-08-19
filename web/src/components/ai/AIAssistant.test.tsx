@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import * as api from '../../api/client'
-import type { AIConversation, AIConversationState, AIMessage, AIOperationPlan, AIOperationPlanStep, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
+import type { AIConversation, AIConversationState, AIImpactResource, AIMessage, AIOperationPlan, AIOperationPlanStep, AIProvider, AIProviderModel, AISendResult, AIToolCall, AITurn } from '../../types'
 import { AIAssistantDrawer, AIWorkspacePage } from './AIAssistant'
 import { type AIAssistantState, useAIAssistantState } from './useAIAssistantState'
 
@@ -542,6 +542,7 @@ describe('AI assistant', () => {
     expect(planRegion).toHaveTextContent('重启节点')
     expect(planRegion).toHaveTextContent('升级 Agent')
     expect(planRegion).not.toHaveTextContent('按顺序执行')
+    expect(within(planRegion).queryByLabelText('已知影响')).not.toBeInTheDocument()
     expect(screen.getAllByRole('region', { name: 'AI 变更计划' })).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: '检查并确认' })).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: '检查并确认' }))
@@ -550,6 +551,39 @@ describe('AI assistant', () => {
     expect(within(dialog).getByText('2. 升级 Agent')).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: '确认执行计划' }))
     await waitFor(() => expect(confirmPlan).toHaveBeenCalledWith(plan))
+  })
+
+  test('renders bounded known impact and ignores malformed routes', () => {
+    const related: AIImpactResource[] = Array.from({ length: 6 }, (_, index) => ({
+      type: 'systemd_service', name: `service-${index}`, state: 'active', available: true,
+      route: index === 0 ? '/nodes/node-1' : index === 1 ? 'https://evil.test' : '/services/service-1'
+    }))
+    const step = { ...pendingCall, step_index: 0, result_summary: '重启节点' }
+    const plan: AIOperationPlan = {
+      id: pendingCall.turn_id, turn_id: pendingCall.turn_id, status: 'pending', current_step: -1, steps: [step],
+      impact: { available: true, complete: false, related, total: 8, overflow: 3, sources: [] }
+    }
+    render(<AIAssistantDrawer assistant={assistant({ conversation: { conversation, messages: [], tool_calls: [step], plans: [plan] } })} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+
+    const planRegion = screen.getByRole('region', { name: 'AI 变更计划' })
+    expect(within(planRegion).getByLabelText('已知影响')).toHaveTextContent('service-0')
+    expect(within(planRegion).getAllByRole('link')).toHaveLength(4)
+    expect(within(planRegion).getByText('另有 3 项')).toBeInTheDocument()
+    expect(planRegion).toHaveTextContent('部分资源来源不可用，影响范围可能不完整')
+    expect(within(planRegion).queryByRole('link', { name: '打开service-1' })).not.toBeInTheDocument()
+  })
+
+  test('renders a complete empty impact without an incomplete warning', () => {
+    const step = { ...pendingCall, step_index: 0, result_summary: '重启节点' }
+    const plan: AIOperationPlan = {
+      id: pendingCall.turn_id, turn_id: pendingCall.turn_id, status: 'pending', current_step: -1, steps: [step],
+      impact: { available: true, complete: true, related: [], total: 0, overflow: 0, sources: [] }
+    }
+    render(<AIAssistantDrawer assistant={assistant({ conversation: { conversation, messages: [], tool_calls: [step], plans: [plan] } })} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+
+    const impact = screen.getByLabelText('已知影响')
+    expect(impact).toHaveTextContent('未发现直接关联资源')
+    expect(impact).not.toHaveTextContent('影响范围可能不完整')
   })
 
   test('renders autonomous policy and verification results inside the ordered plan surface', () => {

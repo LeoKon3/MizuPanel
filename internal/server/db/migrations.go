@@ -502,6 +502,7 @@ func sqliteMigrationStatements() []string {
 					policy_reason TEXT NOT NULL DEFAULT '',
 					policy_revision INTEGER NOT NULL DEFAULT 0,
 					verification_status TEXT NOT NULL DEFAULT '',
+					impact_json TEXT,
 					created_at TEXT NOT NULL,
 					updated_at TEXT NOT NULL,
 					FOREIGN KEY (turn_id) REFERENCES ai_turns(id) ON DELETE CASCADE
@@ -1006,6 +1007,7 @@ func mysqlMigrationStatements() []string {
 					policy_reason VARCHAR(64) NOT NULL DEFAULT '',
 					policy_revision BIGINT NOT NULL DEFAULT 0,
 					verification_status VARCHAR(16) NOT NULL DEFAULT '',
+					impact_json LONGTEXT NULL,
 					created_at VARCHAR(64) NOT NULL,
 					updated_at VARCHAR(64) NOT NULL,
 					INDEX idx_ai_tool_calls_turn_created (turn_id, created_at, id),
@@ -1127,6 +1129,7 @@ func aiCompatibilityColumnStatements(dialect Dialect) []string {
 			`ALTER TABLE ai_tool_calls ADD COLUMN policy_reason VARCHAR(64) NOT NULL DEFAULT ''`,
 			`ALTER TABLE ai_tool_calls ADD COLUMN policy_revision BIGINT NOT NULL DEFAULT 0`,
 			`ALTER TABLE ai_tool_calls ADD COLUMN verification_status VARCHAR(16) NOT NULL DEFAULT ''`,
+			`ALTER TABLE ai_tool_calls ADD COLUMN impact_json LONGTEXT NULL`,
 		}
 	}
 	return []string{
@@ -1148,6 +1151,7 @@ func aiCompatibilityColumnStatements(dialect Dialect) []string {
 		`ALTER TABLE ai_tool_calls ADD COLUMN policy_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ai_tool_calls ADD COLUMN policy_revision INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE ai_tool_calls ADD COLUMN verification_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_tool_calls ADD COLUMN impact_json TEXT`,
 	}
 }
 

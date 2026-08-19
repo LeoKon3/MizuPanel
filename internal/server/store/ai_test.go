@@ -1,7 +1,9 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,6 +278,68 @@ func TestAIStoreToolPlanCreationClaimRejectAndRecoveryAreAtomic(t *testing.T) {
 	}
 	if rejectedTurn.Status != "completed" || message.Content != "cancelled" || rejected[0].Status != "rejected" || rejected[1].Status != "rejected" {
 		t.Fatalf("rejected plan = turn:%+v message:%+v steps:%+v", rejectedTurn, message, rejected)
+	}
+}
+
+func TestAIStoreToolImpactRoundTripAndFailClosed(t *testing.T) {
+	database := openTestDB(t)
+	database.SetMaxOpenConns(1)
+	repo := NewAIStore(database, serverdb.DialectSQLite)
+	provider, err := repo.CreateProvider(t.Context(), testAIProvider("provider-impact", "Impact Model"))
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	conversation, err := repo.CreateConversation(t.Context(), "Impact")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	turn, _, err := repo.StartTurn(t.Context(), conversation.ID, provider, "impact request")
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+	impact := AIToolImpact{Version: 1, Available: true, Complete: true,
+		Target:  AIImpactResource{Type: "node", Name: "worker", State: "online", Available: true, Route: "/nodes/node-1"},
+		Related: []AIImpactResource{{Type: "systemd_service", Name: "web.service", State: "active", Available: true, Route: "/nodes/node-1"}},
+		Total:   1, Sources: []AIImpactSource{{Name: "nodes", Available: true}}}
+	created, err := repo.CreateToolPlan(t.Context(), turn, []AIToolCall{{ID: "impact-step", ProviderCallID: "impact-call", ToolName: "restart", Risk: "confirm", Status: "pending", ArgumentsJSON: `{}`, TargetType: "node", TargetID: "node-1", TargetName: "worker", NodeID: "node-1", Impact: impact}})
+	if err != nil {
+		t.Fatalf("create impact plan: %v", err)
+	}
+	if len(created) != 1 || created[0].Impact.Version != 1 || created[0].Impact.Related[0].Name != "web.service" {
+		t.Fatalf("created impact = %+v", created)
+	}
+	steps, err := repo.ListPlanSteps(t.Context(), turn.ID)
+	if err != nil || len(steps) != 1 || steps[0].Impact.Target.Route != "/nodes/node-1" {
+		t.Fatalf("round-tripped impact = %+v, err=%v", steps, err)
+	}
+	if _, err := json.Marshal(steps[0].Impact); err != nil {
+		t.Fatalf("marshal round-tripped impact: %v", err)
+	}
+	if _, err := database.Exec(`UPDATE ai_tool_calls SET impact_json = ? WHERE id = ?`, `{"version":1,"available":true,"complete":true,"target":{"type":"node","name":"worker","state":"online","available":true},"related":[],"total":0,"overflow":0,"sources":[],"unexpected":"ignored"}`, "impact-step"); err != nil {
+		t.Fatalf("write corrupt impact: %v", err)
+	}
+	corrupt, err := repo.ListPlanSteps(t.Context(), turn.ID)
+	if err != nil || len(corrupt) != 1 || corrupt[0].Impact.Available || corrupt[0].Impact.Complete {
+		t.Fatalf("corrupt impact did not fail closed: %+v, err=%v", corrupt, err)
+	}
+	if _, err := database.Exec(`UPDATE ai_tool_calls SET impact_json = '' WHERE id = ?`, "impact-step"); err != nil {
+		t.Fatalf("clear historical impact: %v", err)
+	}
+	historical, err := repo.ListPlanSteps(t.Context(), turn.ID)
+	if err != nil || len(historical) != 1 || historical[0].Impact.Available || historical[0].Impact.Version != 1 {
+		t.Fatalf("historical empty impact = %+v, err=%v", historical, err)
+	}
+	otherConversation, err := repo.CreateConversation(t.Context(), "Oversized impact")
+	if err != nil {
+		t.Fatalf("create oversized conversation: %v", err)
+	}
+	otherTurn, _, err := repo.StartTurn(t.Context(), otherConversation.ID, provider, "oversized")
+	if err != nil {
+		t.Fatalf("start oversized turn: %v", err)
+	}
+	_, err = repo.CreateToolPlan(t.Context(), otherTurn, []AIToolCall{{ID: "oversized-impact", ToolName: "restart", Risk: "confirm", Status: "pending", ImpactJSON: strings.Repeat("x", 8193)}})
+	if !errors.Is(err, ErrAIInvalid) {
+		t.Fatalf("oversized impact error = %v, want ErrAIInvalid", err)
 	}
 }
 

@@ -2,6 +2,33 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.27 - 2026-08-19
+
+### Added
+
+- Added an on-demand AI resource graph across nodes, Docker, Compose, Systemd,
+  Kubernetes, application services, scheduled tasks, alerts, and uptime monitors.
+- Added fixed read-only resource search and direct-topology tools with canonical
+  identities, explicit source coverage, bounded fan-out, and strict result caps.
+- Added immutable proposal-time known-impact previews to AI operation plans and
+  conversation history.
+
+### Changed
+
+- Changed AI target discovery to preserve duplicate-name scopes and require
+  clarification instead of selecting the first matching resource.
+- Changed operation plan previews to distinguish complete, partial, unavailable,
+  and truncated impact knowledge without changing execution policy.
+
+### Security
+
+- Resource relationships come only from Server-owned identifiers and saved
+  associations; model output, display-name matching, and arbitrary traversal are
+  never execution authority.
+- Impact persistence and browser navigation use strict bounded schemas and fixed
+  internal routes, excluding arguments, credentials, logs, scripts, raw source
+  payloads, and operation IDs.
+
 ## v0.1.26 - 2026-08-17
 
 ### Added
