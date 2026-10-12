@@ -107,9 +107,11 @@ func newAutomationAPIFixture(t *testing.T, auth AuthConfig, runnerOverride ...Au
 	if len(runnerOverride) > 0 {
 		runner = runnerOverride[0]
 	}
-	router := NewRouter(nodes, store.NewMetricStore(database), AutomationConfig{
-		Store: tasks, Runner: runner,
-	}, auth, auditStore)
+	router := NewRouter(RouterDependencies{
+		Nodes: nodes, Metrics: store.NewMetricStore(database),
+		Automation: AutomationConfig{Store: tasks, Runner: runner},
+		Auth:       auth, Audit: auditStore,
+	})
 	return automationAPIFixture{
 		handler: serveraudit.Middleware(auditStore, router), tasks: tasks,
 		nodes: nodes, audit: auditStore, db: database,

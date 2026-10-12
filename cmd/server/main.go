@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/mizupanel/mizupanel/internal/server/api"
@@ -24,12 +26,19 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	handled, err := version.PrintCommand(os.Args[1:], "Server", os.Stdout)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if handled {
-		return
+		return nil
 	}
 	serverLogs := logbuffer.New(logbuffer.DefaultMaxEntries, logbuffer.DefaultMaxBytes)
 	log.SetOutput(io.MultiWriter(os.Stderr, serverLogs))
@@ -39,17 +48,20 @@ func main() {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	database, dialect, err := serverdb.OpenStorage(cfg.Storage)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer database.Close()
 
 	nodes := store.NewNodeStoreWithDialect(database, dialect)
-	if err := nodes.ResetOnlineStatuses(context.Background(), time.Now().UTC()); err != nil {
-		log.Fatal(err)
+	if err := nodes.ResetOnlineStatuses(ctx, time.Now().UTC()); err != nil {
+		return err
 	}
 	metrics := store.NewMetricStore(database)
 	processSnapshots := store.NewProcessSnapshotStoreWithDialect(database, dialect)
@@ -63,22 +75,23 @@ func main() {
 	aiStore := store.NewAIStore(database, dialect)
 	auditStore := serveraudit.NewStore(database, dialect)
 	cleaner := retention.NewDynamicCleaner(metrics, func() (time.Duration, error) {
-		return settings.MetricsRetention(context.Background(), cfg.MetricsRetention)
+		return settings.MetricsRetention(ctx, cfg.MetricsRetention)
 	})
-	go cleaner.Run(context.Background(), cfg.CleanupInterval)
+	go cleaner.Run(ctx, cfg.CleanupInterval)
 	auditCleaner := retention.NewAuditCleaner(auditStore, cfg.AuditRetention)
-	go auditCleaner.Run(context.Background(), cfg.AuditCleanup)
+	go auditCleaner.Run(ctx, cfg.AuditCleanup)
 	taskCleaner := retention.NewTaskRunCleaner(tasks, cfg.TaskRetention)
-	go taskCleaner.Run(context.Background(), cfg.TaskCleanup)
+	go taskCleaner.Run(ctx, cfg.TaskCleanup)
 
 	paths, err := runtimeReleasePaths(os.Executable)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if cfg.Debug {
 		log.Printf("[debug][server] debug logging enabled")
 	}
 	handler := app.NewHandler(app.Dependencies{
+		Context:             ctx,
 		Nodes:               nodes,
 		Metrics:             metrics,
 		ProcessSnapshots:    processSnapshots,
@@ -101,13 +114,57 @@ func main() {
 		AlertingEnabled:     cfg.Alerting.Enabled,
 		AlertCheckInterval:  cfg.Alerting.CheckInterval,
 		UptimeSweepInterval: serveruptime.DefaultSweepInterval,
+		K8sHealthEnabled:    true,
 		Debug:               cfg.Debug,
 		AdminAuth:           appAuthConfig(cfg.AdminAuth),
 		Audit:               auditStore,
 		ServerLogs:          serverLogs,
 	})
-	log.Printf("MizuPanel server listening on %s", cfg.Listen)
-	log.Fatal(http.ListenAndServe(cfg.Listen, handler))
+	server := newHTTPServer(cfg.Listen, handler)
+	serveErrors := make(chan error, 1)
+	go func() {
+		log.Printf("MizuPanel server listening on %s", cfg.Listen)
+		serveErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErrors:
+		if err == nil || err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		_ = handler.Close()
+		return err
+	}
+	if err := handler.Close(); err != nil {
+		return err
+	}
+	if err := <-serveErrors; err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+const (
+	serverReadHeaderTimeout = 5 * time.Second
+	serverIdleTimeout       = 2 * time.Minute
+	serverMaxHeaderBytes    = 1 << 20
+)
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		IdleTimeout:       serverIdleTimeout,
+		MaxHeaderBytes:    serverMaxHeaderBytes,
+	}
 }
 
 func appAuthConfig(cfg config.AdminAuthConfig) api.AuthConfig {

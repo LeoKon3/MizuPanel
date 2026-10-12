@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 type ToastProps = {
   message: string
@@ -8,10 +8,13 @@ type ToastProps = {
 }
 
 export function Toast({ message, type, onClose, duration = 3000 }: ToastProps) {
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
   useEffect(() => {
-    const timer = setTimeout(onClose, duration)
+    const timer = setTimeout(() => onCloseRef.current(), duration)
     return () => clearTimeout(timer)
-  }, [duration, onClose])
+  }, [duration, message, type])
 
   const bgColor = type === 'success' ? 'bg-success' : 'bg-danger'
   const icon = type === 'success' ? (

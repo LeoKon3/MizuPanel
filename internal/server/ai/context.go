@@ -346,11 +346,8 @@ func (r *Registry) resolveRequestResource(ctx context.Context, request *RequestC
 		if err != nil || cluster == nil {
 			return nil, store.ErrAIInvalid
 		}
-		available := cluster.Status == "online" && cluster.NodeStatus == "online"
-		state := cluster.Status
-		if cluster.NodeStatus != "online" {
-			state = "node_" + cluster.NodeStatus
-		}
+		available := k8sClusterAvailable(cluster)
+		state := k8sClusterState(cluster)
 		return &ResolvedResource{Type: "k8s_cluster", ID: cluster.ID, Name: boundedString(cluster.Name, 128), Route: "/k8s/clusters/" + url.PathEscape(cluster.ID), Available: available, State: boundedString(state, 32), NodeID: cluster.NodeID, ResourceID: cluster.ID}, nil
 	case "application_service":
 		if r.dependencies.Services == nil {
@@ -590,7 +587,7 @@ func (r *Registry) kubernetesCapabilities() CapabilitySource {
 	items := make([]map[string]any, 0, min(len(clusters), maxCapabilityItems))
 	result := availableCapability(items, 0)
 	for _, cluster := range clusters {
-		if cluster == nil || cluster.Status != "online" || cluster.NodeStatus != "online" {
+		if !k8sClusterAvailable(cluster) {
 			result.UnavailableCount++
 			continue
 		}

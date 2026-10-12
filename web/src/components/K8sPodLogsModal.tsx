@@ -26,11 +26,18 @@ export default function K8sPodLogsModal({
   const [autoScroll, setAutoScroll] = useState(true)
 
   const logContainerRef = useRef<HTMLDivElement>(null)
+  const requestGenerationRef = useRef(0)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     if (!open) return
 
     fetchLogs()
+    return () => {
+      abortControllerRef.current?.abort()
+      abortControllerRef.current = null
+      requestGenerationRef.current += 1
+    }
   }, [open, clusterId, namespace, podName, container, tailLines])
 
   useEffect(() => {
@@ -51,12 +58,19 @@ export default function K8sPodLogsModal({
   }, [open])
 
   const fetchLogs = () => {
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+    const generation = requestGenerationRef.current + 1
+    requestGenerationRef.current = generation
+
     setLoading(true)
     setError('')
     setLogContent('')
 
-    fetchK8sPodLogs(clusterId, namespace, podName, container || undefined, false, tailLines)
+    fetchK8sPodLogs(clusterId, namespace, podName, container || undefined, false, tailLines, controller.signal)
       .then((response) => {
+        if (generation !== requestGenerationRef.current) return
         if (response.success) {
           setLogContent(response.logs)
         } else {
@@ -64,10 +78,13 @@ export default function K8sPodLogsModal({
         }
       })
       .catch((err: Error) => {
+        if (generation !== requestGenerationRef.current || err.name === 'AbortError') return
         setError(err.message)
       })
       .finally(() => {
-        setLoading(false)
+        if (generation === requestGenerationRef.current) {
+          setLoading(false)
+        }
       })
   }
 

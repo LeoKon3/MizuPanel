@@ -699,15 +699,20 @@ func (c *Client) readLoop(ctx context.Context, writer *connectionWriter, termina
 			if c.debug {
 				log.Printf("[debug][agent][k8s] dispatch type=%s request_id=%s cluster_id=%s namespace=%s", header.Type, header.RequestID, header.ClusterID, header.Namespace)
 			}
-			requestCtx, cancel := context.WithTimeout(ctx, k8sRequestTimeout(header.Type))
-			if err := c.kubectlHandler.Handle(requestCtx, header.Type, raw, writer.writeJSON); err != nil {
-				cancel()
-				if c.debug {
-					log.Printf("[debug][agent][k8s] dispatch failed type=%s request_id=%s cluster_id=%s namespace=%s error=%v", header.Type, header.RequestID, header.ClusterID, header.Namespace, err)
+			msgType := header.Type
+			requestID := header.RequestID
+			clusterID := header.ClusterID
+			namespace := header.Namespace
+			requestData := append(json.RawMessage(nil), raw...)
+			taskExecutions.Add(1)
+			go func() {
+				defer taskExecutions.Done()
+				requestCtx, cancel := context.WithTimeout(ctx, k8sRequestTimeout(msgType))
+				defer cancel()
+				if err := c.kubectlHandler.Handle(requestCtx, msgType, requestData, writer.writeJSON); err != nil && c.debug {
+					log.Printf("[debug][agent][k8s] dispatch failed type=%s request_id=%s cluster_id=%s namespace=%s error=%v", msgType, requestID, clusterID, namespace, err)
 				}
-				continue
-			}
-			cancel()
+			}()
 		}
 	}
 }
@@ -719,7 +724,7 @@ func k8sRequestTimeout(msgType string) time.Duration {
 	if msgType == protocol.MessageTypeK8sApplyManifest {
 		return 30 * time.Second
 	}
-	return 15 * time.Second
+	return 20 * time.Second
 }
 
 func (c *Client) writeCollectedMetric(writer *connectionWriter, nodeID string, collect CollectFunc) error {

@@ -210,6 +210,7 @@ type Handler struct {
 	sessions    map[string]string
 	connections map[string]*agentConnection
 	upgrades    map[string]protocol.AgentUpgradeStatus
+	closed      bool
 }
 
 type agentConnection struct {
@@ -237,8 +238,8 @@ type agentConnection struct {
 	terminals                           map[string]*browserTerminal
 	containerExecs                      map[string]*browserContainerExec
 	mu                                  sync.Mutex
-	logTailSessions                     map[string]chan json.RawMessage
-	containerLogsSessions               map[string]chan json.RawMessage
+	logTailSessions                     map[string]*streamSession
+	containerLogsSessions               map[string]*streamSession
 	pendingMu                           sync.Mutex
 	pendingLists                        map[string]chan protocol.FileListResponse
 	pendingReads                        map[string]chan protocol.FileReadResponse
@@ -260,13 +261,6 @@ type agentConnection struct {
 	closed                              chan struct{}
 	closeOnce                           sync.Once
 }
-
-type rpcDelivery struct {
-	raw json.RawMessage
-	err error
-}
-
-var errAgentRPCDisconnected = errors.New("agent RPC connection closed")
 
 type browserTerminal struct {
 	sessionID string
@@ -305,6 +299,13 @@ func NewHandler(nodes *store.NodeStore, metrics *store.MetricStore, options Opti
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	closed := h.closed
+	h.mu.Unlock()
+	if closed {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	suppliedToken := bearerToken(r)
 	usingHeaderToken := suppliedToken != ""
 	if suppliedToken == "" {
@@ -625,20 +626,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal(rawMessage, &header); err != nil {
 				continue
 			}
-			log.Printf("[LogTail] Received message from agent: type=%s session=%s", incoming.Type, header.SessionID)
-			agent.mu.Lock()
-			logChan, exists := agent.logTailSessions[header.SessionID]
-			agent.mu.Unlock()
-			if exists && logChan != nil {
-				select {
-				case logChan <- rawMessage:
-					log.Printf("[LogTail] Message forwarded to session channel")
-				default:
-					log.Printf("[LogTail] Channel full, dropping message")
-				}
-			} else {
-				log.Printf("[LogTail] No session found for session_id=%s", header.SessionID)
-			}
+			agent.publishLogTail(header.SessionID, rawMessage)
 		case protocol.MessageTypeContainerLogsResponse, protocol.MessageTypeContainerLogsData, protocol.MessageTypeContainerLogsExit, protocol.MessageTypeContainerLogsError:
 			var header struct {
 				SessionID string `json:"session_id"`
@@ -646,15 +634,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal(rawMessage, &header); err != nil {
 				continue
 			}
-			agent.mu.Lock()
-			logChan, exists := agent.containerLogsSessions[header.SessionID]
-			agent.mu.Unlock()
-			if exists && logChan != nil {
-				select {
-				case logChan <- rawMessage:
-				default:
-				}
-			}
+			agent.publishContainerLogs(header.SessionID, rawMessage)
 		case protocol.MessageTypeK8sClusterConnectResult,
 			protocol.MessageTypeK8sGetSummaryResult,
 			protocol.MessageTypeK8sGetNamespacesResult,
@@ -1954,30 +1934,18 @@ func (h *Handler) AttachLogTail(ctx context.Context, nodeID string, browser *web
 	request.SessionID = sessionID
 	request.NodeID = nodeID
 
-	// Send request to agent
+	// Register before sending so an immediate Agent response cannot be lost.
 	log.Printf("[LogTail] Sending log-tail request to agent for node %s", nodeID)
-	if err := agent.writeJSON(request); err != nil {
+	session, err := agent.startLogTailSession(sessionID, func() error { return agent.writeJSON(request) })
+	if err != nil {
 		log.Printf("[LogTail] Failed to send to agent: %v", err)
 		return err
 	}
-	log.Printf("[LogTail] Request sent to agent successfully")
-
-	// Create a channel to forward messages from agent to browser
-	logChan := make(chan json.RawMessage, 16)
-	agent.mu.Lock()
-	if agent.logTailSessions == nil {
-		agent.logTailSessions = make(map[string]chan json.RawMessage)
-	}
-	agent.logTailSessions[sessionID] = logChan
-	agent.mu.Unlock()
-
 	defer func() {
-		agent.mu.Lock()
-		delete(agent.logTailSessions, sessionID)
-		agent.mu.Unlock()
-		close(logChan)
+		agent.unregisterLogTail(sessionID, session)
 		_ = agent.writeJSON(protocol.LogTailStop{Type: protocol.MessageTypeLogTailStop, SessionID: sessionID, NodeID: nodeID})
 	}()
+	log.Printf("[LogTail] Request sent to agent successfully")
 
 	// Forward messages between agent and browser
 	errCh := make(chan error, 2)
@@ -1989,10 +1957,10 @@ func (h *Handler) AttachLogTail(ctx context.Context, nodeID string, browser *web
 			case <-ctx.Done():
 				errCh <- ctx.Err()
 				return
-			case msg, ok := <-logChan:
-				if !ok {
-					return
-				}
+			case <-session.done:
+				errCh <- errors.New("agent log-tail session closed")
+				return
+			case msg := <-session.messages:
 				if err := browser.WriteMessage(websocket.TextMessage, msg); err != nil {
 					log.Printf("[LogTail] Failed to write to browser: %v", err)
 					errCh <- err
@@ -2044,25 +2012,13 @@ func (h *Handler) AttachContainerLogs(ctx context.Context, nodeID string, contai
 	request.NodeID = nodeID
 	request.ContainerID = containerID
 
-	// Send request to agent
-	if err := agent.writeJSON(request); err != nil {
+	// Register before sending so an immediate Agent response cannot be lost.
+	session, err := agent.startContainerLogsSession(sessionID, func() error { return agent.writeJSON(request) })
+	if err != nil {
 		return err
 	}
-
-	// Create a channel to forward messages from agent to browser
-	logChan := make(chan json.RawMessage, 16)
-	agent.mu.Lock()
-	if agent.containerLogsSessions == nil {
-		agent.containerLogsSessions = make(map[string]chan json.RawMessage)
-	}
-	agent.containerLogsSessions[sessionID] = logChan
-	agent.mu.Unlock()
-
 	defer func() {
-		agent.mu.Lock()
-		delete(agent.containerLogsSessions, sessionID)
-		agent.mu.Unlock()
-		close(logChan)
+		agent.unregisterContainerLogs(sessionID, session)
 		_ = agent.writeJSON(protocol.ContainerLogsStop{Type: protocol.MessageTypeContainerLogsStop, SessionID: sessionID, NodeID: nodeID})
 	}()
 
@@ -2076,10 +2032,10 @@ func (h *Handler) AttachContainerLogs(ctx context.Context, nodeID string, contai
 			case <-ctx.Done():
 				errCh <- ctx.Err()
 				return
-			case msg, ok := <-logChan:
-				if !ok {
-					return
-				}
+			case <-session.done:
+				errCh <- errors.New("agent container-logs session closed")
+				return
+			case msg := <-session.messages:
 				if err := browser.WriteMessage(websocket.TextMessage, msg); err != nil {
 					errCh <- err
 					return
@@ -2134,16 +2090,39 @@ func (h *Handler) DisconnectNode(nodeID string) {
 	delete(h.sessions, nodeID)
 	h.mu.Unlock()
 	h.RevokeNode(nodeID)
-	if connection != nil {
-		connection.closeTerminals("节点已从面板移除")
-		connection.closeContainerExecs("节点已从面板移除")
-		connection.closePendingOperations("节点已从面板移除")
-		_ = connection.conn.Close()
+	closeAgentConnection(connection, "节点已从面板移除")
+}
+
+// Close atomically detaches every active Agent connection and closes all
+// resources owned by those connections. It is safe to call repeatedly.
+func (h *Handler) Close(reason string) {
+	if h == nil {
+		return
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "服务正在关闭"
+	}
+	h.mu.Lock()
+	h.closed = true
+	connections := make([]*agentConnection, 0, len(h.connections))
+	for nodeID, connection := range h.connections {
+		connections = append(connections, connection)
+		delete(h.connections, nodeID)
+	}
+	clear(h.sessions)
+	h.mu.Unlock()
+	for _, connection := range connections {
+		closeAgentConnection(connection, reason)
 	}
 }
 
 func (h *Handler) registerConnection(connection *agentConnection) {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		closeAgentConnection(connection, "服务正在关闭")
+		return
+	}
 	previous := h.connections[connection.nodeID]
 	h.connections[connection.nodeID] = connection
 	h.mu.Unlock()
@@ -2152,10 +2131,20 @@ func (h *Handler) registerConnection(connection *agentConnection) {
 		if previous.hostname != "" && connection.hostname != "" && previous.hostname != connection.hostname {
 			h.recordConnectionEvent(connection, store.ConnectionEventIdentityConflict, fmt.Sprintf("same Agent ID reported different hostnames: %s and %s", previous.hostname, connection.hostname))
 		}
-		previous.closeTerminals("Agent 已重新连接，旧终端会话已关闭")
-		previous.closeContainerExecs("Agent 已重新连接，旧容器终端会话已关闭")
-		previous.closePendingOperations("Agent 已重新连接，请重试操作")
-		_ = previous.conn.Close()
+		closeAgentConnection(previous, "Agent 已重新连接，请重试操作")
+	}
+}
+
+func closeAgentConnection(connection *agentConnection, reason string) {
+	if connection == nil {
+		return
+	}
+	connection.closeTerminals(reason)
+	connection.closeContainerExecs(reason)
+	connection.closeStreamSessions()
+	connection.closePendingOperations(reason)
+	if connection.conn != nil {
+		_ = connection.conn.Close()
 	}
 }
 
@@ -2176,9 +2165,7 @@ func (h *Handler) unregisterConnection(connection *agentConnection) {
 		delete(h.connections, connection.nodeID)
 	}
 	h.mu.Unlock()
-	connection.closeTerminals("Agent 连接已断开")
-	connection.closeContainerExecs("Agent 连接已断开")
-	connection.closePendingOperations("Agent 连接已断开")
+	closeAgentConnection(connection, "Agent 连接已断开")
 }
 
 func (h *Handler) routeTerminalMessage(agent *agentConnection, message protocol.TerminalMessage) {
@@ -2210,492 +2197,6 @@ func (h *Handler) routeContainerExecMessage(agent *agentConnection, message prot
 	if message.Type == protocol.MessageTypeContainerExecExit || message.Type == protocol.MessageTypeContainerExecError || message.Type == protocol.MessageTypeContainerExecClose {
 		agent.removeContainerExec(message.SessionID)
 		execSession.close()
-	}
-}
-
-func (c *agentConnection) addFileListRequest(requestID string, ch chan protocol.FileListResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingLists[requestID] = ch
-}
-
-func (c *agentConnection) addFileReadRequest(requestID string, ch chan protocol.FileReadResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingReads[requestID] = ch
-}
-
-func (c *agentConnection) addFileWriteRequest(requestID string, ch chan protocol.FileWriteResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingWrites[requestID] = ch
-}
-
-func (c *agentConnection) addFileUploadRequest(requestID string, ch chan protocol.FileUploadResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingUploads[requestID] = ch
-}
-
-func (c *agentConnection) addFileDeleteRequest(requestID string, ch chan protocol.FileDeleteResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingDeletes[requestID] = ch
-}
-
-func (c *agentConnection) addRebootRequest(requestID string, ch chan protocol.RebootResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingReboots[requestID] = ch
-}
-
-func (c *agentConnection) removeFileListRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingLists, requestID)
-}
-
-func (c *agentConnection) removeFileReadRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingReads, requestID)
-}
-
-func (c *agentConnection) removeFileWriteRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingWrites, requestID)
-}
-
-func (c *agentConnection) removeFileUploadRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingUploads, requestID)
-}
-
-func (c *agentConnection) removeFileDeleteRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingDeletes, requestID)
-}
-
-func (c *agentConnection) removeRebootRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingReboots, requestID)
-}
-
-func (c *agentConnection) addAgentStatusRequest(requestID string, ch chan protocol.AgentStatusResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingAgentStatuses[requestID] = ch
-}
-
-func (c *agentConnection) addAgentRestartRequest(requestID string, ch chan protocol.AgentRestartResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingAgentRestarts[requestID] = ch
-}
-
-func (c *agentConnection) addAgentLogsRequest(requestID string, ch chan protocol.AgentLogsResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingAgentLogs[requestID] = ch
-}
-
-func (c *agentConnection) addAgentUpgradeRequest(requestID string, ch chan protocol.AgentUpgradeResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingAgentUpgrades[requestID] = ch
-}
-
-func (c *agentConnection) removeAgentStatusRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingAgentStatuses, requestID)
-}
-
-func (c *agentConnection) removeAgentRestartRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingAgentRestarts, requestID)
-}
-
-func (c *agentConnection) removeAgentLogsRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingAgentLogs, requestID)
-}
-
-func (c *agentConnection) removeAgentUpgradeRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingAgentUpgrades, requestID)
-}
-
-func (c *agentConnection) addDockerExecRequest(requestID string, ch chan protocol.DockerExecResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingDockerExecs[requestID] = ch
-}
-
-func (c *agentConnection) removeDockerExecRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingDockerExecs, requestID)
-}
-
-func (c *agentConnection) addContainerStartRequest(requestID string, ch chan protocol.ContainerStartResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingContainerStarts[requestID] = ch
-}
-
-func (c *agentConnection) removeContainerStartRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingContainerStarts, requestID)
-}
-
-func (c *agentConnection) addContainerStopRequest(requestID string, ch chan protocol.ContainerStopResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingContainerStops[requestID] = ch
-}
-
-func (c *agentConnection) removeContainerStopRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingContainerStops, requestID)
-}
-
-func (c *agentConnection) addContainerRestartRequest(requestID string, ch chan protocol.ContainerRestartResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingContainerRestarts[requestID] = ch
-}
-
-func (c *agentConnection) removeContainerRestartRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingContainerRestarts, requestID)
-}
-
-func (c *agentConnection) addContainerDeleteRequest(requestID string, ch chan protocol.ContainerDeleteResponse) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	c.pendingContainerDeletes[requestID] = ch
-}
-
-func (c *agentConnection) removeContainerDeleteRequest(requestID string) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	delete(c.pendingContainerDeletes, requestID)
-}
-
-func (c *agentConnection) deliverFileList(response protocol.FileListResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingLists[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverFileRead(response protocol.FileReadResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingReads[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverFileWrite(response protocol.FileWriteResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingWrites[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverFileUpload(response protocol.FileUploadResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingUploads[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverFileDelete(response protocol.FileDeleteResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingDeletes[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverReboot(response protocol.RebootResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingReboots[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverAgentStatus(response protocol.AgentStatusResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingAgentStatuses[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverAgentRestart(response protocol.AgentRestartResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingAgentRestarts[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverAgentLogs(response protocol.AgentLogsResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingAgentLogs[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverAgentUpgrade(response protocol.AgentUpgradeResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingAgentUpgrades[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverDockerExec(response protocol.DockerExecResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingDockerExecs[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverContainerStart(response protocol.ContainerStartResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingContainerStarts[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverContainerStop(response protocol.ContainerStopResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingContainerStops[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverContainerRestart(response protocol.ContainerRestartResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingContainerRestarts[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverContainerDelete(response protocol.ContainerDeleteResponse) {
-	c.pendingMu.Lock()
-	ch := c.pendingContainerDeletes[response.RequestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- response
-	}
-}
-
-func (c *agentConnection) deliverK8sMessage(requestID string, rawMessage json.RawMessage) {
-	c.pendingMu.Lock()
-	ch := c.pendingK8sMessages[requestID]
-	c.pendingMu.Unlock()
-	if ch != nil {
-		ch <- rawMessage
-	}
-}
-
-func (c *agentConnection) callRPC(ctx context.Context, requestID string, request any, response any) error {
-	ch := make(chan rpcDelivery, 1)
-	c.pendingMu.Lock()
-	if c.closed != nil {
-		select {
-		case <-c.closed:
-			c.pendingMu.Unlock()
-			return errAgentRPCDisconnected
-		default:
-		}
-	}
-	if c.pendingRPCs == nil {
-		c.pendingRPCs = make(map[string]chan rpcDelivery)
-	}
-	if _, exists := c.pendingRPCs[requestID]; exists {
-		c.pendingMu.Unlock()
-		return errors.New("duplicate agent RPC request ID")
-	}
-	c.pendingRPCs[requestID] = ch
-	c.pendingMu.Unlock()
-	defer c.removeRPC(requestID, ch)
-
-	if err := c.writeJSON(request); err != nil {
-		return err
-	}
-	select {
-	case delivery := <-ch:
-		if delivery.err != nil {
-			return delivery.err
-		}
-		if err := json.Unmarshal(delivery.raw, response); err != nil {
-			return errors.New("invalid agent RPC response")
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (c *agentConnection) removeRPC(requestID string, ch chan rpcDelivery) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	if c.pendingRPCs[requestID] == ch {
-		delete(c.pendingRPCs, requestID)
-	}
-}
-
-func (c *agentConnection) deliverRPC(requestID string, rawMessage json.RawMessage) {
-	c.pendingMu.Lock()
-	ch := c.pendingRPCs[requestID]
-	c.pendingMu.Unlock()
-	if ch == nil {
-		return
-	}
-	delivery := rpcDelivery{raw: append(json.RawMessage(nil), rawMessage...)}
-	select {
-	case ch <- delivery:
-	default:
-	}
-}
-
-func (c *agentConnection) closePendingOperations(reason string) {
-	c.pendingMu.Lock()
-	lists := c.pendingLists
-	reads := c.pendingReads
-	writes := c.pendingWrites
-	uploads := c.pendingUploads
-	deletes := c.pendingDeletes
-	reboots := c.pendingReboots
-	agentStatuses := c.pendingAgentStatuses
-	agentRestarts := c.pendingAgentRestarts
-	agentLogs := c.pendingAgentLogs
-	agentUpgrades := c.pendingAgentUpgrades
-	dockerExecs := c.pendingDockerExecs
-	containerStarts := c.pendingContainerStarts
-	containerStops := c.pendingContainerStops
-	containerRestarts := c.pendingContainerRestarts
-	containerDeletes := c.pendingContainerDeletes
-	k8sMessages := c.pendingK8sMessages
-	rpcs := c.pendingRPCs
-	c.pendingLists = make(map[string]chan protocol.FileListResponse)
-	c.pendingReads = make(map[string]chan protocol.FileReadResponse)
-	c.pendingWrites = make(map[string]chan protocol.FileWriteResponse)
-	c.pendingUploads = make(map[string]chan protocol.FileUploadResponse)
-	c.pendingDeletes = make(map[string]chan protocol.FileDeleteResponse)
-	c.pendingReboots = make(map[string]chan protocol.RebootResponse)
-	c.pendingAgentStatuses = make(map[string]chan protocol.AgentStatusResponse)
-	c.pendingAgentRestarts = make(map[string]chan protocol.AgentRestartResponse)
-	c.pendingAgentLogs = make(map[string]chan protocol.AgentLogsResponse)
-	c.pendingAgentUpgrades = make(map[string]chan protocol.AgentUpgradeResponse)
-	c.pendingDockerExecs = make(map[string]chan protocol.DockerExecResponse)
-	c.pendingContainerStarts = make(map[string]chan protocol.ContainerStartResponse)
-	c.pendingContainerStops = make(map[string]chan protocol.ContainerStopResponse)
-	c.pendingContainerRestarts = make(map[string]chan protocol.ContainerRestartResponse)
-	c.pendingContainerDeletes = make(map[string]chan protocol.ContainerDeleteResponse)
-	c.pendingK8sMessages = make(map[string]chan json.RawMessage)
-	c.pendingRPCs = make(map[string]chan rpcDelivery)
-	if c.closed != nil {
-		c.closeOnce.Do(func() { close(c.closed) })
-	}
-	c.pendingMu.Unlock()
-	for _, ch := range rpcs {
-		select {
-		case ch <- rpcDelivery{err: errAgentRPCDisconnected}:
-		default:
-		}
-	}
-	for requestID, ch := range lists {
-		ch <- protocol.FileListResponse{Type: protocol.MessageTypeFileListResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range reads {
-		ch <- protocol.FileReadResponse{Type: protocol.MessageTypeFileReadResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range writes {
-		ch <- protocol.FileWriteResponse{Type: protocol.MessageTypeFileWriteResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range uploads {
-		ch <- protocol.FileUploadResponse{Type: protocol.MessageTypeFileUploadResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range deletes {
-		ch <- protocol.FileDeleteResponse{Type: protocol.MessageTypeFileDeleteResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range reboots {
-		ch <- protocol.RebootResponse{Type: protocol.MessageTypeRebootResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range agentStatuses {
-		ch <- protocol.AgentStatusResponse{Type: protocol.MessageTypeAgentStatusResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range agentRestarts {
-		ch <- protocol.AgentRestartResponse{Type: protocol.MessageTypeAgentRestartResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range agentLogs {
-		ch <- protocol.AgentLogsResponse{Type: protocol.MessageTypeAgentLogsResponse, RequestID: requestID, Code: "offline", Error: reason}
-	}
-	for requestID, ch := range agentUpgrades {
-		ch <- protocol.AgentUpgradeResponse{Type: protocol.MessageTypeAgentUpgradeResponse, RequestID: requestID, Stage: "failed", Code: "offline", Error: reason}
-	}
-	for _, ch := range dockerExecs {
-		ch <- protocol.DockerExecResponse{Type: protocol.MessageTypeDockerExecResponse, Accepted: false, ExitCode: 1, Error: reason}
-	}
-	for _, ch := range containerStarts {
-		ch <- protocol.ContainerStartResponse{Type: protocol.MessageTypeContainerStartResponse, Success: false, Error: reason}
-	}
-	for _, ch := range containerStops {
-		ch <- protocol.ContainerStopResponse{Type: protocol.MessageTypeContainerStopResponse, Success: false, Error: reason}
-	}
-	for _, ch := range containerRestarts {
-		ch <- protocol.ContainerRestartResponse{Type: protocol.MessageTypeContainerRestartResponse, Success: false, Error: reason}
-	}
-	for _, ch := range containerDeletes {
-		ch <- protocol.ContainerDeleteResponse{Type: protocol.MessageTypeContainerDeleteResponse, Success: false, Error: reason}
-	}
-	for requestID, ch := range k8sMessages {
-		response := protocol.K8sGetSummaryResult{Type: protocol.MessageTypeK8sGetSummaryResult, RequestID: requestID, Success: false, Error: reason}
-		data, err := json.Marshal(response)
-		if err != nil {
-			continue
-		}
-		ch <- data
 	}
 }
 

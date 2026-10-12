@@ -38,7 +38,7 @@ func testAuditRouter(t *testing.T, auth AuthConfig) (http.Handler, *serveraudit.
 		t.Fatalf("migrate database: %v", err)
 	}
 	auditStore := serveraudit.NewStore(database, serverdb.DialectSQLite)
-	router := NewRouter(store.NewNodeStore(database), store.NewMetricStore(database), auditStore, auth)
+	router := NewRouter(RouterDependencies{Nodes: store.NewNodeStore(database), Metrics: store.NewMetricStore(database), Audit: auditStore, Auth: auth})
 	return serveraudit.Middleware(auditStore, router), auditStore, database
 }
 
@@ -485,18 +485,13 @@ func TestAuditOperationCoverageAndSecretBoundary(t *testing.T) {
 	k8sService := k8s.NewService(k8s.NewStore(database), auditK8sHub{})
 	ops := &fakeNodeOperations{}
 	auth := AuthConfig{Enabled: true, Username: "admin", Password: "admin-password-secret-marker", SessionTTL: time.Hour}
-	router := NewRouter(
-		nodes,
-		metrics,
-		ops,
-		alerts,
-		k8sService,
-		SettingsConfig{Store: settings, DefaultMetricsRetention: 6 * time.Hour},
-		UptimeConfig{Store: uptimeStore},
-		TerminalConfig{Enabled: true},
-		auditStore,
-		auth,
-	)
+	router := NewRouter(RouterDependencies{
+		Nodes: nodes, Metrics: metrics, Alerts: alerts, Kubernetes: k8sService,
+		TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops,
+		Settings: SettingsConfig{Store: settings, DefaultMetricsRetention: 6 * time.Hour},
+		Uptime:   UptimeConfig{Store: uptimeStore}, Terminal: TerminalConfig{Enabled: true},
+		Audit: auditStore, Auth: auth,
+	})
 	handler := serveraudit.Middleware(auditStore, router)
 
 	failedLogin := auditRequest(t, handler, nil, http.MethodPost, "/api/auth/login", map[string]any{
@@ -757,7 +752,11 @@ func TestAuditRecordsRealTerminalAndContainerExecWebSocketLifetimes(t *testing.T
 	}
 	auditStore := serveraudit.NewStore(database, serverdb.DialectSQLite)
 	operations := &fakeNodeOperations{}
-	router := NewRouter(nodes, store.NewMetricStore(database), operations, TerminalConfig{Enabled: true}, auditStore)
+	router := NewRouter(RouterDependencies{
+		Nodes: nodes, Metrics: store.NewMetricStore(database),
+		TerminalHub: operations, AgentOperations: operations, Disconnecter: operations, Diagnostics: operations,
+		Terminal: TerminalConfig{Enabled: true}, Audit: auditStore,
+	})
 	testServer := newAuditHTTPTestServer(t, serveraudit.Middleware(auditStore, router))
 	t.Cleanup(testServer.Close)
 

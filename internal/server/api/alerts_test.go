@@ -28,7 +28,7 @@ func testAlertRouter(t *testing.T) (*http.ServeMux, *store.AlertStore) {
 	nodes := store.NewNodeStore(database)
 	metrics := store.NewMetricStore(database)
 	alerts := store.NewAlertStore(database)
-	mux := NewRouter(nodes, metrics, alerts)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Alerts: alerts})
 	return mux, alerts
 }
 

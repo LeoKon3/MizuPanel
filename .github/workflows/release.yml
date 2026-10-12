@@ -14,6 +14,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: leokon3/mizupanel
+
 jobs:
   verify-release:
     name: Verify release
@@ -28,7 +35,8 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -50,7 +58,8 @@ jobs:
         run: |
           version="$(tr -d '\r\n ' < VERSION)"
           test "$RELEASE_TAG" = "v$version"
-          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -65,15 +74,39 @@ jobs:
       - name: Run frontend test suite
         run: npm test --prefix web
 
+      - name: Validate Compose configurations
+        env:
+          MIZUPANEL_MYSQL_DATABASE: mizupanel
+          MIZUPANEL_MYSQL_USERNAME: mizupanel
+          MIZUPANEL_MYSQL_PASSWORD: release-validation-password
+          MIZUPANEL_MYSQL_ROOT_PASSWORD: release-validation-root-password
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.mysql.yml config --quiet
+
       - name: Build frontend
         run: npm run build --prefix web
 
-  release-packages:
-    name: Build and upload release packages
+      - name: Upload verified frontend assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-web-dist-${{ steps.release.outputs.revision }}
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  build-packages:
+    name: Build release package (${{ matrix.arch }})
     needs: verify-release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout release tag
@@ -87,39 +120,37 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Download verified frontend assets
+        uses: actions/download-artifact@v4
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          name: verified-web-dist-${{ needs.verify-release.outputs.revision }}
+          path: web/dist
 
-      - name: Install Linux cross compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+      # Native runner: GOARCH matches the machine, so CGO links with the
+      # system gcc. No cross compiler and no QEMU emulation are involved.
+      - name: Build release package
+        run: make SKIP_WEB_BUILD=1 "package-linux-${{ matrix.arch }}" "${{ matrix.arch == 'arm64' && 'ARM64_CC=gcc' || 'AMD64_CC=gcc' }}"
 
-      - name: Install frontend dependencies
-        run: npm ci --prefix web
-
-      - name: Build release packages
-        run: make package-linux-amd64 package-linux-arm64
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ needs.verify-release.outputs.release_tag }}
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-          overwrite_files: true
-          files: |
-            dist/mizupanel-linux-amd64.tar.gz
-            dist/mizupanel-linux-arm64.tar.gz
+          name: release-package-${{ matrix.arch }}
+          path: dist/mizupanel-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
-  release-image:
-    name: Build and push Docker image
+  build-image:
+    name: Build image (${{ matrix.arch }})
     needs: verify-release
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout release tag
@@ -127,8 +158,11 @@ jobs:
         with:
           ref: ${{ needs.verify-release.outputs.revision }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Download verified frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-web-dist-${{ needs.verify-release.outputs.revision }}
+          path: web/dist
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -143,23 +177,108 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: leokon3/mizupanel
-          tags: |
-            type=raw,value=${{ needs.verify-release.outputs.version }}
-            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+          images: ${{ env.IMAGE_NAME }}
           labels: |
             org.opencontainers.image.created=${{ needs.verify-release.outputs.created }}
             org.opencontainers.image.revision=${{ needs.verify-release.outputs.revision }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.verify-release.outputs.version }}
 
-      - name: Build and push multi-platform image
+      # Native single-arch build pushed by digest; the multi-arch manifest is
+      # assembled later in merge-image. BUILDPLATFORM == TARGETPLATFORM here, so
+      # the Go/CGO server build runs natively without emulation.
+      - name: Build and push image by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=mizupanel-release
-          cache-to: type=gha,mode=max,scope=mizupanel-release
+          build-args: |
+            WEB_ASSETS_STAGE=prebuilt-web
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=mizupanel-release-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=mizupanel-release-${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge-image:
+    name: Publish multi-arch image
+    needs: [verify-release, build-image]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: image-digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.verify-release.outputs.version }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+
+      - name: Create and push manifest list
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Inspect published image
+        run: |
+          docker buildx imagetools inspect \
+            "${{ env.IMAGE_NAME }}:${{ needs.verify-release.outputs.version }}"
+
+  publish-release:
+    name: Publish GitHub release
+    needs: [verify-release, build-packages, merge-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-package-*
+          merge-multiple: true
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.verify-release.outputs.release_tag }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          overwrite_files: true
+          files: |
+            dist/mizupanel-linux-amd64.tar.gz
+            dist/mizupanel-linux-arm64.tar.gz

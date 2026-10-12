@@ -37,11 +37,13 @@ type contextRecordingHub struct {
 	*recordingHub
 	contextCalled bool
 	contextValue  any
+	timeout       time.Duration
 }
 
 func (h *contextRecordingHub) SendToNodeWithContext(ctx context.Context, nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error) {
 	h.contextCalled = true
 	h.contextValue = ctx.Value(contextTestKey{})
+	h.timeout = timeout
 	return h.recordingHub.SendToNodeWithTimeout(nodeID, message, timeout)
 }
 
@@ -53,6 +55,7 @@ func newTestService(t *testing.T, kubeconfigContent, kubeContext string, hub Age
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	database.SetMaxOpenConns(1)
 	t.Cleanup(func() { database.Close() })
 	if err := serverdb.Migrate(database); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -103,6 +106,65 @@ func TestGetClusterWithNodeInfoReturnsAgentFields(t *testing.T) {
 	}
 	if cluster.NodeName != "test-node" || cluster.NodeIP != "127.0.0.1" || cluster.NodeStatus != "online" {
 		t.Fatalf("expected joined node info, got name=%q ip=%q status=%q", cluster.NodeName, cluster.NodeIP, cluster.NodeStatus)
+	}
+}
+
+func TestListClustersWithNodeInfoDoesNotTrustHistoricalOnlineWithoutProbe(t *testing.T) {
+	hub := &recordingHub{online: true}
+	service := newTestService(t, "apiVersion: v1\nkind: Config\n", "ctx-a", hub)
+
+	clusters, err := service.ListClustersWithNodeInfo()
+	if err != nil {
+		t.Fatalf("list clusters: %v", err)
+	}
+	if len(clusters) != 1 || clusters[0].Status != ClusterStatusUnknown || clusters[0].HealthReason != HealthReasonChecking {
+		t.Fatalf("historical online projection = %#v", clusters)
+	}
+}
+
+func TestListClustersWithNodeInfoProjectsOfflineAgentImmediately(t *testing.T) {
+	hub := &recordingHub{online: true}
+	service := newTestService(t, "apiVersion: v1\nkind: Config\n", "ctx-a", hub)
+	if err := service.store.UpdateClusterHealth("cluster-1", ClusterStatusOnline, "", time.Now().UTC(), true); err != nil {
+		t.Fatalf("update health: %v", err)
+	}
+	hub.online = false
+
+	clusters, err := service.ListClustersWithNodeInfo()
+	if err != nil {
+		t.Fatalf("list clusters: %v", err)
+	}
+	if len(clusters) != 1 || clusters[0].Status != ClusterStatusOffline || clusters[0].HealthReason != HealthReasonAgentOffline {
+		t.Fatalf("offline agent projection = %#v", clusters)
+	}
+}
+
+func TestGetPodsUsesContextAwareHubAndIncludesAgentDeadlineMargin(t *testing.T) {
+	hub := &contextRecordingHub{recordingHub: &recordingHub{online: true, resp: json.RawMessage(`{"success":true,"pods":[]}`)}}
+	service := newTestService(t, "apiVersion: v1\nkind: Config\n", "ctx-a", hub)
+	ctx := context.WithValue(t.Context(), contextTestKey{}, "pods-context")
+
+	pods, err := service.GetPods(ctx, "cluster-1", "default")
+	if err != nil {
+		t.Fatalf("get pods: %v", err)
+	}
+	if !hub.contextCalled || hub.contextValue != "pods-context" || pods == nil {
+		t.Fatalf("context-aware send = called:%v value:%v pods:%#v", hub.contextCalled, hub.contextValue, pods)
+	}
+	if hub.timeout != k8sResourceRequestTimeout || hub.timeout <= 15*time.Second {
+		t.Fatalf("get pods timeout = %s, want %s and greater than agent kubectl timeout", hub.timeout, k8sResourceRequestTimeout)
+	}
+}
+
+func TestResourceRequestIncludesAgentDeadlineMargin(t *testing.T) {
+	hub := &contextRecordingHub{recordingHub: &recordingHub{online: true, resp: json.RawMessage(`{"success":true,"namespaces":[]}`)}}
+	service := newTestService(t, "apiVersion: v1\nkind: Config\n", "ctx-a", hub)
+
+	if _, err := service.GetNamespaces(t.Context(), "cluster-1"); err != nil {
+		t.Fatalf("get namespaces: %v", err)
+	}
+	if hub.timeout != k8sResourceRequestTimeout || hub.timeout <= 15*time.Second {
+		t.Fatalf("namespace timeout = %s, want %s and greater than agent kubectl timeout", hub.timeout, k8sResourceRequestTimeout)
 	}
 }
 

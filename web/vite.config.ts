@@ -16,7 +16,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
-    globals: true
+    globals: true,
+    pool: 'forks',
+    maxWorkers: 1,
+    testTimeout: 10000
   },
   server: {
     proxy: {

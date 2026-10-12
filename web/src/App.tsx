@@ -10,6 +10,7 @@ import { HostBatchTable } from './components/HostBatchTable'
 import { MetricCard } from './components/MetricCard'
 import { NodeOrganizationControls, type HostGroupFilter, type HostTagFilter, type HostViewMode } from './components/NodeOrganizationControls'
 import { formatBytes, formatPercent, formatSpeed } from './lib/format'
+import { currentRoute, nodePath, pageForRoute, type AppPage } from './routes'
 import { AlertsPage } from './pages/AlertsPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { NodeDetail } from './pages/NodeDetail'
@@ -27,85 +28,8 @@ import { LogsPage } from './pages/LogsPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
 import type { AIControlSettingsUpdate, AIRequestContext, DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
-function decodeRouteNodeID(value?: string) {
-  if (!value) return undefined
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return undefined
-  }
-}
-
-function nodePath(nodeID: string) {
-  return `/nodes/${encodeURIComponent(nodeID)}`
-}
-
-type AppRoute =
-  | { kind: 'node-terminal', nodeID: string }
-  | { kind: 'container-exec', nodeID: string, containerID: string }
-  | { kind: 'node-detail', nodeID: string }
-  | { kind: 'overview' }
-  | { kind: 'history' }
-  | { kind: 'settings' }
-  | { kind: 'alerts' }
-  | { kind: 'uptime' }
-  | { kind: 'audit' }
-  | { kind: 'tasks' }
-  | { kind: 'services' }
-  | { kind: 'service-detail', serviceID: string }
-  | { kind: 'logs' }
-  | { kind: 'ai' }
-  | { kind: 'k8s-clusters' }
-  | { kind: 'k8s-cluster-detail', clusterID: string }
-  | { kind: 'dashboard' }
-
-type AppPage = 'overview' | 'hosts' | 'services' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s' | 'ai'
 type NavPage = Exclude<AppPage, 'history' | 'logs' | 'ai'>
 type ThemeMode = 'light' | 'dark'
-
-function currentRoute(): AppRoute {
-  const terminalMatch = window.location.pathname.match(/^\/nodes\/([^/]+)\/terminal$/)
-  if (terminalMatch) return { kind: 'node-terminal', nodeID: decodeRouteNodeID(terminalMatch[1]) ?? terminalMatch[1] }
-  const execMatch = window.location.pathname.match(/^\/nodes\/([^/]+)\/containers\/([^/]+)\/exec$/)
-  if (execMatch) return { kind: 'container-exec', nodeID: decodeRouteNodeID(execMatch[1]) ?? execMatch[1], containerID: decodeRouteNodeID(execMatch[2]) ?? execMatch[2] }
-  const detailMatch = window.location.pathname.match(/^\/nodes\/([^/]+)$/)
-  if (detailMatch) return { kind: 'node-detail', nodeID: decodeRouteNodeID(detailMatch[1]) ?? detailMatch[1] }
-  const serviceDetailMatch = window.location.pathname.match(/^\/services\/([^/]+)$/)
-  if (serviceDetailMatch) return { kind: 'service-detail', serviceID: decodeRouteNodeID(serviceDetailMatch[1]) ?? serviceDetailMatch[1] }
-  if (window.location.pathname === '/services') return { kind: 'services' }
-  const k8sClusterDetailMatch = window.location.pathname.match(/^\/k8s\/clusters\/([^/]+)$/)
-  if (k8sClusterDetailMatch) return { kind: 'k8s-cluster-detail', clusterID: decodeRouteNodeID(k8sClusterDetailMatch[1]) ?? k8sClusterDetailMatch[1] }
-  if (window.location.pathname === '/k8s/clusters') return { kind: 'k8s-clusters' }
-  if (window.location.pathname === '/history') return { kind: 'history' }
-  if (window.location.pathname === '/settings') return { kind: 'settings' }
-  if (window.location.pathname === '/alerts') return { kind: 'alerts' }
-  if (window.location.pathname === '/uptime') return { kind: 'uptime' }
-  if (window.location.pathname === '/audit') return { kind: 'audit' }
-  if (window.location.pathname === '/tasks') return { kind: 'tasks' }
-  if (window.location.pathname === '/overview') return { kind: 'overview' }
-  if (window.location.pathname === '/logs') return { kind: 'logs' }
-  if (window.location.pathname === '/ai') return { kind: 'ai' }
-  return { kind: 'dashboard' }
-}
-
-function pageForRoute(route: AppRoute): AppPage {
-  switch (route.kind) {
-    case 'overview': return 'overview'
-    case 'history': return 'history'
-    case 'settings': return 'settings'
-    case 'alerts': return 'alerts'
-    case 'uptime': return 'uptime'
-    case 'audit': return 'audit'
-    case 'tasks': return 'tasks'
-    case 'services':
-    case 'service-detail': return 'services'
-    case 'logs': return 'logs'
-    case 'ai': return 'ai'
-    case 'k8s-clusters':
-    case 'k8s-cluster-detail': return 'k8s'
-    default: return 'hosts'
-  }
-}
 
 type HostFilter = 'all' | 'online' | 'offline'
 
@@ -231,14 +155,17 @@ export default function App() {
   const [settingsError, setSettingsError] = useState<string>()
   const [loading, setLoading] = useState(true)
   const [connectK8sClusterModalOpen, setConnectK8sClusterModalOpen] = useState(false)
+  const [k8sClustersRefreshKey, setK8sClustersRefreshKey] = useState(0)
   const [selectedK8sClusterID, setSelectedK8sClusterID] = useState<string>()
   const addHostButtonRef = useRef<HTMLButtonElement>(null)
   const installCommandCodeRef = useRef<HTMLElement>(null)
   const installCommandDialogRef = useRef<HTMLElement>(null)
   const installCommandRequestID = useRef(0)
   const preserveEmptyInstallSelectionRef = useRef(false)
+  const dockerSnapshotRequestID = useRef(0)
   const dockerComposeRequestID = useRef(0)
   const dockerResourcesRequestID = useRef(0)
+  const systemdRequestID = useRef(0)
   const nodesRef = useRef<Node[]>([])
   const selectedNodeIDRef = useRef<string | undefined>(undefined)
   nodesRef.current = nodes
@@ -397,10 +324,13 @@ export default function App() {
   }, [selectedNodeID, range])
 
   const refreshDockerSnapshot = async (nodeID: string) => {
+    const requestID = ++dockerSnapshotRequestID.current
     try {
       const docker = await getNodeDocker(nodeID)
+      if (requestID !== dockerSnapshotRequestID.current || selectedNodeIDRef.current !== nodeID) return
       setDockerSnapshot(docker)
     } catch (err: unknown) {
+      if (requestID !== dockerSnapshotRequestID.current || selectedNodeIDRef.current !== nodeID) return
       setError(err instanceof Error ? err.message : 'Docker 快照刷新失败')
     }
   }
@@ -433,13 +363,13 @@ export default function App() {
   }
 
   const refreshDockerResources = async (nodeID: string) => {
-	const requestID = ++dockerResourcesRequestID.current
+    const requestID = ++dockerResourcesRequestID.current
     try {
       const response = await getNodeDockerResources(nodeID)
-		if (requestID !== dockerResourcesRequestID.current) return
+      if (requestID !== dockerResourcesRequestID.current || selectedNodeIDRef.current !== nodeID) return
       setDockerResources({ ...response, node_id: nodeID })
     } catch (err: unknown) {
-		if (requestID !== dockerResourcesRequestID.current) return
+      if (requestID !== dockerResourcesRequestID.current || selectedNodeIDRef.current !== nodeID) return
       setDockerResources({
         node_id: nodeID,
         success: false,
@@ -460,9 +390,13 @@ export default function App() {
   }
 
   const refreshSystemdServices = async (nodeID: string) => {
+    const requestID = ++systemdRequestID.current
     try {
-      setSystemdServices(await getNodeSystemdServices(nodeID))
+      const response = await getNodeSystemdServices(nodeID)
+      if (requestID !== systemdRequestID.current || selectedNodeIDRef.current !== nodeID) return
+      setSystemdServices(response)
     } catch (err: unknown) {
+      if (requestID !== systemdRequestID.current || selectedNodeIDRef.current !== nodeID) return
       setError(err instanceof Error ? err.message : '系统服务刷新失败')
     }
   }
@@ -474,9 +408,11 @@ export default function App() {
   }
 
   useEffect(() => {
-	// Invalidate a late response for the previous host before clearing its state.
-	dockerComposeRequestID.current += 1
-	dockerResourcesRequestID.current += 1
+    // Invalidate late refresh responses for the previous host before clearing its state.
+    dockerSnapshotRequestID.current += 1
+    dockerComposeRequestID.current += 1
+    dockerResourcesRequestID.current += 1
+    systemdRequestID.current += 1
     if (!selectedNodeID) {
       setProcessSnapshot(undefined)
       setDockerSnapshot(undefined)
@@ -1300,6 +1236,7 @@ export default function App() {
                 ) : (
                   <>
                     <K8sClustersPage
+                      refreshKey={k8sClustersRefreshKey}
                       onConnectCluster={() => setConnectK8sClusterModalOpen(true)}
                       onViewDetail={openK8sClusterDetail}
                     />
@@ -1309,8 +1246,7 @@ export default function App() {
                       onClose={() => setConnectK8sClusterModalOpen(false)}
                       onSuccess={() => {
                         setConnectK8sClusterModalOpen(false)
-                        // Trigger page refresh
-                        window.location.reload()
+                        setK8sClustersRefreshKey((value) => value + 1)
                       }}
                     />
                   </>

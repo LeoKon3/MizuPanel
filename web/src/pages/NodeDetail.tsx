@@ -12,6 +12,7 @@ import CreateContainerModal from '../components/CreateContainerModal'
 import { SingleNodeOrganizationModal } from '../components/SingleNodeOrganizationModal'
 import { Toast } from '../components/Toast'
 import { DockerResourcesPanel } from '../components/DockerResourcesPanel'
+import { useAgentUpgrade } from './node-detail/useAgentUpgrade'
 
 type NodeDetailProps = {
   node?: Node
@@ -233,13 +234,16 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
   const [chartRanges, setChartRanges] = useState<Record<string, ChartRange>>({ cpu: '1h', memory: '1h', disk: '1h', network: '1h', diskIO: '1h', load: '1h' })
   const [fileList, setFileList] = useState<FileListResponse>()
   const [fileRead, setFileRead] = useState<FileReadResponse>()
+  const [fileEditorNodeID, setFileEditorNodeID] = useState<string>()
   const [fileContent, setFileContent] = useState('')
   const [pathInput, setPathInput] = useState('/')
   const [editorOpen, setEditorOpen] = useState(false)
   const [pathTree, setPathTree] = useState<PathTreeState>({})
   const [dragActive, setDragActive] = useState(false)
-  const [pendingDelete, setPendingDelete] = useState<FileEntry>()
+  const [pendingDelete, setPendingDelete] = useState<{ nodeID: string; entry: FileEntry }>()
   const fileRequestSeq = useRef(0)
+  const fileNodeIDRef = useRef(node?.id)
+  fileNodeIDRef.current = node?.id
   const agentRequestSeq = useRef(0)
   const treeRequestSeqByPath = useRef<Record<string, number>>({})
   const uploadInputRef = useRef<HTMLInputElement>(null)
@@ -269,7 +273,13 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
 	const [restartOpen, setRestartOpen] = useState(false)
 	const [restartLoading, setRestartLoading] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
-  const [upgradeLoading, setUpgradeLoading] = useState(false)
+  const { confirmAgentUpgrade, upgradeLoading } = useAgentUpgrade({
+    nodeID: node?.id,
+    onUpgradeAgent,
+    onGetAgentUpgradeStatus,
+    onAccepted: () => setUpgradeOpen(false),
+    onToast: setToast,
+  })
 	const [organizationEditorOpen, setOrganizationEditorOpen] = useState(false)
 	const [legacyUpgradeCopying, setLegacyUpgradeCopying] = useState(false)
 
@@ -284,6 +294,27 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
 		document.addEventListener('keydown', handleEscape)
 		return () => document.removeEventListener('keydown', handleEscape)
 	}, [rebootLoading, rebootOpen, restartLoading, restartOpen, upgradeLoading, upgradeOpen])
+
+  useEffect(() => {
+    fileRequestSeq.current += 1
+    treeRequestSeqByPath.current = {}
+    setFileList(undefined)
+    setFileRead(undefined)
+    setFileEditorNodeID(undefined)
+    setFileContent('')
+    setPathInput('/')
+    setEditorOpen(false)
+    setPathTree({})
+    setDragActive(false)
+    setPendingDelete(undefined)
+    setOperationMessage(undefined)
+    setFileLoading(false)
+    if (uploadInputRef.current) uploadInputRef.current.value = ''
+  }, [node?.id])
+
+  useEffect(() => {
+    setUpgradeOpen(false)
+  }, [node?.id])
 
   useEffect(() => {
     agentRequestSeq.current += 1
@@ -368,7 +399,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
     fileRequestSeq.current += 1
     return fileRequestSeq.current
   }
-  const isLatestFileRequest = (requestID: number) => requestID === fileRequestSeq.current
+  const isLatestFileRequest = (requestID: number, nodeID: string) => requestID === fileRequestSeq.current && fileNodeIDRef.current === nodeID
   const currentFilePath = fileList?.path || pathInput || '/'
 
   const mergePathTree = (path: string, entries: FileEntry[]) => {
@@ -413,9 +444,10 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
       [path]: { expanded: true, loading: true, children: tree[path]?.children || [] }
     }))
 
-    onLoadFiles(node.id, path)
+    const nodeID = node.id
+    onLoadFiles(nodeID, path)
       .then((response) => {
-        if (treeRequestSeqByPath.current[path] !== requestID) return
+        if (fileNodeIDRef.current !== nodeID || treeRequestSeqByPath.current[path] !== requestID) return
         if (response.error) {
           setPathTree((tree) => ({
             ...tree,
@@ -433,7 +465,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
         }))
       })
       .catch((err: unknown) => {
-        if (treeRequestSeqByPath.current[path] !== requestID) return
+        if (fileNodeIDRef.current !== nodeID || treeRequestSeqByPath.current[path] !== requestID) return
         setPathTree((tree) => ({
           ...tree,
           [path]: { expanded: true, loading: false, children: [], error: err instanceof Error ? err.message : '路径树加载失败' }
@@ -448,7 +480,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
   }
 
   const confirmDeleteEntry = (entry: FileEntry) => {
-    setPendingDelete(entry)
+    setPendingDelete({ nodeID: node.id, entry })
     setOperationMessage(undefined)
   }
 
@@ -465,11 +497,13 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
     setFileLoading(true)
     setOperationMessage(undefined)
     const requestID = nextFileRequest()
-    onLoadFiles(node.id, path)
+    const nodeID = node.id
+    onLoadFiles(nodeID, path)
       .then((response) => {
-        if (!isLatestFileRequest(requestID)) return
+        if (!isLatestFileRequest(requestID, nodeID)) return
         setFileList(response)
         setFileRead(undefined)
+        setFileEditorNodeID(undefined)
         setFileContent('')
         setEditorOpen(false)
         setPendingDelete(undefined)
@@ -480,10 +514,10 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
         if (response.error) setOperationMessage(formatOperationError(response.code, response.error))
       })
       .catch((err: unknown) => {
-        if (isLatestFileRequest(requestID)) setOperationMessage(err instanceof Error ? err.message : '文件目录加载失败')
+        if (isLatestFileRequest(requestID, nodeID)) setOperationMessage(err instanceof Error ? err.message : '文件目录加载失败')
       })
       .finally(() => {
-        if (isLatestFileRequest(requestID)) setFileLoading(false)
+        if (isLatestFileRequest(requestID, nodeID)) setFileLoading(false)
       })
   }
 
@@ -502,16 +536,18 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
     if (!onReadFile) return
     setOperationMessage(undefined)
     const requestID = nextFileRequest()
-    onReadFile(node.id, entry.path)
+    const nodeID = node.id
+    onReadFile(nodeID, entry.path)
       .then((response) => {
-        if (!isLatestFileRequest(requestID)) return
+        if (!isLatestFileRequest(requestID, nodeID)) return
         setFileRead(response)
+        setFileEditorNodeID(nodeID)
         setFileContent(response.content || '')
         setEditorOpen(Boolean(response.editable && !response.error))
         if (response.error) setOperationMessage(formatOperationError(response.code, response.error))
       })
       .catch((err: unknown) => {
-        if (isLatestFileRequest(requestID)) setOperationMessage(err instanceof Error ? err.message : '文件读取失败')
+        if (isLatestFileRequest(requestID, nodeID)) setOperationMessage(err instanceof Error ? err.message : '文件读取失败')
       })
   }
 
@@ -525,13 +561,15 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
     setFileLoading(true)
     setOperationMessage(undefined)
     const requestID = nextFileRequest()
-    onLoadFiles(node.id, target)
+    const nodeID = node.id
+    onLoadFiles(nodeID, target)
       .then((response) => {
-        if (!isLatestFileRequest(requestID)) return
+        if (!isLatestFileRequest(requestID, nodeID)) return
         if (!response.error) {
           setFileList(response)
           setPathInput(response.path || target)
           setFileRead(undefined)
+          setFileEditorNodeID(undefined)
           setFileContent('')
           setEditorOpen(false)
           setPendingDelete(undefined)
@@ -539,9 +577,10 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
           return
         }
         if (response.code === 'not_directory' && onReadFile) {
-          return onReadFile(node.id, target).then((readResponse) => {
-            if (!isLatestFileRequest(requestID)) return
+          return onReadFile(nodeID, target).then((readResponse) => {
+            if (!isLatestFileRequest(requestID, nodeID)) return
             setFileRead(readResponse)
+            setFileEditorNodeID(nodeID)
             setFileContent(readResponse.content || '')
             setEditorOpen(Boolean(readResponse.editable && !readResponse.error))
             if (readResponse.error) setOperationMessage(formatOperationError(readResponse.code, readResponse.error))
@@ -551,21 +590,28 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
         setOperationMessage(formatOperationError(response.code, response.error))
       })
       .catch((err: unknown) => {
-        if (isLatestFileRequest(requestID)) setOperationMessage(err instanceof Error ? err.message : '路径打开失败')
+        if (isLatestFileRequest(requestID, nodeID)) setOperationMessage(err instanceof Error ? err.message : '路径打开失败')
       })
       .finally(() => {
-        if (isLatestFileRequest(requestID)) setFileLoading(false)
+        if (isLatestFileRequest(requestID, nodeID)) setFileLoading(false)
       })
   }
 
   const saveFile = () => {
-    if (!fileRead || !onWriteFile) return
+    if (!fileRead || !fileEditorNodeID || !onWriteFile) return
+    const nodeID = fileEditorNodeID
+    const path = fileRead.path
+    const content = fileContent
+    const requestID = nextFileRequest()
     setOperationMessage(undefined)
-    onWriteFile(node.id, fileRead.path, fileContent)
+    onWriteFile(nodeID, path, content)
       .then((response) => {
+        if (!isLatestFileRequest(requestID, nodeID)) return
         setOperationMessage(response.saved ? '文件已保存。' : formatOperationError(response.code, response.error || '文件保存失败'))
       })
-      .catch((err: unknown) => setOperationMessage(err instanceof Error ? err.message : '文件保存失败'))
+      .catch((err: unknown) => {
+        if (isLatestFileRequest(requestID, nodeID)) setOperationMessage(err instanceof Error ? err.message : '文件保存失败')
+      })
   }
 
   const uploadFile = (file?: File, notice?: string) => {
@@ -577,18 +623,19 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
     const directory = currentFilePath
     const targetPath = joinRemotePath(directory, file.name)
     const requestID = nextFileRequest()
+    const nodeID = node.id
     setFileLoading(true)
     setOperationMessage(notice)
     fileToBase64(file)
-      .then((contentBase64) => onUploadFile(node.id, targetPath, contentBase64))
+      .then((contentBase64) => onUploadFile(nodeID, targetPath, contentBase64))
       .then((response) => {
-        if (!isLatestFileRequest(requestID)) return undefined
+        if (!response || !isLatestFileRequest(requestID, nodeID)) return undefined
         setOperationMessage(response.uploaded ? `${notice ? `${notice} ` : ''}文件已上传。` : formatOperationError(response.code, response.error || '文件上传失败'))
         if (!response.uploaded) return undefined
-        return onLoadFiles(node.id, directory)
+        return onLoadFiles(nodeID, directory)
       })
       .then((response) => {
-        if (!response || !isLatestFileRequest(requestID)) return
+        if (!response || !isLatestFileRequest(requestID, nodeID)) return
         if (!response.error) {
           setFileList(response)
           setPathInput(response.path || directory)
@@ -598,29 +645,30 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
         }
       })
       .catch((err: unknown) => {
-        if (isLatestFileRequest(requestID)) setOperationMessage(err instanceof Error ? err.message : '文件上传失败')
+        if (isLatestFileRequest(requestID, nodeID)) setOperationMessage(err instanceof Error ? err.message : '文件上传失败')
       })
       .finally(() => {
-        if (isLatestFileRequest(requestID)) setFileLoading(false)
+        if (isLatestFileRequest(requestID, nodeID)) setFileLoading(false)
       })
   }
 
-  const deleteEntry = (entry: FileEntry) => {
-    if (!onDeletePath || !onLoadFiles) return
+  const deleteEntry = (pending: { nodeID: string; entry: FileEntry }) => {
+    if (!onDeletePath || !onLoadFiles || pending.nodeID !== fileNodeIDRef.current) return
+    const { nodeID, entry } = pending
     const directory = fileList?.path || '/'
     const requestID = nextFileRequest()
     setFileLoading(true)
     setOperationMessage(undefined)
-    onDeletePath(node.id, entry.path)
+    onDeletePath(nodeID, entry.path)
       .then((response) => {
-        if (!isLatestFileRequest(requestID)) return undefined
+        if (!isLatestFileRequest(requestID, nodeID)) return undefined
         setOperationMessage(response.deleted ? '文件已删除。' : formatOperationError(response.code, response.error || '文件删除失败'))
         if (response.deleted) setPendingDelete(undefined)
         if (!response.deleted) return undefined
-        return onLoadFiles(node.id, directory)
+        return onLoadFiles(nodeID, directory)
       })
       .then((response) => {
-        if (!response || !isLatestFileRequest(requestID)) return
+        if (!response || !isLatestFileRequest(requestID, nodeID)) return
         if (!response.error) {
           setFileList(response)
           setPathInput(response.path || directory)
@@ -630,10 +678,10 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
         }
       })
       .catch((err: unknown) => {
-        if (isLatestFileRequest(requestID)) setOperationMessage(err instanceof Error ? err.message : '文件删除失败')
+        if (isLatestFileRequest(requestID, nodeID)) setOperationMessage(err instanceof Error ? err.message : '文件删除失败')
       })
       .finally(() => {
-        if (isLatestFileRequest(requestID)) setFileLoading(false)
+        if (isLatestFileRequest(requestID, nodeID)) setFileLoading(false)
       })
   }
 
@@ -791,30 +839,6 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
 			})
 			.catch((err: unknown) => setToast({ message: `Agent重启失败: ${err instanceof Error ? err.message : '未知错误'}`, type: 'error' }))
 			.finally(() => setRestartLoading(false))
-  }
-
-  const confirmAgentUpgrade = () => {
-    if (!onUpgradeAgent || upgradeLoading) return
-    setUpgradeLoading(true)
-    onUpgradeAgent(node.id)
-      .then((response) => {
-        if (!response.accepted) throw new Error(response.error || '升级请求未被接受')
-        setUpgradeOpen(false)
-        setToast({ message: 'Agent升级已开始，正在等待重新连接', type: 'success' })
-        if (onGetAgentUpgradeStatus) {
-          let attempts = 0
-          const timer = window.setInterval(() => {
-            attempts += 1
-            onGetAgentUpgradeStatus(node.id).then((status) => {
-              if (status.stage === 'completed') { window.clearInterval(timer); setToast({ message: 'Agent升级成功', type: 'success' }) }
-              else if (status.stage === 'failed') { window.clearInterval(timer); setToast({ message: `Agent升级失败: ${status.error || '未知错误'}`, type: 'error' }) }
-              else if (attempts >= 40) { window.clearInterval(timer); setToast({ message: 'Agent升级失败: 等待重新连接超时', type: 'error' }) }
-            }).catch(() => { if (attempts >= 40) window.clearInterval(timer) })
-          }, 3000)
-        }
-      })
-      .catch((err: unknown) => setToast({ message: `Agent升级失败: ${err instanceof Error ? err.message : '未知错误'}`, type: 'error' }))
-      .finally(() => setUpgradeLoading(false))
   }
 
 	const copyLegacyAgentUpgradeCommand = () => {
@@ -1495,7 +1519,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
                 ) : null}
                 <ul className="divide-y divide-border">
                   {(fileList?.entries ?? []).map((entry) => {
-                    const isPendingDelete = pendingDelete?.path === entry.path
+                    const isPendingDelete = pendingDelete?.nodeID === node.id && pendingDelete.entry.path === entry.path
                     return (
                       <li key={entry.path || entry.name} className="px-4 py-3 text-sm transition hover:bg-surface">
                         <div className="flex items-center justify-between gap-3">
@@ -1524,7 +1548,7 @@ export function NodeDetail({ node, metrics, processSnapshot, dockerSnapshot, doc
                             <p className="text-xs font-black text-danger">确认删除 {entry.name}？非空目录不会递归删除。</p>
                             <div className="flex gap-2">
                               <button type="button" onClick={cancelDeleteEntry} className="rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-black text-muted-foreground transition hover:text-foreground">取消</button>
-                              <button type="button" onClick={() => deleteEntry(entry)} className="rounded-xl bg-danger px-3 py-1.5 text-xs font-black text-white transition hover:brightness-95">确认删除</button>
+                              <button type="button" onClick={() => pendingDelete && deleteEntry(pendingDelete)} className="rounded-xl bg-danger px-3 py-1.5 text-xs font-black text-white transition hover:brightness-95">确认删除</button>
                             </div>
                           </div>
                         ) : null}

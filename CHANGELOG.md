@@ -2,6 +2,16 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.28 - 2026-08-24
+
+### Fixed
+
+- Fixed Kubernetes clusters being reported online from stale connection state
+  when the associated Agent was online but the Kubernetes API was unreachable.
+- Unified Kubernetes runtime health across the Overview, cluster pages, AI
+  context, resource graph, and operational tools with bounded background
+  probes and safe health reasons.
+
 ## v0.1.27 - 2026-08-19
 
 ### Added

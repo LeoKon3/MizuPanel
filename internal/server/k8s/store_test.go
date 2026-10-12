@@ -62,3 +62,39 @@ func TestStorePersistsKubeconfigContentButPublicClusterOmitsIt(t *testing.T) {
 		t.Fatalf("public cluster lost metadata: %#v", public)
 	}
 }
+
+func TestStorePreservesSubsecondHealthTimestamp(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	checkedAt := time.Date(2026, time.August, 19, 12, 34, 56, 123456789, time.UTC)
+	if _, err := database.Exec(`INSERT INTO nodes (id, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		"node-precision", "precision-node", "online", timeToString(checkedAt), timeToString(checkedAt)); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	store := NewStore(database)
+	if err := store.CreateCluster(&Cluster{
+		ID:              "cluster-precision",
+		Name:            "precision",
+		NodeID:          "node-precision",
+		Status:          ClusterStatusOnline,
+		HealthCheckedAt: checkedAt,
+	}); err != nil {
+		t.Fatalf("create cluster: %v", err)
+	}
+
+	loaded, err := store.GetCluster("cluster-precision")
+	if err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	if !loaded.HealthCheckedAt.Equal(checkedAt) {
+		t.Fatalf("health timestamp = %s, want %s", loaded.HealthCheckedAt.Format(time.RFC3339Nano), checkedAt.Format(time.RFC3339Nano))
+	}
+}

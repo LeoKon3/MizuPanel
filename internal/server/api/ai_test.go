@@ -82,7 +82,7 @@ func newAIAPIFixture(t *testing.T, auth AuthConfig, adapter serverai.Adapter) ai
 		t.Fatalf("initialize AI service: %v", err)
 	}
 	auditStore := serveraudit.NewStore(database, serverdb.DialectSQLite)
-	router := NewRouter(nodes, store.NewMetricStore(database), auth, auditStore, AIConfig{Service: service})
+	router := NewRouter(RouterDependencies{Nodes: nodes, Metrics: store.NewMetricStore(database), Auth: auth, Audit: auditStore, AI: AIConfig{Service: service}})
 	return aiAPIFixture{handler: serveraudit.Middleware(auditStore, router), db: database}
 }
 

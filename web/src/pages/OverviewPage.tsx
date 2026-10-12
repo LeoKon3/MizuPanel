@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AlertHistory, K8sCluster, Metric, Node, RangeOption } from '../types'
 import { formatBytes, formatPercent, formatUptime } from '../lib/format'
 import { getAlertHistory, getNodeMetrics, getK8sClusters, getAlertRules } from '../api/client'
@@ -28,12 +28,25 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer, onSelectedNodeCh
     disk: number
   }>>([])
   const [metricsLoading, setMetricsLoading] = useState(false)
+  const k8sRequestSeq = useRef(0)
 
   // 加载 K8s 集群数据
   useEffect(() => {
-    getK8sClusters()
-      .then(response => setK8sClusters(response.clusters))
-      .catch(() => setK8sClusters([]))
+    const loadClusters = () => {
+      const requestID = k8sRequestSeq.current + 1
+      k8sRequestSeq.current = requestID
+      getK8sClusters()
+        .then(response => {
+          if (k8sRequestSeq.current === requestID) setK8sClusters(response.clusters || [])
+        })
+        .catch(() => undefined)
+    }
+    loadClusters()
+    const interval = window.setInterval(loadClusters, 30000)
+    return () => {
+      k8sRequestSeq.current += 1
+      window.clearInterval(interval)
+    }
   }, [])
 
   // 加载告警规则数量
@@ -180,9 +193,7 @@ export function OverviewPage({ nodes, onlineNodes, onAddServer, onSelectedNodeCh
     })
   }, [nodes, timeRange])
 
-  const onlineClustersCount = k8sClusters.filter((cluster) => (
-    cluster.node_status === 'online' && cluster.status === 'online'
-  )).length
+  const onlineClustersCount = k8sClusters.filter((cluster) => cluster.status === 'online').length
   const totalClustersCount = k8sClusters.length
   const activeAlertsCount = alertHistory.length
 

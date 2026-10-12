@@ -9,6 +9,183 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+func TestMigrateSQLiteCreatesCompleteSchemaReplaySafely(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+
+	for run := 1; run <= 2; run++ {
+		if err := Migrate(database); err != nil {
+			t.Fatalf("Migrate run %d: %v", run, err)
+		}
+	}
+
+	for _, table := range []string{
+		"nodes", "node_groups", "node_tags", "node_tag_links", "node_metrics",
+		"node_process_snapshots", "node_docker_snapshots", "install_tokens", "deleted_nodes",
+		"node_tokens", "node_connection_events", "settings", "ai_control_policy", "alert_rules",
+		"alert_history", "k8s_clusters", "uptime_monitors", "uptime_results", "uptime_incidents",
+		"audit_events", "automation_scripts", "scheduled_tasks", "scheduled_task_nodes", "task_runs",
+		"task_run_targets", "application_services", "application_service_resources", "ai_providers",
+		"ai_provider_models", "ai_conversations", "ai_turns", "ai_messages", "ai_tool_calls",
+	} {
+		var count int
+		if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+			t.Fatalf("query table %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Errorf("table %s count = %d, want 1", table, count)
+		}
+	}
+}
+
+func TestBaseSchemaStatementListsStayAligned(t *testing.T) {
+	const wantTables = 33
+	for dialect, statements := range map[Dialect][]string{
+		DialectSQLite: sqliteMigrationStatements(),
+		DialectMySQL:  mysqlMigrationStatements(),
+	} {
+		if len(statements) == 0 {
+			t.Fatalf("%s base schema has no statements", dialect)
+		}
+		tables := 0
+		for _, statement := range statements {
+			if strings.Contains(statement, "CREATE TABLE IF NOT EXISTS") {
+				tables++
+			}
+		}
+		if tables != wantTables {
+			t.Errorf("%s base schema table statements = %d, want %d", dialect, tables, wantTables)
+		}
+	}
+}
+
+func TestMigrationStepsRemainReplayOnlyAndOrdered(t *testing.T) {
+	want := []string{
+		"nodes.compatibility-columns",
+		"nodes.organization-indexes",
+		"metrics.compatibility-columns",
+		"alerts.compatibility-columns",
+		"k8s.compatibility-columns",
+		"uptime.compatibility-columns",
+		"uptime.invariants",
+		"ai.compatibility-columns",
+		"ai.plan-indexes",
+		"ai.model-routing-upgrade",
+		"scheduled-tasks.compatibility-columns",
+	}
+	for _, dialect := range []Dialect{DialectSQLite, DialectMySQL} {
+		steps := migrationSteps(dialect)
+		if len(steps) != len(want) {
+			t.Fatalf("%s migration step count = %d, want %d", dialect, len(steps), len(want))
+		}
+		for index, step := range steps {
+			if step.name != want[index] {
+				t.Errorf("%s migration step %d = %q, want %q", dialect, index, step.name, want[index])
+			}
+			if len(step.statements) == 0 {
+				t.Errorf("%s migration step %q has no statements", dialect, step.name)
+			}
+		}
+	}
+}
+
+func TestMigrateSQLiteAddsK8sHealthColumnsReplaySafely(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+
+	if _, err := database.Exec(`CREATE TABLE k8s_clusters (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		node_id TEXT NOT NULL,
+		kubeconfig_path TEXT NOT NULL,
+		context TEXT,
+		status TEXT NOT NULL DEFAULT 'online',
+		last_seen_at DATETIME,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	)`); err != nil {
+		t.Fatalf("create legacy k8s_clusters: %v", err)
+	}
+
+	for run := 1; run <= 2; run++ {
+		if err := Migrate(database); err != nil {
+			t.Fatalf("Migrate run %d: %v", run, err)
+		}
+	}
+
+	columns := map[string]struct {
+		columnType   string
+		notNull      bool
+		defaultValue string
+	}{}
+	rows, err := database.Query(`PRAGMA table_info(k8s_clusters)`)
+	if err != nil {
+		t.Fatalf("query k8s columns: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan k8s column: %v", err)
+		}
+		columns[name] = struct {
+			columnType   string
+			notNull      bool
+			defaultValue string
+		}{columnType: columnType, notNull: notNull == 1, defaultValue: defaultValue.String}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate k8s columns: %v", err)
+	}
+
+	reason, ok := columns["health_reason"]
+	if !ok {
+		t.Fatal("k8s_clusters missing health_reason")
+	}
+	if reason.columnType != "TEXT" || !reason.notNull || strings.Trim(reason.defaultValue, "'") != "checking" {
+		t.Fatalf("health_reason schema = %+v, want TEXT NOT NULL DEFAULT 'checking'", reason)
+	}
+	checkedAt, ok := columns["health_checked_at"]
+	if !ok {
+		t.Fatal("k8s_clusters missing health_checked_at")
+	}
+	if checkedAt.columnType != "DATETIME" || checkedAt.notNull || checkedAt.defaultValue != "" {
+		t.Fatalf("health_checked_at schema = %+v, want nullable DATETIME", checkedAt)
+	}
+}
+
+func TestMySQLMigrationIncludesK8sHealthColumns(t *testing.T) {
+	base := strings.Join(mysqlMigrationStatements(), "\n")
+	compatibility := strings.Join(k8sClusterCompatibilityColumnStatements(DialectMySQL), "\n")
+	for _, fragment := range []string{
+		"status VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+		"health_reason VARCHAR(64) NOT NULL DEFAULT 'checking'",
+		"health_checked_at VARCHAR(64)",
+	} {
+		if !strings.Contains(base, fragment) {
+			t.Errorf("MySQL base schema missing %q", fragment)
+		}
+	}
+	for _, fragment := range []string{
+		"ADD COLUMN health_reason VARCHAR(64) NOT NULL DEFAULT 'checking'",
+		"ADD COLUMN health_checked_at VARCHAR(64)",
+	} {
+		if !strings.Contains(compatibility, fragment) {
+			t.Errorf("MySQL compatibility migration missing %q", fragment)
+		}
+	}
+}
+
 func TestMigrateSQLiteCreatesAlertTables(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

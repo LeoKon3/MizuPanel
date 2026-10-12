@@ -1,51 +1,10 @@
 import type { AgentLogsResponse, AgentRestartResponse, AgentStatusResponse, AgentUpgradeResponse, AIConversation, AIConversationState, AIProgress, AIProvider, AIProviderInput, AIProviderModel, AIProviderModelInput, AIProviderModelUpdate, AIRequestContext, AIRouting, AISendResult, AIStreamDelta, AIStreamReset, AlertHistory, AlertHistoryResponse, AlertRule, AlertRulesResponse, ApplicationServiceDetail, ApplicationServiceInput, ApplicationServiceSummary, AuditCleanupRequest, AuditCleanupResponse, AuditEventsQuery, AuditEventsResponse, AutomationRun, AutomationRunDetail, AutomationRunsQuery, AutomationRunsResponse, AutomationScript, AutomationScriptInput, AutomationScriptsResponse, AuthSessionResponse, BatchNodeMetadataResponse, BatchNodeMetadataUpdate, ConnectionDiagnostics, DockerComposeAction, DockerComposeActionResponse, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerResourceAction, DockerResourceActionResponse, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, FileDeleteResponse, FileListResponse, FileReadResponse, FileUploadResponse, FileWriteResponse, InstallCommandOptions, InstallCommandResponse, InstallPlatform, LoginResponse, MetricsResponse, NodeGroup, NodeGroupsResponse, NodeTag, NodeTagsResponse, NodesResponse, ProcessSnapshotResponse, RangeOption, RebootResponse, ScheduledTask, ScheduledTaskInput, ScheduledTasksResponse, SettingsResponse, SettingsUpdate, SSHInstallRequest, SSHJobResponse, SSHUninstallRequest, SystemdServiceAction, SystemdServiceActionResponse, SystemdServiceListResponse, K8sClustersResponse, SystemAboutResponse, SystemLogsResponse, UptimeIncidentsResponse, UptimeMonitor, UptimeMonitorInput, UptimeMonitorsResponse, UptimeResultsResponse } from '../types'
+import { APIError, request, requestVoid, responseErrorMessage, setUnauthorizedHandler } from './transport'
+
+export { APIError, setUnauthorizedHandler }
 
 export type SessionTokenResponse = {
   token: string
-}
-
-export class APIError extends Error {
-  constructor(public status: number, message = `Request failed: ${status}`) {
-    super(message)
-  }
-}
-
-let onUnauthorized: (() => void) | undefined
-
-export function setUnauthorizedHandler(handler: () => void) {
-  onUnauthorized = handler
-}
-
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { error?: string }
-    return body.error || `Request failed: ${response.status}`
-  } catch {
-    return `Request failed: ${response.status}`
-  }
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = init === undefined ? await fetch(path) : await fetch(path, init)
-  if (!response.ok) {
-    const error = new APIError(response.status, await errorMessage(response))
-    if (response.status === 401 && onUnauthorized) {
-      onUnauthorized()
-    }
-    throw error
-  }
-  return response.json() as Promise<T>
-}
-
-async function requestVoid(path: string, init?: RequestInit): Promise<void> {
-  const response = init === undefined ? await fetch(path) : await fetch(path, init)
-  if (!response.ok) {
-    const error = new APIError(response.status, await errorMessage(response))
-    if (response.status === 401 && onUnauthorized) {
-      onUnauthorized()
-    }
-    throw error
-  }
 }
 
 export function getAuthSession(): Promise<AuthSessionResponse> {
@@ -667,7 +626,7 @@ export async function sendAIMessageStream(
     body: JSON.stringify(body),
     signal
   })
-  if (!response.ok) throw new APIError(response.status, await errorMessage(response))
+  if (!response.ok) throw new APIError(response.status, await responseErrorMessage(response))
   if (!response.body) throw new APIError(0, '流式响应不可用')
   // Parse SSE: split blocks on blank lines, read `event:` and `data:` lines.
   const reader = response.body.getReader()

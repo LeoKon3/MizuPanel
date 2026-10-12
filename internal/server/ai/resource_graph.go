@@ -677,11 +677,8 @@ func (r *Registry) addGraphKubernetes(ctx context.Context, builder *graphBuilder
 		if cluster == nil {
 			continue
 		}
-		available := cluster.Status == "online" && cluster.NodeStatus == "online"
-		state := cluster.Status
-		if cluster.NodeStatus != "online" {
-			state = "node_" + cluster.NodeStatus
-		}
+		available := k8sClusterAvailable(cluster)
+		state := k8sClusterState(cluster)
 		ref := graphRef("k8s_cluster", cluster.NodeID, "", "", cluster.ID)
 		if builder.addResource(GraphResource{Ref: ref, Type: "k8s_cluster", Name: cluster.Name, State: state, Available: available, Route: "/k8s/clusters/" + url.PathEscape(cluster.ID), NodeID: cluster.NodeID, ScopeID: cluster.NodeID, Key: cluster.ID}) && cluster.NodeID != "" {
 			builder.addEdge(ref, graphRef("node", "", "", "", cluster.NodeID), "runs_on")

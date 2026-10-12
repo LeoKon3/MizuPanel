@@ -120,6 +120,7 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
   const clusterRequestSeq = useRef(0)
   const resourceRequestSeq = useRef(0)
   const namespaceRequestSeq = useRef(0)
+  const loadedClusterIDRef = useRef<string | undefined>(undefined)
   const namespaceRef = useRef('')
   const previousNamespaceRef = useRef(namespace)
 
@@ -130,42 +131,66 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
   const loadCluster = useCallback(() => {
     const requestID = clusterRequestSeq.current + 1
     clusterRequestSeq.current = requestID
-    resourceRequestSeq.current += 1
-    namespaceRequestSeq.current += 1
     const isCurrentRequest = () => clusterRequestSeq.current === requestID
+    const isInitialLoad = loadedClusterIDRef.current !== clusterId
 
-    setLoading(true)
-    setNamespacesLoading(false)
-    setError(undefined)
-    setResourceError(undefined)
-    setSummary(undefined)
-    setNamespaces([])
-    setNodes([])
-    setPods([])
-    setDeployments([])
-    setStatefulSets([])
-    setDaemonSets([])
-    setServices([])
-    setIngresses([])
+    if (isInitialLoad) {
+      resourceRequestSeq.current += 1
+      namespaceRequestSeq.current += 1
+      setLoading(true)
+      setNamespacesLoading(false)
+      setError(undefined)
+      setResourceError(undefined)
+      setSummary(undefined)
+      setNamespaces([])
+      setNodes([])
+      setPods([])
+      setDeployments([])
+      setStatefulSets([])
+      setDaemonSets([])
+      setServices([])
+      setIngresses([])
+    }
 
     fetchK8sCluster(clusterId)
       .then((response) => {
-        if (isCurrentRequest()) setCluster(response.cluster)
+        if (!isCurrentRequest()) return
+        loadedClusterIDRef.current = clusterId
+        setCluster(response.cluster)
+        if (response.cluster.status !== 'online') {
+          resourceRequestSeq.current += 1
+          namespaceRequestSeq.current += 1
+          setResourcesLoading(false)
+          setNamespacesLoading(false)
+          setResourceError(undefined)
+          setSummary(undefined)
+          setNamespaces([])
+          setNodes([])
+          setPods([])
+          setDeployments([])
+          setStatefulSets([])
+          setDaemonSets([])
+          setServices([])
+          setIngresses([])
+        }
       })
       .catch((err: Error) => {
         if (!isCurrentRequest()) return
+        if (!isInitialLoad) {
+          setToast({ message: `集群刷新失败: ${err.message}`, type: 'error' })
+          return
+        }
         setError(err.message)
         setToast({ message: `集群加载失败: ${err.message}`, type: 'error' })
       })
       .finally(() => {
-        if (isCurrentRequest()) setLoading(false)
+        if (isCurrentRequest() && isInitialLoad) setLoading(false)
       })
   }, [clusterId])
 
   const loadActiveResource = useCallback((requestedNamespace?: string) => {
     const effectiveNamespace = requestedNamespace ?? namespaceRef.current
-    const agentOnline = cluster?.node_status ? cluster.node_status === 'online' : true
-    if (!cluster || cluster.status !== 'online' || !agentOnline) return
+    if (!cluster || cluster.status !== 'online') return
 
     const requestID = resourceRequestSeq.current + 1
     resourceRequestSeq.current = requestID
@@ -257,8 +282,7 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
   }, [activeTab, cluster, clusterId])
 
   const loadNamespaceOptions = useCallback(() => {
-    const agentOnline = cluster?.node_status ? cluster.node_status === 'online' : true
-    if (!cluster || cluster.status !== 'online' || !agentOnline) return
+    if (!cluster || cluster.status !== 'online') return
 
     const requestID = namespaceRequestSeq.current + 1
     namespaceRequestSeq.current = requestID
@@ -283,15 +307,18 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
   }, [loadCluster])
 
   useEffect(() => {
-    const agentOnline = cluster?.node_status ? cluster.node_status === 'online' : true
-    if (cluster?.status === 'online' && agentOnline) {
+    const interval = window.setInterval(loadCluster, 30000)
+    return () => window.clearInterval(interval)
+  }, [loadCluster])
+
+  useEffect(() => {
+    if (cluster?.status === 'online') {
       loadActiveResource()
     }
   }, [cluster?.status, cluster?.node_status, loadActiveResource])
 
   useEffect(() => {
-    const agentOnline = cluster?.node_status ? cluster.node_status === 'online' : true
-    if (!cluster || cluster.status !== 'online' || !agentOnline) return
+    if (!cluster || cluster.status !== 'online') return
     if (!NAMESPACE_SCOPED_TABS.has(activeTab) && !createResourceOpen) return
     if (namespaces.length > 0 || namespacesLoading) return
 
@@ -302,8 +329,7 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
     if (previousNamespaceRef.current === namespace) return
     previousNamespaceRef.current = namespace
     if (!cluster || !NAMESPACE_SCOPED_TABS.has(activeTab)) return
-    const agentOnline = cluster.node_status ? cluster.node_status === 'online' : true
-    if (cluster.status !== 'online' || !agentOnline) return
+    if (cluster.status !== 'online') return
 
     loadActiveResource(namespace)
   }, [activeTab, cluster, loadActiveResource, namespace])
@@ -356,8 +382,15 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
     )
   }
 
-  const agentOnline = cluster.node_status ? cluster.node_status === 'online' : true
-  const isOnline = cluster.status === 'online' && agentOnline
+  const isOnline = cluster.status === 'online'
+  const statusLabel = isOnline ? '在线' : cluster.status === 'unknown' ? '检测中' : '离线'
+  const healthReasonLabel = cluster.health_reason ? ({
+    checking: '正在检测 Kubernetes API',
+    stale: '检测结果已过期',
+    agent_offline: '关联 Agent 离线',
+    configuration_missing: '缺少集群配置',
+    api_unreachable: 'Kubernetes API 不可达',
+  } as Record<string, string>)[cluster.health_reason] || '' : ''
   const agentLastSeenAt = cluster.node_last_seen_at || cluster.last_seen_at
   const resourceCounts: Partial<Record<DetailTab, number | undefined>> = {
     overview: undefined,
@@ -444,7 +477,7 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
                 <span className={`h-3 w-3 shrink-0 rounded-full ${isOnline ? 'bg-success shadow-[0_0_14px_rgb(var(--success)/0.35)]' : 'bg-muted-foreground/40'}`} />
                 <h1 className="min-w-0 truncate text-2xl font-black text-foreground">{cluster.name}</h1>
                 <span className={`rounded-full border px-3 py-1 text-xs font-black ${isOnline ? 'border-success/20 bg-success/10 text-success' : 'border-border bg-muted text-muted-foreground'}`}>
-                  {isOnline ? '在线' : '离线'}
+                  {statusLabel}
                 </span>
               </div>
               <p className="mt-2 text-sm font-semibold text-muted-foreground">
@@ -452,6 +485,7 @@ export function K8sClusterDetailPage({ clusterId, onBack }: K8sClusterDetailPage
                 {cluster.context ? ` · Context: ${cluster.context}` : ''}
                 {agentLastSeenAt ? ` · Agent Last Seen: ${formatDateTime(agentLastSeenAt)}` : ''}
               </p>
+              {healthReasonLabel && !isOnline && <p className="mt-1 text-xs font-semibold text-muted-foreground">{healthReasonLabel}</p>}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button

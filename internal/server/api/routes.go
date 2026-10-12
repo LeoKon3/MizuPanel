@@ -189,65 +189,65 @@ const (
 	maxDockerComposeDeploymentBodyBytes = 4 * 1024 * 1024
 )
 
-func NewRouter(nodes *store.NodeStore, metrics *store.MetricStore, snapshots ...any) *http.ServeMux {
-	server := &Server{nodes: nodes, organizations: store.NewNodeOrganizationStoreWithDialect(nodes.DB(), nodes.Dialect()), metrics: metrics, defaultMetricsRetention: 6 * time.Hour, terminalTokens: make(map[string]terminalToken), auth: NewAuthenticator(AuthConfig{})}
-	var alertStore *store.AlertStore
-	var k8sService *k8s.Service
-	for _, snapshotStore := range snapshots {
-		switch typed := snapshotStore.(type) {
-		case *store.ProcessSnapshotStore:
-			server.processes = typed
-		case *store.DockerSnapshotStore:
-			server.docker = typed
-		case *store.AlertStore:
-			alertStore = typed
-		case *k8s.Service:
-			k8sService = typed
-		case TerminalHub:
-			server.terminalHub = typed
-			if ops, ok := snapshotStore.(NodeOperations); ok {
-				server.agentOps = ops
-			}
-			if disconnecter, ok := snapshotStore.(NodeDisconnecter); ok {
-				server.disconnecter = disconnecter
-			}
-			if diagnostics, ok := snapshotStore.(ConnectionDiagnosticsProvider); ok {
-				server.diagnostics = diagnostics
-			}
-			if capabilities, ok := snapshotStore.(TaskRunnerCapabilityProvider); ok {
-				server.taskCapabilities = capabilities
-			}
-		case TerminalConfig:
-			server.terminalEnabled = typed.Enabled
-		case SettingsConfig:
-			server.settings = typed.Store
-			if typed.DefaultMetricsRetention > 0 {
-				server.defaultMetricsRetention = typed.DefaultMetricsRetention
-			}
-		case UptimeConfig:
-			server.uptime = typed.Store
-			server.uptimeChecker = typed.Checker
-		case AutomationConfig:
-			server.automation = typed.Store
-			server.automationRunner = typed.Runner
-		case ServiceCenterConfig:
-			server.serviceCenter = typed.Facade
-		case AuthConfig:
-			server.auth = NewAuthenticator(typed)
-		case *Authenticator:
-			server.auth = typed
-		case *serveraudit.Store:
-			server.audit = typed
-		case *logbuffer.Buffer:
-			server.serverLogs = typed
-		case AIConfig:
-			server.ai = typed.Service
-		case NodeOperations:
-			server.agentOps = typed
-		case TaskRunnerCapabilityProvider:
-			server.taskCapabilities = typed
-		}
+type RouterDependencies struct {
+	Nodes            *store.NodeStore
+	Metrics          *store.MetricStore
+	Processes        *store.ProcessSnapshotStore
+	Docker           *store.DockerSnapshotStore
+	Alerts           *store.AlertStore
+	Kubernetes       *k8s.Service
+	TerminalHub      TerminalHub
+	AgentOperations  NodeOperations
+	Disconnecter     NodeDisconnecter
+	Diagnostics      ConnectionDiagnosticsProvider
+	TaskCapabilities TaskRunnerCapabilityProvider
+	Terminal         TerminalConfig
+	Settings         SettingsConfig
+	Uptime           UptimeConfig
+	Automation       AutomationConfig
+	ServiceCenter    ServiceCenterConfig
+	AI               AIConfig
+	Auth             AuthConfig
+	Authenticator    *Authenticator
+	Audit            *serveraudit.Store
+	ServerLogs       *logbuffer.Buffer
+}
+
+func NewRouter(deps RouterDependencies) *http.ServeMux {
+	auth := deps.Authenticator
+	if auth == nil {
+		auth = NewAuthenticator(deps.Auth)
 	}
+	server := &Server{
+		nodes:                   deps.Nodes,
+		organizations:           store.NewNodeOrganizationStoreWithDialect(deps.Nodes.DB(), deps.Nodes.Dialect()),
+		metrics:                 deps.Metrics,
+		processes:               deps.Processes,
+		docker:                  deps.Docker,
+		terminalEnabled:         deps.Terminal.Enabled,
+		terminalHub:             deps.TerminalHub,
+		agentOps:                deps.AgentOperations,
+		disconnecter:            deps.Disconnecter,
+		diagnostics:             deps.Diagnostics,
+		taskCapabilities:        deps.TaskCapabilities,
+		automation:              deps.Automation.Store,
+		automationRunner:        deps.Automation.Runner,
+		settings:                deps.Settings.Store,
+		uptime:                  deps.Uptime.Store,
+		uptimeChecker:           deps.Uptime.Checker,
+		defaultMetricsRetention: 6 * time.Hour,
+		terminalTokens:          make(map[string]terminalToken),
+		auth:                    auth,
+		audit:                   deps.Audit,
+		serviceCenter:           deps.ServiceCenter.Facade,
+		serverLogs:              deps.ServerLogs,
+		ai:                      deps.AI.Service,
+	}
+	if deps.Settings.DefaultMetricsRetention > 0 {
+		server.defaultMetricsRetention = deps.Settings.DefaultMetricsRetention
+	}
+	alertStore := deps.Alerts
+	k8sService := deps.Kubernetes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/auth/session", server.handleAuthSession)
 	mux.HandleFunc("/api/auth/login", server.handleAuthLogin)

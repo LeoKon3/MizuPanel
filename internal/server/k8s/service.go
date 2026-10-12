@@ -33,6 +33,8 @@ type contextAgentHub interface {
 	SendToNodeWithContext(ctx context.Context, nodeID string, message interface{}, timeout time.Duration) (json.RawMessage, error)
 }
 
+const k8sResourceRequestTimeout = 30 * time.Second
+
 // NewService 创建业务逻辑层
 func NewService(store *Store, hub AgentHub) *Service {
 	return &Service{
@@ -115,7 +117,7 @@ func (s *Service) ConnectCluster(ctx context.Context, req *ConnectClusterRequest
 	}
 
 	// 3. 保存集群信息到数据库
-	now := time.Now()
+	now := time.Now().UTC()
 	cluster := &Cluster{
 		ID:                clusterID,
 		Name:              req.Name,
@@ -123,11 +125,11 @@ func (s *Service) ConnectCluster(ctx context.Context, req *ConnectClusterRequest
 		KubeconfigPath:    req.KubeconfigPath,
 		KubeconfigContent: req.KubeconfigContent,
 		Context:           req.Context,
-		Status:            "online",
+		Status:            ClusterStatusUnknown,
+		HealthReason:      HealthReasonChecking,
 		Version:           agentResp.ClusterInfo.Version,
 		NodeCount:         agentResp.ClusterInfo.NodeCount,
 		NamespaceCount:    agentResp.ClusterInfo.NamespaceCount,
-		LastSeenAt:        now,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -153,7 +155,12 @@ func (s *Service) GetCluster(id string) (*Cluster, error) {
 
 // GetClusterWithNodeInfo 获取集群详情（包含节点信息）
 func (s *Service) GetClusterWithNodeInfo(id string) (*PublicClusterWithNode, error) {
-	return s.store.GetClusterWithNodeInfo(id)
+	cluster, err := s.store.GetClusterWithNodeInfo(id)
+	if err != nil {
+		return nil, err
+	}
+	s.applyEffectiveHealth(cluster)
+	return cluster, nil
 }
 
 // ListClusters 获取集群列表
@@ -163,7 +170,26 @@ func (s *Service) ListClusters() ([]*Cluster, error) {
 
 // ListClustersWithNodeInfo 获取集群列表（包含节点信息）
 func (s *Service) ListClustersWithNodeInfo() ([]*PublicClusterWithNode, error) {
-	return s.store.ListClustersWithNodeInfo()
+	clusters, err := s.store.ListClustersWithNodeInfo()
+	if err != nil {
+		return nil, err
+	}
+	for _, cluster := range clusters {
+		s.applyEffectiveHealth(cluster)
+	}
+	return clusters, nil
+}
+
+func (s *Service) applyEffectiveHealth(cluster *PublicClusterWithNode) {
+	if cluster == nil {
+		return
+	}
+	if !s.hub.IsNodeOnline(cluster.NodeID) {
+		cluster.Status = ClusterStatusOffline
+		cluster.HealthReason = HealthReasonAgentOffline
+		return
+	}
+	cluster.Status, cluster.HealthReason = EffectiveClusterStatus(cluster.Status, cluster.HealthReason, ClusterStatusOnline, timeValue(cluster.HealthCheckedAt), time.Now().UTC())
 }
 
 // DeleteCluster 删除集群
@@ -202,7 +228,7 @@ func (s *Service) GetPods(ctx context.Context, clusterID, namespace string) ([]p
 	if s.debug {
 		log.Printf("[debug][server][k8s] resource start type=%s request_id=%s cluster_id=%s node_id=%s namespace=%s", agentReq.Type, requestID, clusterID, cluster.NodeID, namespace)
 	}
-	rawResp, err := s.hub.SendToNodeWithTimeout(cluster.NodeID, agentReq, 15*time.Second)
+	rawResp, err := s.sendToNode(ctx, cluster.NodeID, agentReq, k8sResourceRequestTimeout)
 	if err != nil {
 		if s.debug {
 			log.Printf("[debug][server][k8s] resource done type=%s request_id=%s cluster_id=%s node_id=%s namespace=%s elapsed=%s error=%v", agentReq.Type, requestID, clusterID, cluster.NodeID, namespace, time.Since(start), err)
@@ -324,7 +350,11 @@ func (s *Service) sendToNode(ctx context.Context, nodeID string, message interfa
 }
 
 func (s *Service) GetSummary(ctx context.Context, clusterID string) (*protocol.K8sResourceSummary, error) {
-	rawResp, _, err := s.resourceRequest(ctx, clusterID, "", protocol.MessageTypeK8sGetSummary, 15*time.Second)
+	return s.getSummary(ctx, clusterID, k8sResourceRequestTimeout)
+}
+
+func (s *Service) getSummary(ctx context.Context, clusterID string, timeout time.Duration) (*protocol.K8sResourceSummary, error) {
+	rawResp, _, err := s.resourceRequest(ctx, clusterID, "", protocol.MessageTypeK8sGetSummary, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +369,7 @@ func (s *Service) GetSummary(ctx context.Context, clusterID string) (*protocol.K
 }
 
 func (s *Service) GetNamespaces(ctx context.Context, clusterID string) ([]protocol.K8sNamespace, error) {
-	rawResp, _, err := s.resourceRequest(ctx, clusterID, "", protocol.MessageTypeK8sGetNamespaces, 15*time.Second)
+	rawResp, _, err := s.resourceRequest(ctx, clusterID, "", protocol.MessageTypeK8sGetNamespaces, k8sResourceRequestTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +384,7 @@ func (s *Service) GetNamespaces(ctx context.Context, clusterID string) ([]protoc
 }
 
 func (s *Service) GetNodes(ctx context.Context, clusterID string) ([]protocol.K8sNode, error) {
-	rawResp, _, err := s.resourceRequest(ctx, clusterID, "", protocol.MessageTypeK8sGetNodes, 15*time.Second)
+	rawResp, _, err := s.resourceRequest(ctx, clusterID, "", protocol.MessageTypeK8sGetNodes, k8sResourceRequestTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +399,7 @@ func (s *Service) GetNodes(ctx context.Context, clusterID string) ([]protocol.K8
 }
 
 func (s *Service) GetDeployments(ctx context.Context, clusterID, namespace string) ([]protocol.K8sDeployment, error) {
-	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetDeployments, 15*time.Second)
+	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetDeployments, k8sResourceRequestTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +414,7 @@ func (s *Service) GetDeployments(ctx context.Context, clusterID, namespace strin
 }
 
 func (s *Service) GetStatefulSets(ctx context.Context, clusterID, namespace string) ([]protocol.K8sStatefulSet, error) {
-	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetStatefulSets, 15*time.Second)
+	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetStatefulSets, k8sResourceRequestTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +429,7 @@ func (s *Service) GetStatefulSets(ctx context.Context, clusterID, namespace stri
 }
 
 func (s *Service) GetDaemonSets(ctx context.Context, clusterID, namespace string) ([]protocol.K8sDaemonSet, error) {
-	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetDaemonSets, 15*time.Second)
+	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetDaemonSets, k8sResourceRequestTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +444,7 @@ func (s *Service) GetDaemonSets(ctx context.Context, clusterID, namespace string
 }
 
 func (s *Service) GetServices(ctx context.Context, clusterID, namespace string) ([]protocol.K8sService, error) {
-	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetServices, 15*time.Second)
+	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetServices, k8sResourceRequestTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +459,7 @@ func (s *Service) GetServices(ctx context.Context, clusterID, namespace string) 
 }
 
 func (s *Service) GetIngresses(ctx context.Context, clusterID, namespace string) ([]protocol.K8sIngress, error) {
-	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetIngresses, 15*time.Second)
+	rawResp, _, err := s.resourceRequest(ctx, clusterID, namespace, protocol.MessageTypeK8sGetIngresses, k8sResourceRequestTimeout)
 	if err != nil {
 		return nil, err
 	}

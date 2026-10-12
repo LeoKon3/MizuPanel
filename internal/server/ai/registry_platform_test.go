@@ -27,6 +27,20 @@ type platformNodeOperationsStub struct {
 	dockerCreateV2Supported bool
 }
 
+func TestK8sClusterAvailabilityUsesEffectiveStatusProjection(t *testing.T) {
+	cluster := &serverk8s.PublicClusterWithNode{
+		PublicCluster: serverk8s.PublicCluster{Status: serverk8s.ClusterStatusOnline},
+		NodeStatus:    serverk8s.ClusterStatusOffline,
+	}
+
+	if !k8sClusterAvailable(cluster) {
+		t.Fatal("expected an online effective cluster projection to be available")
+	}
+	if state := k8sClusterState(cluster); state != serverk8s.ClusterStatusOnline {
+		t.Fatalf("effective cluster state = %q, want %q", state, serverk8s.ClusterStatusOnline)
+	}
+}
+
 func (platformNodeOperationsStub) Reboot(context.Context, string) (protocol.RebootResponse, error) {
 	return protocol.RebootResponse{}, nil
 }

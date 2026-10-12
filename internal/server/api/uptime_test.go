@@ -70,7 +70,7 @@ func testUptimeRouter(t *testing.T, auth AuthConfig) (*http.ServeMux, *store.Upt
 	metrics := store.NewMetricStore(database)
 	monitors := store.NewUptimeStore(database)
 	checker := &apiUptimeChecker{monitors: monitors, probe: store.UptimeProbeResult{Success: true, StatusCode: 200, LatencyMS: 12}}
-	router := NewRouter(nodes, metrics, UptimeConfig{Store: monitors, Checker: checker}, auth)
+	router := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Uptime: UptimeConfig{Store: monitors, Checker: checker}, Auth: auth})
 	return router, monitors, checker, database
 }
 

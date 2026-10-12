@@ -435,7 +435,7 @@ func (r *Registry) collectPlatformSources(ctx context.Context, addSource func(st
 	} else {
 		items := make([]incidentEvidence, 0, 5)
 		for _, cluster := range clusters {
-			if cluster == nil || (strings.EqualFold(cluster.Status, "online") && strings.EqualFold(cluster.NodeStatus, "online")) {
+			if cluster == nil || k8sClusterAvailable(cluster) {
 				continue
 			}
 			if cluster == nil {
@@ -472,7 +472,7 @@ func (r *Registry) collectKubernetesSources(ctx context.Context, clusterID strin
 		addSource("kubernetes", false, incidentReason(err), nil)
 		return
 	}
-	if !strings.EqualFold(cluster.Status, "online") || !strings.EqualFold(cluster.NodeStatus, "online") {
+	if !k8sClusterAvailable(cluster) {
 		addSource("kubernetes", false, "cluster_unavailable", []incidentEvidence{{Kind: "k8s_cluster_unavailable", Severity: "critical", Confidence: "high", ObservedAt: incidentObservedAt(cluster.UpdatedAt), Summary: "Kubernetes 集群或关联节点不可用", Source: "kubernetes", ResourceType: "k8s_cluster", ResourceID: cluster.ID, RouteKey: "k8s_cluster"}})
 		return
 	}

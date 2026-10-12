@@ -929,11 +929,13 @@ export type K8sCluster = {
   node_id: string
   node_name: string
   node_ip: string
-  node_status: 'online' | 'offline'  // Agent 节点状态
+  node_status: 'online' | 'offline' | string  // Agent 节点状态
   node_last_seen_at?: string
   kubeconfig_path?: string
   context?: string
-  status: 'online' | 'offline'  // K8s API 连接状态
+  status: 'online' | 'offline' | 'unknown'  // K8s API 有效状态
+  health_reason?: string
+  health_checked_at?: string
   version?: string
   node_count?: number
   namespace_count?: number

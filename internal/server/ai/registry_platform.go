@@ -18,37 +18,6 @@ const (
 	maxDiagnosisSignals = 20
 )
 
-type nodeReadArguments struct {
-	NodeID string `json:"node_id"`
-}
-
-type nodeLimitArguments struct {
-	NodeID string `json:"node_id"`
-	Limit  int    `json:"limit"`
-}
-
-type k8sResourceArguments struct {
-	ClusterID string `json:"cluster_id"`
-	Resource  string `json:"resource"`
-	Namespace string `json:"namespace"`
-	Limit     int    `json:"limit"`
-}
-
-type automationRunsArguments struct {
-	Status string `json:"status"`
-	NodeID string `json:"node_id"`
-	Limit  int    `json:"limit"`
-}
-
-type auditEventsArguments struct {
-	Module string `json:"module"`
-	Action string `json:"action"`
-	NodeID string `json:"node_id"`
-	Result string `json:"result"`
-	Query  string `json:"query"`
-	Limit  int    `json:"limit"`
-}
-
 func (r *Registry) registerPlatformReadTools() {
 	r.add(registeredTool{
 		definition: objectDefinition("get_docker_snapshot", "Read the latest bounded Docker container snapshot for one node.", map[string]any{
@@ -506,6 +475,20 @@ func (r *Registry) k8sCluster(id string) (*k8s.PublicClusterWithNode, error) {
 		return nil, ErrInvalidArguments
 	}
 	return cluster, nil
+}
+
+func k8sClusterAvailable(cluster *k8s.PublicClusterWithNode) bool {
+	return cluster != nil && cluster.Status == k8s.ClusterStatusOnline
+}
+
+func k8sClusterState(cluster *k8s.PublicClusterWithNode) string {
+	if cluster == nil {
+		return k8s.ClusterStatusUnknown
+	}
+	if cluster.Status == "" {
+		return k8s.ClusterStatusUnknown
+	}
+	return cluster.Status
 }
 
 func normalizedReadLimit(limit int) int {

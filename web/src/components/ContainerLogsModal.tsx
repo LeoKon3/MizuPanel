@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, X } from 'lucide-react'
 import type { ContainerLogsData, ContainerLogsError, ContainerLogsExit, ContainerLogsRequest, ContainerLogsResponse, ContainerLogsStop } from '../types'
+import { splitLiteralMatches } from '../lib/highlight'
 
 interface ContainerLogsModalProps {
   nodeId: string
@@ -167,20 +168,15 @@ export default function ContainerLogsModal({
     setLogContent([])
   }
 
-  const highlightText = (text: string, query: string) => {
-    if (!query.trim()) return text
-
-    const parts = text.split(new RegExp(`(${query})`, 'gi'))
-    return parts.map((part, index) =>
-      part.toLowerCase() === query.toLowerCase() ? (
-        <span key={index} className="bg-yellow-300 text-black">
-          {part}
-        </span>
-      ) : (
-        part
-      )
+  const highlightText = (text: string, query: string) => splitLiteralMatches(text, query).map((part, index) =>
+    part.highlighted ? (
+      <span key={index} className="bg-yellow-300 text-black">
+        {part.text}
+      </span>
+    ) : (
+      <span key={index}>{part.text}</span>
     )
-  }
+  )
 
   const filteredLogs = searchQuery.trim()
     ? logContent.filter((line) => line.text.toLowerCase().includes(searchQuery.toLowerCase()))

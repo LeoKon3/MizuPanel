@@ -394,8 +394,99 @@ func TestRunDispatchesAllK8sResourceRequests(t *testing.T) {
 	}
 }
 
+func TestK8sDispatchDoesNotBlockSubsequentRequests(t *testing.T) {
+	started := make(chan string, 2)
+	releaseFirst := make(chan struct{})
+	handler := fakeKubectlHandler{handle: func(_ context.Context, msgType string, _ json.RawMessage, send func(interface{}) error) error {
+		started <- msgType
+		if msgType == protocol.MessageTypeK8sGetSummary {
+			<-releaseFirst
+		}
+		return send(map[string]string{"type": msgType + "_result", "request_id": msgType})
+	}}
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		var hello protocol.HelloMessage
+		if err := conn.ReadJSON(&hello); err != nil {
+			t.Errorf("read hello: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(protocol.HelloAckMessage{Type: protocol.MessageTypeHelloAck, NodeID: "node-1", Interval: 1}); err != nil {
+			t.Errorf("write ack: %v", err)
+			return
+		}
+		var metric protocol.MetricsMessage
+		if err := conn.ReadJSON(&metric); err != nil {
+			t.Errorf("read metric: %v", err)
+			return
+		}
+		for _, msgType := range []string{protocol.MessageTypeK8sGetSummary, protocol.MessageTypeK8sGetNamespaces} {
+			if err := conn.WriteJSON(protocol.K8sResourceRequest{Type: msgType, RequestID: msgType, ClusterID: "cluster-1"}); err != nil {
+				t.Errorf("write request: %v", err)
+				return
+			}
+		}
+		var response map[string]any
+		if err := conn.ReadJSON(&response); err != nil {
+			t.Errorf("read response: %v", err)
+		}
+		close(releaseFirst)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	client := NewClient("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	client.SetKubectlHandler(handler)
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Run(ctx, protocol.HelloMessage{Type: protocol.MessageTypeHello, Hostname: "node"}, time.Hour, func(nodeID string, timestamp int64) (protocol.MetricsMessage, error) {
+			return protocol.MetricsMessage{Type: protocol.MessageTypeMetrics, NodeID: nodeID, Timestamp: timestamp}, nil
+		})
+	}()
+
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		select {
+		case msgType := <-started:
+			seen[msgType] = true
+		case <-time.After(time.Second):
+			close(releaseFirst)
+			cancel()
+			t.Fatalf("K8s requests were blocked; dispatched=%v", seen)
+		}
+	}
+	if !seen[protocol.MessageTypeK8sGetSummary] || !seen[protocol.MessageTypeK8sGetNamespaces] {
+		t.Fatalf("dispatched types = %v", seen)
+	}
+	close(releaseFirst)
+	cancel()
+	if err := <-done; err != nil && err != context.Canceled && !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Fatalf("Run returned error: %v", err)
+	}
+}
+
+func TestK8sRequestTimeoutLeavesTransportMargin(t *testing.T) {
+	if got := k8sRequestTimeout(protocol.MessageTypeK8sGetSummary); got != 20*time.Second {
+		t.Fatalf("resource timeout = %s, want 20s", got)
+	}
+	if got := k8sRequestTimeout(protocol.MessageTypeK8sClusterConnect); got != 10*time.Second {
+		t.Fatalf("connect timeout = %s, want 10s", got)
+	}
+	if got := k8sRequestTimeout(protocol.MessageTypeK8sApplyManifest); got != 30*time.Second {
+		t.Fatalf("apply timeout = %s, want 30s", got)
+	}
+}
+
 type fakeKubectlHandler struct {
 	handled chan<- string
+	handle  func(context.Context, string, json.RawMessage, func(interface{}) error) error
 }
 
 type fakeTaskRunner struct {
@@ -406,7 +497,10 @@ func (r fakeTaskRunner) Run(ctx context.Context, request protocol.ScriptExecutio
 	return r.run(ctx, request)
 }
 
-func (h fakeKubectlHandler) Handle(_ context.Context, msgType string, _ json.RawMessage, _ func(interface{}) error) error {
+func (h fakeKubectlHandler) Handle(ctx context.Context, msgType string, data json.RawMessage, send func(interface{}) error) error {
+	if h.handle != nil {
+		return h.handle(ctx, msgType, data, send)
+	}
 	h.handled <- msgType
 	return nil
 }

@@ -42,13 +42,11 @@ func newServiceAPIFixtureWithAuth(t *testing.T, auth AuthConfig) serviceAPIFixtu
 	nodes := store.NewNodeStore(database)
 	serviceStore := servicecenter.NewStore(database, serverdb.DialectSQLite)
 	auditStore := serveraudit.NewStore(database, serverdb.DialectSQLite)
-	router := NewRouter(
-		nodes,
-		store.NewMetricStore(database),
-		ServiceCenterConfig{Facade: servicecenter.NewFacade(serviceStore, nil, nil)},
-		auth,
-		auditStore,
-	)
+	router := NewRouter(RouterDependencies{
+		Nodes: nodes, Metrics: store.NewMetricStore(database),
+		ServiceCenter: ServiceCenterConfig{Facade: servicecenter.NewFacade(serviceStore, nil, nil)},
+		Auth:          auth, Audit: auditStore,
+	})
 	return serviceAPIFixture{handler: serveraudit.Middleware(auditStore, router), db: database}
 }
 

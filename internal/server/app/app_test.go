@@ -53,6 +53,29 @@ type hangingSSHInstallRunner struct {
 	started chan context.Context
 }
 
+type recordingContext struct {
+	done     chan struct{}
+	observed chan struct{}
+}
+
+func (c *recordingContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *recordingContext) Done() <-chan struct{} {
+	select {
+	case c.observed <- struct{}{}:
+	default:
+	}
+	return c.done
+}
+func (c *recordingContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+func (c *recordingContext) Value(any) any { return nil }
+
 func (f *blockingSSHInstallRunner) Install(ctx context.Context, request sshops.InstallRequest, emit sshops.EmitFunc) (string, error) {
 	f.started <- ctx
 	select {
@@ -174,6 +197,80 @@ func TestNewHandlerWiresAutomationRoutes(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/automation/scripts", nil))
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"scripts":[]`) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestNewHandlerBackgroundTasksUseInjectedContext(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	done := make(chan struct{})
+	close(done)
+	ctx := &recordingContext{done: done, observed: make(chan struct{}, 1)}
+	handler := NewHandler(Dependencies{
+		Context:             ctx,
+		Nodes:               store.NewNodeStore(database),
+		Metrics:             store.NewMetricStore(database),
+		Uptime:              store.NewUptimeStore(database),
+		UptimeSweepInterval: time.Millisecond,
+	})
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/uptime/monitors", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	select {
+	case <-ctx.observed:
+	case <-time.After(time.Second):
+		t.Fatal("background uptime engine did not observe injected context")
+	}
+}
+
+func TestHandlerCloseAfterRootContextCancellationIsIdempotent(t *testing.T) {
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	if err := serverdb.Migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	handler := NewHandler(Dependencies{
+		Context: ctx,
+		Nodes:   store.NewNodeStore(database),
+		Metrics: store.NewMetricStore(database),
+	})
+	var compatible http.Handler = handler
+	if compatible == nil {
+		t.Fatal("NewHandler no longer implements http.Handler")
+	}
+
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		_ = handler.Close()
+		_ = handler.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Handler.Close blocked after root context cancellation")
+	}
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/agent/ws", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("agent websocket status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

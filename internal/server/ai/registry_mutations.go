@@ -24,41 +24,6 @@ const (
 
 var dockerContainerNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
-type createScheduledTaskArguments struct {
-	Name               string     `json:"name"`
-	ScriptID           int64      `json:"script_id"`
-	NodeIDs            []string   `json:"node_ids"`
-	ScheduleType       string     `json:"schedule_type"`
-	RunAt              *time.Time `json:"run_at"`
-	CronExpression     string     `json:"cron_expression"`
-	Timezone           string     `json:"timezone"`
-	Enabled            *bool      `json:"enabled"`
-	TimeoutSeconds     int        `json:"timeout_seconds"`
-	NotificationPolicy string     `json:"notification_policy"`
-}
-
-type createDockerContainerArguments struct {
-	NodeID        string                                `json:"node_id"`
-	Image         string                                `json:"image"`
-	Name          string                                `json:"name"`
-	AutoName      bool                                  `json:"auto_name"`
-	RestartPolicy string                                `json:"restart_policy"`
-	NetworkMode   string                                `json:"network_mode"`
-	Ports         []protocol.DockerContainerPort        `json:"ports"`
-	Environment   []protocol.DockerContainerEnvironment `json:"environment"`
-	Mounts        []protocol.DockerContainerMount       `json:"mounts"`
-	Start         bool                                  `json:"start"`
-}
-
-type createK8sDeploymentArguments struct {
-	ClusterID     string `json:"cluster_id"`
-	Namespace     string `json:"namespace"`
-	Name          string `json:"name"`
-	Image         string `json:"image"`
-	Replicas      int32  `json:"replicas"`
-	ContainerPort int32  `json:"container_port"`
-}
-
 func (r *Registry) registerCreationTools() {
 	r.add(registeredTool{
 		definition: objectDefinition("create_scheduled_task", "Create a one-time or recurring scheduled task from an existing saved script after confirmation. Use schedule_type=once with a future RFC3339 run_at, or schedule_type=cron with a five-field Cron expression and IANA timezone. Before calling, ask for every creation setting. Script content and shell commands are not accepted.", map[string]any{
@@ -246,7 +211,7 @@ func (r *Registry) registerCreationTools() {
 			if err != nil {
 				return nil, ToolTarget{}, err
 			}
-			if cluster.NodeStatus != "online" {
+			if !k8sClusterAvailable(cluster) {
 				return nil, ToolTarget{}, ErrUnsupportedTool
 			}
 			port := (*int32)(nil)

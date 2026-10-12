@@ -35,3 +35,24 @@ web/tsconfig.tsbuildinfo
 # OS/editor files
 .DS_Store
 skills-lock.json
+
+# Files that do not affect the production image or Go/Frontend builds
+README.md
+README.en.md
+CHANGELOG.md
+RELEASING.md
+AGENT.md
+AGENTS.md
+CLAUDE.md
+Makefile
+docker-compose*.yml
+docs
+examples
+scripts
+systemd
+assets
+**/*_test.go
+
+# Release image builds can provide verified frontend assets from the workflow artifact.
+!web/dist/
+!web/dist/**

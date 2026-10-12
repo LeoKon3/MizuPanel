@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import {
@@ -100,6 +100,16 @@ function mockDetailAPI() {
   vi.mocked(fetchK8sIngresses).mockResolvedValue({ success: true, ingresses: [] })
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
+  })
+  return { promise, resolve, reject }
+}
+
 async function clickDetailTab(label: string) {
   const tabLabels = await screen.findAllByText(label)
   const tabButton = tabLabels.map((item) => item.closest('button')).find(Boolean)
@@ -197,5 +207,53 @@ describe('K8s filtering UX', () => {
     const clusterGrid = screen.getByTestId('k8s-cluster-grid')
     expect(within(clusterGrid).getByText('staging-west')).toBeInTheDocument()
     expect(within(clusterGrid).queryByText('prod-east')).not.toBeInTheDocument()
+  })
+
+  test('refreshKey performs a local cluster list refresh without remounting the page', async () => {
+    vi.mocked(fetchK8sClusters)
+      .mockResolvedValueOnce({ clusters: [cluster] })
+      .mockResolvedValueOnce({ clusters: [{ ...cluster, id: 'cluster-2', name: 'new-cluster' }] })
+
+    const { rerender } = render(<K8sClustersPage onConnectCluster={vi.fn()} refreshKey={0} />)
+    expect(await screen.findByText('prod-east')).toBeInTheDocument()
+
+    rerender(<K8sClustersPage onConnectCluster={vi.fn()} refreshKey={1} />)
+    expect(await screen.findByText('new-cluster')).toBeInTheDocument()
+    expect(screen.queryByText('prod-east')).not.toBeInTheDocument()
+    expect(fetchK8sClusters).toHaveBeenCalledTimes(2)
+  })
+
+  test('ignores stale cluster list polling responses', async () => {
+    vi.useFakeTimers()
+    try {
+      const first = deferred<{ clusters: K8sCluster[] }>()
+      const second = deferred<{ clusters: K8sCluster[] }>()
+      vi.mocked(fetchK8sClusters)
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise)
+
+      render(<K8sClustersPage onConnectCluster={vi.fn()} />)
+      expect(fetchK8sClusters).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30000)
+      })
+      expect(fetchK8sClusters).toHaveBeenCalledTimes(2)
+
+      await act(async () => {
+        second.resolve({ clusters: [{ ...cluster, status: 'offline', health_reason: 'api_unreachable' }] })
+        await Promise.resolve()
+      })
+      expect(screen.getByText('离线')).toBeInTheDocument()
+
+      await act(async () => {
+        first.resolve({ clusters: [cluster] })
+        await Promise.resolve()
+      })
+      expect(screen.getByText('离线')).toBeInTheDocument()
+      expect(screen.queryByText('在线')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

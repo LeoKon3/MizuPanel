@@ -1,18 +1,12 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"math"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mizupanel/mizupanel/internal/protocol"
 	serveraudit "github.com/mizupanel/mizupanel/internal/server/audit"
@@ -300,10 +294,6 @@ func (r *Registry) registerReadTools() {
 		},
 	})
 
-	type metricsArguments struct {
-		NodeID       string `json:"node_id"`
-		RangeMinutes int    `json:"range_minutes"`
-	}
 	r.add(registeredTool{
 		definition: objectDefinition("get_node_metrics", "Get bounded current and historical aggregate metrics for one node.", map[string]any{
 			"node_id":       map[string]any{"type": "string", "maxLength": 191},
@@ -341,10 +331,6 @@ func (r *Registry) registerReadTools() {
 		},
 	})
 
-	type alertsArguments struct {
-		Status string `json:"status"`
-		Limit  int    `json:"limit"`
-	}
 	r.add(registeredTool{
 		definition: objectDefinition("list_alerts", "List active or recent alerts without notification secrets.", map[string]any{
 			"status": map[string]any{"type": "string", "enum": []string{"active", "recent"}},
@@ -443,12 +429,6 @@ func (r *Registry) registerReadTools() {
 		},
 	})
 
-	type logsArguments struct {
-		Source      string `json:"source"`
-		NodeID      string `json:"node_id"`
-		ServiceName string `json:"service_name"`
-		Lines       int    `json:"lines"`
-	}
 	r.add(registeredTool{
 		definition: objectDefinition("get_log_snapshot", "Read one bounded server, Agent, or Systemd log snapshot. Follow and host file paths are not supported.", map[string]any{
 			"source":       map[string]any{"type": "string", "enum": []string{"server", "agent", "systemd"}},
@@ -545,7 +525,10 @@ func (r *Registry) registerReadTools() {
 			}
 			result := make([]map[string]any, 0, len(clusters))
 			for _, cluster := range clusters {
-				result = append(result, map[string]any{
+				if cluster == nil {
+					continue
+				}
+				entry := map[string]any{
 					"id":              cluster.ID,
 					"name":            boundedString(cluster.Name, 128),
 					"status":          cluster.Status,
@@ -554,7 +537,12 @@ func (r *Registry) registerReadTools() {
 					"namespace_count": cluster.NamespaceCount,
 					"node_name":       boundedString(cluster.NodeName, 128),
 					"node_status":     cluster.NodeStatus,
-				})
+					"health_reason":   cluster.HealthReason,
+				}
+				if cluster.HealthCheckedAt != nil {
+					entry["health_checked_at"] = *cluster.HealthCheckedAt
+				}
+				result = append(result, entry)
 			}
 			return SafeToolResult{Data: map[string]any{"clusters": result}, Summary: "Kubernetes 集群查询完成"}, nil
 		},
@@ -563,16 +551,13 @@ func (r *Registry) registerReadTools() {
 }
 
 func (r *Registry) registerConfirmTools() {
-	type nodeArguments struct {
-		NodeID string `json:"node_id"`
-	}
 	addNodeOperation := func(name, description string, execute func(context.Context, string) (bool, error)) {
 		r.add(registeredTool{
 			definition: objectDefinition(name, description, map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}}, []string{"node_id"}), risk: RiskConfirm,
 			capability: capabilityAgentNode,
 			metadata:   classifiedPolicyMetadata("node", name, "high", "node"),
 			validate: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
-				var args nodeArguments
+				var args nodeReadArguments
 				if err := strictArguments(raw, &args); err != nil {
 					return nil, ToolTarget{}, ErrInvalidArguments
 				}
@@ -583,7 +568,7 @@ func (r *Registry) registerConfirmTools() {
 				return normalizedArguments(args), ToolTarget{Type: "node", ID: node.ID, Name: node.Name, NodeID: node.ID}, nil
 			},
 			execute: func(ctx context.Context, raw json.RawMessage) (SafeToolResult, error) {
-				var args nodeArguments
+				var args nodeReadArguments
 				_ = json.Unmarshal(raw, &args)
 				ok, err := execute(ctx, args.NodeID)
 				if err != nil || !ok {
@@ -608,11 +593,6 @@ func (r *Registry) registerConfirmTools() {
 		return response.Accepted, err
 	})
 
-	type containerArguments struct {
-		NodeID      string `json:"node_id"`
-		ContainerID string `json:"container_id"`
-		Action      string `json:"action"`
-	}
 	r.add(registeredTool{
 		definition: objectDefinition("docker_container_action", "Start, stop, or restart one existing Docker container after confirmation.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "container_id": map[string]any{"type": "string", "maxLength": 191}, "action": map[string]any{"type": "string", "enum": []string{"start", "stop", "restart"}}}, []string{"node_id", "container_id", "action"}), risk: RiskConfirm,
 		capability: capabilityDockerAgent,
@@ -670,12 +650,6 @@ func (r *Registry) registerConfirmTools() {
 		},
 	})
 
-	type composeArguments struct {
-		NodeID      string `json:"node_id"`
-		ProjectName string `json:"project_name"`
-		ServiceName string `json:"service_name"`
-		Action      string `json:"action"`
-	}
 	r.add(registeredTool{
 		definition: objectDefinition("compose_service_action", "Start, stop, or restart one Compose project or service after confirmation. Delete, pull, build, and logs are unavailable.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "project_name": map[string]any{"type": "string", "maxLength": 191}, "service_name": map[string]any{"type": "string", "maxLength": 191}, "action": map[string]any{"type": "string", "enum": []string{"up", "stop", "restart"}}}, []string{"node_id", "project_name", "action"}), risk: RiskConfirm,
 		capability: capabilityCompose,
@@ -715,11 +689,6 @@ func (r *Registry) registerConfirmTools() {
 		},
 	})
 
-	type systemdArguments struct {
-		NodeID      string `json:"node_id"`
-		ServiceName string `json:"service_name"`
-		Action      string `json:"action"`
-	}
 	r.add(registeredTool{
 		definition: objectDefinition("systemd_service_action", "Start, stop, or restart one Systemd service after confirmation.", map[string]any{"node_id": map[string]any{"type": "string", "maxLength": 191}, "service_name": map[string]any{"type": "string", "maxLength": 255}, "action": map[string]any{"type": "string", "enum": []string{"start", "stop", "restart"}}}, []string{"node_id", "service_name", "action"}), risk: RiskConfirm,
 		capability: capabilitySystemd,
@@ -755,10 +724,6 @@ func (r *Registry) registerConfirmTools() {
 		},
 	})
 
-	type scriptArguments struct {
-		ScriptID int64    `json:"script_id"`
-		NodeIDs  []string `json:"node_ids"`
-	}
 	r.add(registeredTool{
 		definition: objectDefinition("run_saved_script", "Run an existing saved script on 1 to 100 explicit nodes after confirmation. Script text and arguments cannot be supplied.", map[string]any{"script_id": map[string]any{"type": "integer", "minimum": 1}, "node_ids": map[string]any{"type": "array", "minItems": 1, "maxItems": 100, "items": map[string]any{"type": "string", "maxLength": 191}, "uniqueItems": true}}, []string{"script_id", "node_ids"}), risk: RiskConfirm,
 		capability: capabilityAutomation,
@@ -829,170 +794,4 @@ func (r *Registry) onlineNode(ctx context.Context, id string, requireOnline bool
 		return store.Node{}, ErrUnsupportedTool
 	}
 	return node, nil
-}
-
-func noArguments(_ context.Context, raw json.RawMessage) (json.RawMessage, ToolTarget, error) {
-	var args struct{}
-	if err := strictArguments(raw, &args); err != nil {
-		return nil, ToolTarget{}, ErrInvalidArguments
-	}
-	return json.RawMessage(`{}`), ToolTarget{}, nil
-}
-
-func strictArguments(raw json.RawMessage, target any) error {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		raw = json.RawMessage(`{}`)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return ErrInvalidArguments
-	}
-	return nil
-}
-
-func normalizedArguments(value any) json.RawMessage {
-	content, _ := json.Marshal(value)
-	return content
-}
-
-func noArgumentDefinition(name, description string) ToolDefinition {
-	return objectDefinition(name, description, map[string]any{}, nil)
-}
-func objectDefinition(name, description string, properties map[string]any, required []string) ToolDefinition {
-	parameters := map[string]any{"type": "object", "additionalProperties": false, "properties": properties}
-	if len(required) > 0 {
-		parameters["required"] = required
-	}
-	return ToolDefinition{Name: name, Description: description, Parameters: parameters}
-}
-func validIdentifier(value string, maxLength int) bool {
-	value = strings.TrimSpace(value)
-	return value != "" && utf8.ValidString(value) && len(value) <= maxLength && !strings.ContainsAny(value, "\x00\r\n")
-}
-func oneOf(value string, allowed ...string) bool {
-	for _, item := range allowed {
-		if value == item {
-			return true
-		}
-	}
-	return false
-}
-func boundedString(value string, maximum int) string {
-	value = strings.ToValidUTF8(value, "")
-	if len(value) <= maximum {
-		return value
-	}
-	for maximum > 0 && !utf8.RuneStart(value[maximum]) {
-		maximum--
-	}
-	return value[:maximum]
-}
-
-func sanitizeModelText(value string, maximum int) string {
-	value = strings.ToValidUTF8(value, "")
-	value = modelSensitiveHeaderPattern.ReplaceAllString(value, "$1: [REDACTED]")
-	value = modelBearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
-	value = modelNamedSecretPattern.ReplaceAllString(value, "$1=[REDACTED]")
-	value = modelEnvironmentPattern.ReplaceAllString(value, "$1=[REDACTED]")
-	return boundedString(value, maximum)
-}
-func countOnline(nodes []store.Node) int {
-	count := 0
-	for _, node := range nodes {
-		if node.Status == "online" {
-			count++
-		}
-	}
-	return count
-}
-func countMonitorFailures(monitors []store.UptimeMonitor) int {
-	count := 0
-	for _, monitor := range monitors {
-		if monitor.Status != "up" && monitor.Status != "pending" {
-			count++
-		}
-	}
-	return count
-}
-func countUnhealthyServices(services []servicecenter.ServiceSummary) int {
-	count := 0
-	for _, service := range services {
-		if service.Health == servicecenter.HealthUnhealthy || service.Health == servicecenter.HealthDegraded {
-			count++
-		}
-	}
-	return count
-}
-func metricProjection(metric store.Metric) map[string]any {
-	return map[string]any{"cpu_percent": round(metric.CPUUsage), "memory_percent": round(metric.MemoryUsage), "disk_percent": round(metric.DiskUsage), "load_1": round(metric.Load1), "collected_at": metric.CreatedAt}
-}
-func round(value float64) float64 { return math.Round(value*100) / 100 }
-func aggregateMetrics(metrics []store.Metric) map[string]any {
-	if len(metrics) == 0 {
-		return map[string]any{"samples": 0}
-	}
-	var cpu, memory, disk, maxCPU float64
-	for _, metric := range metrics {
-		cpu += metric.CPUUsage
-		memory += metric.MemoryUsage
-		disk += metric.DiskUsage
-		if metric.CPUUsage > maxCPU {
-			maxCPU = metric.CPUUsage
-		}
-	}
-	count := float64(len(metrics))
-	return map[string]any{"samples": len(metrics), "latest": metricProjection(metrics[len(metrics)-1]), "average_cpu_percent": round(cpu / count), "average_memory_percent": round(memory / count), "average_disk_percent": round(disk / count), "max_cpu_percent": round(maxCPU)}
-}
-func safeRemoteError(err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
-	}
-	return fmt.Errorf("remote operation failed")
-}
-func composeTargetExists(projects []protocol.DockerComposeProject, projectName, serviceName string) bool {
-	for _, project := range projects {
-		if project.Name != projectName && project.ManagedProjectID != projectName {
-			continue
-		}
-		if serviceName == "" {
-			return true
-		}
-		for _, service := range project.Services {
-			if service.Name == serviceName {
-				return true
-			}
-		}
-	}
-	return false
-}
-func systemdTargetExists(services []protocol.SystemdService, name string) bool {
-	for _, service := range services {
-		if service.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func dockerContainerTarget(snapshot protocol.DockerSnapshot, found bool, id string) (protocol.ContainerInfo, bool) {
-	if !found || !snapshot.Available {
-		return protocol.ContainerInfo{}, false
-	}
-	for _, container := range snapshot.Containers {
-		if container.ID == id || container.FullID == id || container.Name == id {
-			return container, true
-		}
-	}
-	return protocol.ContainerInfo{}, false
-}
-
-func containerID(container protocol.ContainerInfo) string {
-	if container.FullID != "" {
-		return container.FullID
-	}
-	return container.ID
 }

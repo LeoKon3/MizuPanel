@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { getAlertHistory, getAlertRules, getK8sClusters, getNodeMetrics } from '../api/client'
@@ -47,7 +47,8 @@ const clusters: K8sCluster[] = [
     node_name: 'Server A',
     node_ip: '10.0.0.1',
     node_status: 'offline',
-    status: 'online',
+    status: 'offline',
+    health_reason: 'agent_offline',
     created_at: '2026-08-05T00:00:00Z',
     updated_at: '2026-08-05T00:00:00Z',
   },
@@ -63,6 +64,16 @@ const clusters: K8sCluster[] = [
     updated_at: '2026-08-05T00:00:00Z',
   },
 ]
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
+  })
+  return { promise, resolve, reject }
+}
 
 describe('OverviewPage', () => {
   beforeEach(() => {
@@ -114,5 +125,39 @@ describe('OverviewPage', () => {
     render(<OverviewPage nodes={nodes} onlineNodes={2} onAddServer={vi.fn()} />)
 
     await waitFor(() => expect(screen.getByText('CPU 使用率过高')).toBeInTheDocument())
+  })
+
+  test('ignores stale Kubernetes polling responses', async () => {
+    vi.useFakeTimers()
+    try {
+      const first = deferred<{ clusters: K8sCluster[] }>()
+      const second = deferred<{ clusters: K8sCluster[] }>()
+      vi.mocked(getK8sClusters)
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise)
+
+      render(<OverviewPage nodes={nodes} onlineNodes={2} onAddServer={vi.fn()} />)
+      expect(getK8sClusters).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30000)
+      })
+      expect(getK8sClusters).toHaveBeenCalledTimes(2)
+
+      await act(async () => {
+        second.resolve({ clusters: [clusters[0]] })
+        await Promise.resolve()
+      })
+      expect(screen.getByText('0/1')).toBeInTheDocument()
+
+      await act(async () => {
+        first.resolve({ clusters: [clusters[1]] })
+        await Promise.resolve()
+      })
+      expect(screen.getByText('0/1')).toBeInTheDocument()
+      expect(screen.queryByText('1/1')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

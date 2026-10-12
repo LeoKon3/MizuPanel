@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mizupanel/mizupanel/internal/server/agenthub"
@@ -43,6 +44,7 @@ var agentUninstallScript []byte
 var windowsAgentUninstallScript []byte
 
 type Dependencies struct {
+	Context                context.Context
 	Nodes                  *store.NodeStore
 	Metrics                *store.MetricStore
 	ProcessSnapshots       *store.ProcessSnapshotStore
@@ -66,6 +68,7 @@ type Dependencies struct {
 	AlertCheckInterval     time.Duration
 	UptimeSweepInterval    time.Duration
 	TaskSweepInterval      time.Duration
+	K8sHealthEnabled       bool
 	Debug                  bool
 	SSHJobs                *sshops.Manager
 	SSHRunner              sshops.Runner
@@ -77,7 +80,30 @@ type Dependencies struct {
 	ServerLogs             *logbuffer.Buffer
 }
 
-func NewHandler(deps Dependencies) http.Handler {
+type Handler struct {
+	http.Handler
+	hub       *agenthub.Handler
+	cancel    context.CancelFunc
+	closeOnce sync.Once
+}
+
+func (h *Handler) Close() error {
+	if h == nil {
+		return nil
+	}
+	h.closeOnce.Do(func() {
+		h.cancel()
+		h.hub.Close("服务正在关闭")
+	})
+	return nil
+}
+
+func NewHandler(deps Dependencies) *Handler {
+	parentCtx := deps.Context
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
 	mux := http.NewServeMux()
 	installAuth := agenthub.NewInstallAuthStore()
 	hub := agenthub.NewHandler(deps.Nodes, deps.Metrics, agenthub.Options{
@@ -96,6 +122,10 @@ func NewHandler(deps Dependencies) http.Handler {
 	k8sStore := k8s.NewStore(deps.Nodes.DB())
 	k8sService := k8s.NewService(k8sStore, hub)
 	k8sService.SetDebug(deps.Debug)
+	if deps.K8sHealthEnabled {
+		k8sHealthMonitor := k8s.NewHealthMonitor(k8sService)
+		go k8sHealthMonitor.Run(ctx)
+	}
 	serviceCenter := api.ServiceCenterConfig{}
 	if deps.Services != nil {
 		serviceCenter.Facade = servicecenter.NewFacade(deps.Services, hub, k8sService)
@@ -109,7 +139,7 @@ func NewHandler(deps Dependencies) http.Handler {
 	var taskEngine *servertasks.Engine
 	if deps.Tasks != nil {
 		taskEngine = servertasks.NewEngineWithDependencies(deps.Tasks, deps.Nodes, hub, alerting.NewNotifier(), deps.Audit, servertasks.EngineOptions{SweepInterval: deps.TaskSweepInterval})
-		if err := taskEngine.Initialize(context.Background()); err != nil {
+		if err := taskEngine.Initialize(ctx); err != nil {
 			log.Printf("Warning: failed to recover interrupted automation runs: %v", err)
 		}
 	}
@@ -119,28 +149,49 @@ func NewHandler(deps Dependencies) http.Handler {
 			Alerts: deps.Alerts, Uptime: deps.Uptime, Services: serviceCenter.Facade,
 			ServerLogs: deps.ServerLogs, AgentOps: hub, Automation: taskEngine, Tasks: deps.Tasks, Audit: deps.Audit, Kubernetes: k8sService, KubernetesMutations: k8sService, Settings: deps.Settings})
 		aiConfig.Service = serverai.NewService(deps.AI, serverai.NewSecretManager(deps.AIKeyFile), registry, nil)
-		if err := aiConfig.Service.Initialize(context.Background()); err != nil {
+		if err := aiConfig.Service.Initialize(ctx); err != nil {
 			log.Printf("Warning: AI service initialization failed: %s", serverai.SafeErrorMessage(err))
 		} else {
-			go aiConfig.Service.RunAcceptedOperationVerifier(context.Background())
+			go aiConfig.Service.RunAcceptedOperationVerifier(ctx)
 		}
 	}
-	apiRouter := api.NewRouter(deps.Nodes, deps.Metrics, deps.ProcessSnapshots, deps.DockerSnapshots, deps.Alerts, hub, k8sService, api.TerminalConfig{Enabled: deps.EnableTerminal}, api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention}, api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine}, api.AutomationConfig{Store: deps.Tasks, Runner: taskEngine}, serviceCenter, aiConfig, auth, deps.Audit, deps.ServerLogs)
+	apiRouter := api.NewRouter(api.RouterDependencies{
+		Nodes:            deps.Nodes,
+		Metrics:          deps.Metrics,
+		Processes:        deps.ProcessSnapshots,
+		Docker:           deps.DockerSnapshots,
+		Alerts:           deps.Alerts,
+		Kubernetes:       k8sService,
+		TerminalHub:      hub,
+		AgentOperations:  hub,
+		Disconnecter:     hub,
+		Diagnostics:      hub,
+		TaskCapabilities: hub,
+		Terminal:         api.TerminalConfig{Enabled: deps.EnableTerminal},
+		Settings:         api.SettingsConfig{Store: deps.Settings, DefaultMetricsRetention: deps.MetricsRetention},
+		Uptime:           api.UptimeConfig{Store: deps.Uptime, Checker: uptimeEngine},
+		Automation:       api.AutomationConfig{Store: deps.Tasks, Runner: taskEngine},
+		ServiceCenter:    serviceCenter,
+		AI:               aiConfig,
+		Authenticator:    auth,
+		Audit:            deps.Audit,
+		ServerLogs:       deps.ServerLogs,
+	})
 
 	// Start alerting engine if enabled
 	if deps.AlertingEnabled && deps.Alerts != nil {
 		engine := alerting.NewEngine(deps.Alerts, deps.Metrics, deps.Nodes)
-		if err := engine.Initialize(context.Background()); err != nil {
+		if err := engine.Initialize(ctx); err != nil {
 			log.Printf("Warning: failed to initialize alerting engine state: %v", err)
 		}
-		go startAlertingEngine(context.Background(), engine, deps.AlertCheckInterval)
+		go startAlertingEngine(ctx, engine, deps.AlertCheckInterval)
 	}
 	if uptimeEngine != nil && deps.UptimeSweepInterval > 0 {
 		uptimeEngine.SetSweepInterval(deps.UptimeSweepInterval)
-		go uptimeEngine.Run(context.Background())
+		go uptimeEngine.Run(ctx)
 	}
 	if taskEngine != nil {
-		go taskEngine.Run(context.Background())
+		go taskEngine.Run(ctx)
 	}
 
 	sshJobs := deps.SSHJobs
@@ -168,7 +219,7 @@ func NewHandler(deps Dependencies) http.Handler {
 	mux.Handle("/api/services/", apiRouter)
 	mux.Handle("/api/ai/", apiRouter)
 	mux.HandleFunc("/api/nodes/", auth.Require(func(w http.ResponseWriter, r *http.Request) {
-		if handleSSHUninstallRoute(w, r, deps.Nodes, hub, sshJobs, sshRunner, deps.PublicURL, deps.SSHJobTimeout) {
+		if handleSSHUninstallRoute(w, r, ctx, deps.Nodes, hub, sshJobs, sshRunner, deps.PublicURL, deps.SSHJobTimeout) {
 			return
 		}
 		apiRouter.ServeHTTP(w, r)
@@ -177,7 +228,7 @@ func NewHandler(deps Dependencies) http.Handler {
 		handleInstallCommand(w, r, deps.PublicURL, installAuth)
 	}))
 	mux.HandleFunc("/api/install/ssh", auth.Require(func(w http.ResponseWriter, r *http.Request) {
-		handleSSHInstall(w, r, deps.Nodes, sshJobs, sshRunner, deps.PublicURL, installAuth, deps.SSHJobTimeout, deps.SSHInstallWaitTimeout, deps.SSHInstallPollInterval)
+		handleSSHInstall(w, r, ctx, deps.Nodes, sshJobs, sshRunner, deps.PublicURL, installAuth, deps.SSHJobTimeout, deps.SSHInstallWaitTimeout, deps.SSHInstallPollInterval)
 	}))
 	mux.HandleFunc("/api/install/ssh/", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		handleSSHInstallEvents(w, r, sshJobs)
@@ -193,10 +244,11 @@ func NewHandler(deps Dependencies) http.Handler {
 	if deps.StaticDir != "" {
 		mux.Handle("/", staticHandler(deps.StaticDir))
 	}
-	if deps.Audit == nil {
-		return serveraudit.Middleware(nil, mux)
+	auditHandler := serveraudit.Middleware(nil, mux)
+	if deps.Audit != nil {
+		auditHandler = serveraudit.Middleware(deps.Audit, mux)
 	}
-	return serveraudit.Middleware(deps.Audit, mux)
+	return &Handler{Handler: auditHandler, hub: hub, cancel: cancel}
 }
 
 func agentInstallScriptHandler(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +345,7 @@ type sshInstallRequest struct {
 	Mode           string `json:"mode"`
 }
 
-func handleSSHInstall(w http.ResponseWriter, r *http.Request, nodes *store.NodeStore, jobs *sshops.Manager, runner sshops.Runner, publicURL string, installAuth *agenthub.InstallAuthStore, jobTimeout, waitTimeout, pollInterval time.Duration) {
+func handleSSHInstall(w http.ResponseWriter, r *http.Request, lifecycleCtx context.Context, nodes *store.NodeStore, jobs *sshops.Manager, runner sshops.Runner, publicURL string, installAuth *agenthub.InstallAuthStore, jobTimeout, waitTimeout, pollInterval time.Duration) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -344,7 +396,7 @@ func handleSSHInstall(w http.ResponseWriter, r *http.Request, nodes *store.NodeS
 	if pollInterval == 0 {
 		pollInterval = time.Second
 	}
-	jobCtx, cancelJob := sshJobContext(r.Context(), jobTimeout)
+	jobCtx, cancelJob := sshJobContext(lifecycleCtx, jobTimeout)
 	jobID := jobs.Start(jobCtx, secrets, func(ctx context.Context, emit sshops.EmitFunc) error {
 		defer cancelJob()
 		emit(sshops.ProgressEvent{Step: "create_token", Label: "创建 install_token", Status: sshops.ProgressSuccess, Message: "短期引导 token 已创建"})
@@ -365,7 +417,7 @@ func sshJobContext(parent context.Context, timeout time.Duration) (context.Conte
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	return context.WithTimeout(context.WithoutCancel(parent), timeout)
+	return context.WithTimeout(parent, timeout)
 }
 
 func waitForInstalledNode(ctx context.Context, nodes *store.NodeStore, nodeID string, timeout, pollInterval time.Duration, emit sshops.EmitFunc) error {
@@ -448,7 +500,7 @@ type sshUninstallRequest struct {
 	RemoveNodeRecord bool `json:"remove_node_record"`
 }
 
-func handleSSHUninstallRoute(w http.ResponseWriter, r *http.Request, nodes *store.NodeStore, disconnecter agenthubDisconnecter, jobs *sshops.Manager, runner sshops.Runner, publicURL string, jobTimeout time.Duration) bool {
+func handleSSHUninstallRoute(w http.ResponseWriter, r *http.Request, lifecycleCtx context.Context, nodes *store.NodeStore, disconnecter agenthubDisconnecter, jobs *sshops.Manager, runner sshops.Runner, publicURL string, jobTimeout time.Duration) bool {
 	path := strings.TrimPrefix(r.URL.Path, "/api/nodes/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 2 || parts[1] != "ssh-uninstall" {
@@ -492,7 +544,7 @@ func handleSSHUninstallRoute(w http.ResponseWriter, r *http.Request, nodes *stor
 	baseURL, _ := installURLs(publicURL, r)
 	uninstallRequest := sshops.UninstallRequest{SSHRequest: request.SSHRequest, BaseURL: baseURL, NodeID: nodeID, RemoveNodeRecord: request.RemoveNodeRecord}
 	secrets := []string{request.Password, request.PrivateKey, request.Passphrase}
-	jobCtx, cancelJob := sshJobContext(r.Context(), jobTimeout)
+	jobCtx, cancelJob := sshJobContext(lifecycleCtx, jobTimeout)
 	jobID := jobs.Start(jobCtx, secrets, func(ctx context.Context, emit sshops.EmitFunc) error {
 		defer cancelJob()
 		if err := runner.Uninstall(ctx, uninstallRequest, emit); err != nil {

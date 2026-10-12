@@ -18,8 +18,8 @@ func NewStore(db *sql.DB) *Store {
 
 // CreateCluster 创建集群记录
 func (s *Store) CreateCluster(cluster *Cluster) error {
-	query := `INSERT INTO k8s_clusters (id, name, node_id, kubeconfig_path, kubeconfig_content, context, status, version, node_count, namespace_count, last_seen_at, created_at, updated_at)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO k8s_clusters (id, name, node_id, kubeconfig_path, kubeconfig_content, context, status, health_reason, health_checked_at, version, node_count, namespace_count, last_seen_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(query,
 		cluster.ID,
 		cluster.Name,
@@ -28,6 +28,8 @@ func (s *Store) CreateCluster(cluster *Cluster) error {
 		cluster.KubeconfigContent,
 		cluster.Context,
 		cluster.Status,
+		cluster.HealthReason,
+		timeToString(cluster.HealthCheckedAt),
 		cluster.Version,
 		cluster.NodeCount,
 		cluster.NamespaceCount,
@@ -40,12 +42,12 @@ func (s *Store) CreateCluster(cluster *Cluster) error {
 
 // GetCluster 获取集群记录
 func (s *Store) GetCluster(id string) (*Cluster, error) {
-	query := `SELECT id, name, node_id, kubeconfig_path, kubeconfig_content, context, status, version, node_count, namespace_count, last_seen_at, created_at, updated_at
+	query := `SELECT id, name, node_id, kubeconfig_path, kubeconfig_content, context, status, health_reason, health_checked_at, version, node_count, namespace_count, last_seen_at, created_at, updated_at
 	          FROM k8s_clusters WHERE id = ?`
 	row := s.db.QueryRow(query, id)
 
 	var cluster Cluster
-	var lastSeenAt, createdAt, updatedAt sql.NullString
+	var healthCheckedAt, lastSeenAt, createdAt, updatedAt sql.NullString
 	err := row.Scan(
 		&cluster.ID,
 		&cluster.Name,
@@ -54,6 +56,8 @@ func (s *Store) GetCluster(id string) (*Cluster, error) {
 		&cluster.KubeconfigContent,
 		&cluster.Context,
 		&cluster.Status,
+		&cluster.HealthReason,
+		&healthCheckedAt,
 		&cluster.Version,
 		&cluster.NodeCount,
 		&cluster.NamespaceCount,
@@ -69,6 +73,7 @@ func (s *Store) GetCluster(id string) (*Cluster, error) {
 	}
 
 	cluster.LastSeenAt = stringToTime(lastSeenAt.String)
+	cluster.HealthCheckedAt = stringToTime(healthCheckedAt.String)
 	cluster.CreatedAt = stringToTime(createdAt.String)
 	cluster.UpdatedAt = stringToTime(updatedAt.String)
 
@@ -77,7 +82,7 @@ func (s *Store) GetCluster(id string) (*Cluster, error) {
 
 // ListClusters 获取集群列表
 func (s *Store) ListClusters() ([]*Cluster, error) {
-	query := `SELECT id, name, node_id, kubeconfig_path, kubeconfig_content, context, status, version, node_count, namespace_count, last_seen_at, created_at, updated_at
+	query := `SELECT id, name, node_id, kubeconfig_path, kubeconfig_content, context, status, health_reason, health_checked_at, version, node_count, namespace_count, last_seen_at, created_at, updated_at
 	          FROM k8s_clusters ORDER BY created_at DESC`
 	rows, err := s.db.Query(query)
 	if err != nil {
@@ -88,7 +93,7 @@ func (s *Store) ListClusters() ([]*Cluster, error) {
 	var clusters []*Cluster
 	for rows.Next() {
 		var cluster Cluster
-		var lastSeenAt, createdAt, updatedAt sql.NullString
+		var healthCheckedAt, lastSeenAt, createdAt, updatedAt sql.NullString
 		err := rows.Scan(
 			&cluster.ID,
 			&cluster.Name,
@@ -97,6 +102,8 @@ func (s *Store) ListClusters() ([]*Cluster, error) {
 			&cluster.KubeconfigContent,
 			&cluster.Context,
 			&cluster.Status,
+			&cluster.HealthReason,
+			&healthCheckedAt,
 			&cluster.Version,
 			&cluster.NodeCount,
 			&cluster.NamespaceCount,
@@ -109,6 +116,7 @@ func (s *Store) ListClusters() ([]*Cluster, error) {
 		}
 
 		cluster.LastSeenAt = stringToTime(lastSeenAt.String)
+		cluster.HealthCheckedAt = stringToTime(healthCheckedAt.String)
 		cluster.CreatedAt = stringToTime(createdAt.String)
 		cluster.UpdatedAt = stringToTime(updatedAt.String)
 
@@ -120,7 +128,7 @@ func (s *Store) ListClusters() ([]*Cluster, error) {
 
 // ListClustersWithNodeInfo 获取集群列表（包含节点信息）
 func (s *Store) ListClustersWithNodeInfo() ([]*PublicClusterWithNode, error) {
-	query := `SELECT c.id, c.name, c.node_id, c.kubeconfig_path, c.context, c.status, c.version, c.node_count, c.namespace_count, c.last_seen_at, c.created_at, c.updated_at,
+	query := `SELECT c.id, c.name, c.node_id, c.kubeconfig_path, c.context, c.status, c.health_reason, c.health_checked_at, c.version, c.node_count, c.namespace_count, c.last_seen_at, c.created_at, c.updated_at,
 	                 COALESCE(n.name, '') as node_name, COALESCE(n.ip, '') as node_ip, COALESCE(n.status, 'offline') as node_status, COALESCE(n.last_seen_at, '') as node_last_seen_at
 	          FROM k8s_clusters c
 	          LEFT JOIN nodes n ON c.node_id = n.id
@@ -146,7 +154,7 @@ func (s *Store) ListClustersWithNodeInfo() ([]*PublicClusterWithNode, error) {
 
 // GetClusterWithNodeInfo 获取单个集群详情（包含节点信息）
 func (s *Store) GetClusterWithNodeInfo(id string) (*PublicClusterWithNode, error) {
-	query := `SELECT c.id, c.name, c.node_id, c.kubeconfig_path, c.context, c.status, c.version, c.node_count, c.namespace_count, c.last_seen_at, c.created_at, c.updated_at,
+	query := `SELECT c.id, c.name, c.node_id, c.kubeconfig_path, c.context, c.status, c.health_reason, c.health_checked_at, c.version, c.node_count, c.namespace_count, c.last_seen_at, c.created_at, c.updated_at,
 	                 COALESCE(n.name, '') as node_name, COALESCE(n.ip, '') as node_ip, COALESCE(n.status, 'offline') as node_status, COALESCE(n.last_seen_at, '') as node_last_seen_at
 	          FROM k8s_clusters c
 	          LEFT JOIN nodes n ON c.node_id = n.id
@@ -168,7 +176,7 @@ type publicClusterWithNodeScanner interface {
 
 func scanPublicClusterWithNode(scanner publicClusterWithNodeScanner) (*PublicClusterWithNode, error) {
 	var cluster PublicClusterWithNode
-	var lastSeenAt, createdAt, updatedAt, nodeLastSeenAt sql.NullString
+	var healthCheckedAt, lastSeenAt, createdAt, updatedAt, nodeLastSeenAt sql.NullString
 	err := scanner.Scan(
 		&cluster.ID,
 		&cluster.Name,
@@ -176,6 +184,8 @@ func scanPublicClusterWithNode(scanner publicClusterWithNodeScanner) (*PublicClu
 		&cluster.KubeconfigPath,
 		&cluster.Context,
 		&cluster.Status,
+		&cluster.HealthReason,
+		&healthCheckedAt,
 		&cluster.Version,
 		&cluster.NodeCount,
 		&cluster.NamespaceCount,
@@ -192,18 +202,23 @@ func scanPublicClusterWithNode(scanner publicClusterWithNodeScanner) (*PublicClu
 	}
 
 	cluster.LastSeenAt = stringToTime(lastSeenAt.String)
+	cluster.HealthCheckedAt = optionalTime(stringToTime(healthCheckedAt.String))
 	cluster.CreatedAt = stringToTime(createdAt.String)
 	cluster.UpdatedAt = stringToTime(updatedAt.String)
 	cluster.NodeLastSeenAt = stringToTime(nodeLastSeenAt.String)
+	cluster.Status, cluster.HealthReason = EffectiveClusterStatus(cluster.Status, cluster.HealthReason, cluster.NodeStatus, timeValue(cluster.HealthCheckedAt), time.Now())
 
 	return &cluster, nil
 }
 
-// UpdateClusterStatus 更新集群状态
-func (s *Store) UpdateClusterStatus(id, status string) error {
-	query := `UPDATE k8s_clusters SET status = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`
-	now := time.Now()
-	_, err := s.db.Exec(query, status, timeToString(now), timeToString(now), id)
+// UpdateClusterHealth stores one completed Kubernetes API health probe.
+func (s *Store) UpdateClusterHealth(id, status, reason string, checkedAt time.Time, successful bool) error {
+	now := time.Now().UTC()
+	if successful {
+		_, err := s.db.Exec(`UPDATE k8s_clusters SET status = ?, health_reason = ?, health_checked_at = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, status, reason, timeToString(checkedAt), timeToString(checkedAt), timeToString(now), id)
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE k8s_clusters SET status = ?, health_reason = ?, health_checked_at = ?, updated_at = ? WHERE id = ?`, status, reason, timeToString(checkedAt), timeToString(now), id)
 	return err
 }
 
@@ -219,7 +234,7 @@ func timeToString(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.Format(time.RFC3339)
+	return t.Format(time.RFC3339Nano)
 }
 
 // stringToTime 字符串转时间
@@ -227,6 +242,6 @@ func stringToTime(s string) time.Time {
 	if s == "" {
 		return time.Time{}
 	}
-	t, _ := time.Parse(time.RFC3339, s)
+	t, _ := time.Parse(time.RFC3339Nano, s)
 	return t
 }

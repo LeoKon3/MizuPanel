@@ -35,7 +35,7 @@ func testRouter(t *testing.T) (*http.ServeMux, *store.NodeStore, *store.MetricSt
 	metrics := store.NewMetricStore(database)
 	processes := store.NewProcessSnapshotStore(database)
 	docker := store.NewDockerSnapshotStore(database)
-	mux := NewRouter(nodes, metrics, processes, docker)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Processes: processes, Docker: docker})
 	return mux, nodes, metrics, processes, docker
 }
 
@@ -62,9 +62,31 @@ func TestAuthSessionReportsDisabledAuthAsAuthenticated(t *testing.T) {
 	}
 }
 
+func TestNewRouterUsesStronglyTypedDependencies(t *testing.T) {
+	_, nodes, metrics, processes, docker := testRouter(t)
+	settings := testSettingsStore(t)
+	ops := &fakeNodeOperations{}
+
+	mux := NewRouter(RouterDependencies{
+		Nodes: nodes, Metrics: metrics, Processes: processes, Docker: docker,
+		TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops,
+		Terminal: TerminalConfig{Enabled: true},
+		Settings: SettingsConfig{Store: settings, DefaultMetricsRetention: 12 * time.Hour},
+	})
+
+	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-typed", Name: "Typed", Status: "online", LastSeenAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/nodes", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"terminal_enabled":true`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestAdminAuthProtectsNodesAndAllowsLoginLogout(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
-	mux := NewRouter(nodes, metrics, AuthConfig{Enabled: true, Username: "admin", Password: "secret", SessionTTL: time.Hour})
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Auth: AuthConfig{Enabled: true, Username: "admin", Password: "secret", SessionTTL: time.Hour}})
 
 	unauthenticated := httptest.NewRecorder()
 	mux.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/api/nodes", nil))
@@ -115,7 +137,7 @@ func TestAdminAuthProtectsNodesAndAllowsLoginLogout(t *testing.T) {
 
 func TestAdminAuthRejectsInvalidLogin(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
-	mux := NewRouter(nodes, metrics, AuthConfig{Enabled: true, Username: "admin", Password: "secret", SessionTTL: time.Hour})
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Auth: AuthConfig{Enabled: true, Username: "admin", Password: "secret", SessionTTL: time.Hour}})
 
 	recorder := httptest.NewRecorder()
 	body := strings.NewReader(`{"username":"admin","password":"wrong"}`)
@@ -133,7 +155,7 @@ func TestAdminAuthRejectsInvalidLogin(t *testing.T) {
 
 func TestAdminAuthExpiresSessions(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
-	mux := NewRouter(nodes, metrics, AuthConfig{Enabled: true, Username: "admin", Password: "secret", SessionTTL: time.Millisecond})
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Auth: AuthConfig{Enabled: true, Username: "admin", Password: "secret", SessionTTL: time.Millisecond}})
 
 	login := httptest.NewRecorder()
 	body := strings.NewReader(`{"username":"admin","password":"secret"}`)
@@ -215,7 +237,7 @@ func TestListNodesIncludesLatestMetric(t *testing.T) {
 func TestDeleteNodeRemovesNodeFromAPI(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
 	ops := &fakeNodeOperations{}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 	now := time.Date(2026, 5, 31, 10, 0, 0, 0, time.UTC)
 	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Oracle", Status: "offline", LastSeenAt: now}); err != nil {
 		t.Fatalf("upsert node: %v", err)
@@ -319,7 +341,7 @@ func TestMetricsRangeRejectsInvalidRange(t *testing.T) {
 func TestMetricsRangeRejectsRangeBeyondRetention(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
 	settings := testSettingsStore(t)
-	mux := NewRouter(nodes, metrics, SettingsConfig{Store: settings, DefaultMetricsRetention: 6 * time.Hour})
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Settings: SettingsConfig{Store: settings, DefaultMetricsRetention: 6 * time.Hour}})
 	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Oracle", Status: "online", LastSeenAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("upsert node: %v", err)
 	}
@@ -339,7 +361,7 @@ func TestMetricsRangeSupportsLongHistoryWhenRetentionAllows(t *testing.T) {
 	if err := settings.SetMetricsRetention(t.Context(), "7d"); err != nil {
 		t.Fatalf("set retention: %v", err)
 	}
-	mux := NewRouter(nodes, metrics, SettingsConfig{Store: settings, DefaultMetricsRetention: 6 * time.Hour})
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Settings: SettingsConfig{Store: settings, DefaultMetricsRetention: 6 * time.Hour}})
 	now := time.Now().UTC()
 	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Oracle", Status: "online", LastSeenAt: now}); err != nil {
 		t.Fatalf("upsert node: %v", err)
@@ -671,7 +693,7 @@ func (f *fakeNodeOperations) SystemdServiceAction(ctx context.Context, nodeID st
 func TestNodeDockerComposeRoutes(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
 	ops := &fakeNodeOperations{}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 
 	listRequest := httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/docker/compose", nil)
 	listResponse := httptest.NewRecorder()
@@ -695,7 +717,7 @@ func TestNodeDockerComposeDeploymentRoute(t *testing.T) {
 		t.Fatalf("upsert node: %v", err)
 	}
 	ops := &fakeNodeOperations{}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 
 	request := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/docker/compose/deployment", strings.NewReader(`{"action":"preview","display_name":"demo","compose_yaml":"services: {}\n","env_file":"PASSWORD=secret\n","pull_images":true}`))
 	request.Host = "panel.example"
@@ -746,7 +768,7 @@ func TestNodeDockerComposeDeploymentRoute(t *testing.T) {
 func TestNodeDockerResourceRoutes(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
 	ops := &fakeNodeOperations{}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 
 	listRequest := httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/docker/resources", nil)
 	listResponse := httptest.NewRecorder()
@@ -778,7 +800,7 @@ func TestNodeDockerResourceRoutes(t *testing.T) {
 func TestNodeSystemdServiceRoutes(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
 	ops := &fakeNodeOperations{}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 
 	listRequest := httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/services/systemd", nil)
 	listResponse := httptest.NewRecorder()
@@ -799,7 +821,7 @@ func TestNodeSystemdServiceRoutes(t *testing.T) {
 func TestNodeConnectionDiagnostics(t *testing.T) {
 	_, nodes, metrics, _, _ := testRouter(t)
 	ops := &fakeNodeOperations{diagnostics: store.ConnectionDiagnostics{NodeID: "node-1", Online: true, Health: "identity_conflict", IdentityConflict: true, Events: []store.ConnectionEvent{{ID: 1, NodeID: "node-1", Type: store.ConnectionEventIdentityConflict}}}}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/connection-diagnostics", nil))
 	if recorder.Code != http.StatusOK {
@@ -816,7 +838,7 @@ func TestNodeFileOperationsForwardToAgentWithoutBrowserAuth(t *testing.T) {
 		t.Fatalf("upsert node: %v", err)
 	}
 	ops := &fakeNodeOperations{}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 
 	listRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(listRecorder, httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/files?path=/etc", nil))
@@ -875,7 +897,7 @@ func TestNodeAgentManagementRoutesForwardToAgent(t *testing.T) {
 		t.Fatalf("upsert node: %v", err)
 	}
 	ops := &fakeNodeOperations{}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 
 	statusRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(statusRecorder, httptest.NewRequest(http.MethodGet, "/api/nodes/node-1/agent/status", nil))
@@ -932,7 +954,7 @@ func TestNodeAgentUpgradeRejectsCrossOriginPost(t *testing.T) {
 		t.Fatalf("upsert node: %v", err)
 	}
 	ops := &fakeNodeOperations{}
-	mux := NewRouter(nodes, metrics, ops)
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: ops, AgentOperations: ops, Disconnecter: ops, Diagnostics: ops})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/agent/upgrade", nil)
 	request.Header.Set("Origin", "https://evil.example")
@@ -947,7 +969,7 @@ func TestNodeAgentManagementRejectsMissingOrUnsupportedNodes(t *testing.T) {
 	if err := nodes.Upsert(t.Context(), store.Node{ID: "win-1", Name: "Windows", OS: "windows", Status: "online", LastSeenAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("upsert windows node: %v", err)
 	}
-	mux := NewRouter(nodes, metrics, &fakeNodeOperations{})
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, AgentOperations: &fakeNodeOperations{}})
 
 	missingRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(missingRecorder, httptest.NewRequest(http.MethodGet, "/api/nodes/missing/agent/status", nil))
@@ -967,7 +989,7 @@ func TestStateChangingNodeFileOperationsRequireSameOrigin(t *testing.T) {
 	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Oracle", Status: "online", LastSeenAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("upsert node: %v", err)
 	}
-	mux := NewRouter(nodes, metrics, &fakeNodeOperations{})
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, AgentOperations: &fakeNodeOperations{}})
 
 	for _, tc := range []struct {
 		method string
@@ -997,7 +1019,7 @@ func TestTerminalSessionRequiresServerAndNodeOptIn(t *testing.T) {
 		t.Fatalf("upsert node: %v", err)
 	}
 
-	disabledMux := NewRouter(nodes, metrics, fakeTerminalHub{enabled: true})
+	disabledMux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: fakeTerminalHub{enabled: true}})
 	disabledRecorder := httptest.NewRecorder()
 	disabledRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/terminal/session", nil)
 	disabledRequest.Host = "panel.example"
@@ -1007,7 +1029,7 @@ func TestTerminalSessionRequiresServerAndNodeOptIn(t *testing.T) {
 		t.Fatalf("disabled status = %d, want 503", disabledRecorder.Code)
 	}
 
-	nodeDisabledMux := NewRouter(nodes, metrics, fakeTerminalHub{enabled: false}, TerminalConfig{Enabled: true})
+	nodeDisabledMux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: fakeTerminalHub{enabled: false}, Terminal: TerminalConfig{Enabled: true}})
 	nodeDisabledRecorder := httptest.NewRecorder()
 	nodeDisabledRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/terminal/session", nil)
 	nodeDisabledRequest.Host = "panel.example"
@@ -1017,7 +1039,7 @@ func TestTerminalSessionRequiresServerAndNodeOptIn(t *testing.T) {
 		t.Fatalf("node disabled status = %d, want 403", nodeDisabledRecorder.Code)
 	}
 
-	enabledMux := NewRouter(nodes, metrics, fakeTerminalHub{enabled: true}, TerminalConfig{Enabled: true})
+	enabledMux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: fakeTerminalHub{enabled: true}, Terminal: TerminalConfig{Enabled: true}})
 	enabledRecorder := httptest.NewRecorder()
 	enabledRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/terminal/session", nil)
 	enabledRequest.Host = "panel.example"
@@ -1079,7 +1101,7 @@ func TestContainerExecSessionRequiresServerNodeAndOrigin(t *testing.T) {
 		t.Fatalf("upsert node: %v", err)
 	}
 
-	disabledMux := NewRouter(nodes, metrics, fakeTerminalHub{enabled: true})
+	disabledMux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: fakeTerminalHub{enabled: true}})
 	disabledRecorder := httptest.NewRecorder()
 	disabledRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/containers/container-1/exec/session", nil)
 	disabledRequest.Host = "panel.example"
@@ -1089,7 +1111,7 @@ func TestContainerExecSessionRequiresServerNodeAndOrigin(t *testing.T) {
 		t.Fatalf("disabled status = %d, want 503", disabledRecorder.Code)
 	}
 
-	nodeDisabledMux := NewRouter(nodes, metrics, fakeTerminalHub{enabled: false}, TerminalConfig{Enabled: true})
+	nodeDisabledMux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: fakeTerminalHub{enabled: false}, Terminal: TerminalConfig{Enabled: true}})
 	nodeDisabledRecorder := httptest.NewRecorder()
 	nodeDisabledRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/containers/container-1/exec/session", nil)
 	nodeDisabledRequest.Host = "panel.example"
@@ -1099,7 +1121,7 @@ func TestContainerExecSessionRequiresServerNodeAndOrigin(t *testing.T) {
 		t.Fatalf("node disabled status = %d, want 403", nodeDisabledRecorder.Code)
 	}
 
-	enabledMux := NewRouter(nodes, metrics, fakeTerminalHub{enabled: true}, TerminalConfig{Enabled: true})
+	enabledMux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: fakeTerminalHub{enabled: true}, Terminal: TerminalConfig{Enabled: true}})
 	enabledRecorder := httptest.NewRecorder()
 	enabledRequest := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/containers/container-1/exec/session", nil)
 	enabledRequest.Host = "panel.example"
@@ -1133,7 +1155,7 @@ func TestTerminalSessionRejectsCrossOrigin(t *testing.T) {
 	if err := nodes.Upsert(t.Context(), store.Node{ID: "node-1", Name: "Oracle", Status: "online", LastSeenAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("upsert node: %v", err)
 	}
-	mux := NewRouter(nodes, metrics, fakeTerminalHub{enabled: true}, TerminalConfig{Enabled: true})
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, TerminalHub: fakeTerminalHub{enabled: true}, Terminal: TerminalConfig{Enabled: true}})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/nodes/node-1/terminal/session", nil)
 	request.Host = "panel.example"

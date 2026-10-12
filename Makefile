@@ -33,7 +33,8 @@ $(PREPARED):
 	touch $(PREPARED)
 
 build-web: $(PREPARED)
-	npm --prefix web run build
+	if [ "$(SKIP_WEB_BUILD)" != "1" ]; then npm --prefix web run build; fi
+	test -f web/dist/index.html
 	rm -rf $(COMMON_WEB_DIR)
 	mkdir -p $(COMMON_WEB_DIR)
 	cp -R web/dist/. $(COMMON_WEB_DIR)/

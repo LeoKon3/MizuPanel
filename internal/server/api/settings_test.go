@@ -45,7 +45,7 @@ func testSettingsStore(t *testing.T) *store.SettingsStore {
 	return store.NewSettingsStore(database)
 }
 
-func testSettingsRouter(t *testing.T, defaultRetention time.Duration, extras ...any) (*http.ServeMux, *store.SettingsStore) {
+func testSettingsRouter(t *testing.T, defaultRetention time.Duration, configure ...func(*RouterDependencies)) (*http.ServeMux, *store.SettingsStore) {
 	t.Helper()
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -58,9 +58,11 @@ func testSettingsRouter(t *testing.T, defaultRetention time.Duration, extras ...
 	nodes := store.NewNodeStore(database)
 	metrics := store.NewMetricStore(database)
 	settings := store.NewSettingsStore(database)
-	dependencies := []any{SettingsConfig{Store: settings, DefaultMetricsRetention: defaultRetention}}
-	dependencies = append(dependencies, extras...)
-	return NewRouter(nodes, metrics, dependencies...), settings
+	dependencies := RouterDependencies{Nodes: nodes, Metrics: metrics, Settings: SettingsConfig{Store: settings, DefaultMetricsRetention: defaultRetention}}
+	for _, apply := range configure {
+		apply(&dependencies)
+	}
+	return NewRouter(dependencies), settings
 }
 
 func testAIControlSettingsRouter(t *testing.T, defaultRetention time.Duration) (*http.ServeMux, *store.SettingsStore, *store.NodeStore) {
@@ -76,13 +78,13 @@ func testAIControlSettingsRouter(t *testing.T, defaultRetention time.Duration) (
 	nodes := store.NewNodeStore(database)
 	metrics := store.NewMetricStore(database)
 	settings := store.NewSettingsStore(database)
-	return NewRouter(nodes, metrics, SettingsConfig{Store: settings, DefaultMetricsRetention: defaultRetention}), settings, nodes
+	return NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Settings: SettingsConfig{Store: settings, DefaultMetricsRetention: defaultRetention}}), settings, nodes
 }
 
 func TestSystemLogsAPIReturnsBoundedCurrentProcessLogs(t *testing.T) {
 	buffer := logbuffer.New(10, 1024)
 	_, _ = buffer.Write([]byte("first\nsecond\nthird\n"))
-	mux, _ := testSettingsRouter(t, 6*time.Hour, buffer)
+	mux, _ := testSettingsRouter(t, 6*time.Hour, func(deps *RouterDependencies) { deps.ServerLogs = buffer })
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/system/logs?lines=2", nil))
 
@@ -118,7 +120,7 @@ func TestSystemLogsAPIRejectsInvalidRequestsAndUnavailableSource(t *testing.T) {
 	}
 
 	buffer := logbuffer.New(10, 1024)
-	mux, _ = testSettingsRouter(t, 6*time.Hour, buffer)
+	mux, _ = testSettingsRouter(t, 6*time.Hour, func(deps *RouterDependencies) { deps.ServerLogs = buffer })
 	invalid := httptest.NewRecorder()
 	mux.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/system/logs?lines=wat", nil))
 	if invalid.Code != http.StatusBadRequest {

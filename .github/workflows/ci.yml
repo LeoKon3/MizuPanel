@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Run Go test suite
+        run: go test ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix web
+
+      - name: Run frontend test suite
+        run: npm test --prefix web
+
+      - name: Build frontend
+        run: npm run build --prefix web
+
+      - name: Validate Compose configurations
+        env:
+          MIZUPANEL_MYSQL_DATABASE: mizupanel
+          MIZUPANEL_MYSQL_USERNAME: mizupanel
+          MIZUPANEL_MYSQL_PASSWORD: ci-validation-password
+          MIZUPANEL_MYSQL_ROOT_PASSWORD: ci-validation-root-password
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.mysql.yml config --quiet

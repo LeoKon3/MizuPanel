@@ -1,3 +1,4 @@
+import { APIError, request, requestVoid } from './transport'
 import type {
   K8sClustersResponse,
   ConnectK8sClusterRequest,
@@ -21,37 +22,7 @@ import type {
   K8sResourceKind
 } from '../types'
 
-export class K8sAPIError extends Error {
-  constructor(public status: number, message = `Request failed: ${status}`) {
-    super(message)
-  }
-}
-
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { error?: string }
-    return body.error || `Request failed: ${response.status}`
-  } catch {
-    return `Request failed: ${response.status}`
-  }
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = init === undefined ? await fetch(path) : await fetch(path, init)
-  if (!response.ok) {
-    const error = new K8sAPIError(response.status, await errorMessage(response))
-    throw error
-  }
-  return response.json() as Promise<T>
-}
-
-async function requestVoid(path: string, init?: RequestInit): Promise<void> {
-  const response = init === undefined ? await fetch(path) : await fetch(path, init)
-  if (!response.ok) {
-    const error = new K8sAPIError(response.status, await errorMessage(response))
-    throw error
-  }
-}
+export { APIError as K8sAPIError }
 
 export function fetchK8sClusters(signal?: AbortSignal): Promise<K8sClustersResponse> {
   return request<K8sClustersResponse>('/api/k8s/clusters', signal ? { signal } : undefined)

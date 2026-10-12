@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Search } from 'lucide-react'
 import { fetchK8sClusters, deleteK8sCluster } from '../api/k8s'
 import type { K8sCluster } from '../types'
@@ -7,34 +7,54 @@ import { Toast } from '../components/Toast'
 type K8sClustersPageProps = {
   onConnectCluster: () => void
   onViewDetail?: (clusterID: string) => void
+  refreshKey?: number
 }
 
-export function K8sClustersPage({ onConnectCluster, onViewDetail }: K8sClustersPageProps) {
+export function K8sClustersPage({ onConnectCluster, onViewDetail, refreshKey = 0 }: K8sClustersPageProps) {
   const [clusters, setClusters] = useState<K8sCluster[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [pendingDeleteID, setPendingDeleteID] = useState<string | null>(null)
   const [clusterSearch, setClusterSearch] = useState('')
+  const requestSeq = useRef(0)
+  const hasLoadedRef = useRef(false)
 
   const loadClusters = useCallback(() => {
-    setLoading(true)
-    setError(undefined)
+    const requestID = requestSeq.current + 1
+    requestSeq.current = requestID
+    const isCurrentRequest = () => requestSeq.current === requestID
+    const isInitialLoad = !hasLoadedRef.current
+
+    if (isInitialLoad) setLoading(true)
     fetchK8sClusters()
       .then((response) => {
+        if (!isCurrentRequest()) return
         setClusters(response.clusters || [])
+        setError(undefined)
+        hasLoadedRef.current = true
       })
       .catch((err: Error) => {
+        if (!isCurrentRequest()) return
+        if (!isInitialLoad) {
+          setToast({ message: `集群列表刷新失败: ${err.message}`, type: 'error' })
+          return
+        }
         setError(err.message)
         setToast({ message: `集群列表加载失败: ${err.message}`, type: 'error' })
       })
       .finally(() => {
-        setLoading(false)
+        if (isCurrentRequest() && isInitialLoad) setLoading(false)
       })
   }, [])
 
   useEffect(() => {
     loadClusters()
+  }, [loadClusters, refreshKey])
+
+  useEffect(() => {
+    const interval = window.setInterval(loadClusters, 30000)
+    return () => window.clearInterval(interval)
   }, [loadClusters])
 
   const handleDeleteCluster = useCallback((clusterID: string) => {
@@ -177,8 +197,15 @@ type ClusterCardProps = {
 }
 
 function ClusterCard({ cluster, pendingDelete, onRequestDelete, onCancelDelete, onConfirmDelete, onViewDetail }: ClusterCardProps) {
-  // 集群在线需要同时满足：1. Agent 节点在线；2. K8s API 连接正常
-  const isOnline = cluster.node_status === 'online' && cluster.status === 'online'
+  const isOnline = cluster.status === 'online'
+  const statusLabel = isOnline ? '在线' : cluster.status === 'unknown' ? '检测中' : '离线'
+  const reasonLabel = cluster.health_reason ? ({
+    checking: '正在检测 Kubernetes API',
+    stale: '检测结果已过期',
+    agent_offline: '关联 Agent 离线',
+    configuration_missing: '缺少集群配置',
+    api_unreachable: 'Kubernetes API 不可达',
+  } as Record<string, string>)[cluster.health_reason] || '' : ''
 
   return (
     <div className="soft-card p-4 transition hover:border-primary/25">
@@ -193,7 +220,7 @@ function ClusterCard({ cluster, pendingDelete, onRequestDelete, onCancelDelete, 
           </p>
         </div>
         <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-black ${isOnline ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>
-          {isOnline ? '在线' : '离线'}
+          {statusLabel}
         </span>
       </div>
 
@@ -203,6 +230,10 @@ function ClusterCard({ cluster, pendingDelete, onRequestDelete, onCancelDelete, 
           <InfoItem label="节点" value={cluster.node_count?.toString() || '0'} />
           <InfoItem label="命名空间" value={cluster.namespace_count?.toString() || '0'} />
         </div>
+      )}
+
+      {reasonLabel && !isOnline && (
+        <p className="mb-3 text-xs font-semibold text-muted-foreground">{reasonLabel}</p>
       )}
 
       <div className="flex items-center gap-2">
