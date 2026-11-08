@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
-import { deleteAlertHistories, deleteAlertHistory, getAlertHistory, resolveAlertHistory } from '../api/client'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { deleteAlertHistories, deleteAlertHistory, getActiveAlerts, getAlertHistory, resolveAlertHistory } from '../api/client'
 import type { AlertHistory, Node } from '../types'
 import { AlertTriangle, CheckCircle2, CheckSquare, Search, ShieldCheck, Square, Trash2, X } from 'lucide-react'
 import { Toast } from '../components/Toast'
 
 type AlertHistoryTabProps = {
   nodes: Node[]
+  navigationVersion?: number
 }
 
 type FilterStatus = 'all' | 'active' | 'resolved'
@@ -14,11 +15,11 @@ type PendingDelete =
   | { mode: 'single'; alert: AlertHistory }
   | { mode: 'batch'; ids: number[] }
 
-export function AlertHistoryTab({ nodes }: AlertHistoryTabProps) {
+export function AlertHistoryTab({ nodes, navigationVersion }: AlertHistoryTabProps) {
   const [alertHistory, setAlertHistory] = useState<AlertHistory[]>([])
   const [loading, setLoading] = useState(true)
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all')
-  const [filterNode, setFilterNode] = useState<string>('all')
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>(() => new URLSearchParams(window.location.search).get('status') === 'active' ? 'active' : 'all')
+  const [filterNode, setFilterNode] = useState<string>(() => new URLSearchParams(window.location.search).get('node') || 'all')
   const [searchQuery, setSearchQuery] = useState('')
   const [resolvingIDs, setResolvingIDs] = useState<Set<number>>(() => new Set())
   const [selectedResolvedIDs, setSelectedResolvedIDs] = useState<Set<number>>(() => new Set())
@@ -26,50 +27,44 @@ export function AlertHistoryTab({ nodes }: AlertHistoryTabProps) {
   const [deleting, setDeleting] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
-  // 加载告警历史
-  const loadAlertHistory = () => {
-    if (nodes.length === 0) {
-      setAlertHistory([])
-      setLoading(false)
-      return
-    }
-
+  const [loadError, setLoadError] = useState<string>()
+  const requestSequence = useRef(0)
+  const controller = useRef<AbortController | null>(null)
+  const activeOnly = filterStatus === 'active'
+  const nodeIDs = nodes.map(node => node.id).sort().join('\u0000')
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search)
+    setFilterStatus(query.get('status') === 'active' ? 'active' : 'all')
+    setFilterNode(query.get('node') || 'all')
+  }, [navigationVersion])
+  const loadAlertHistory = useCallback(async () => {
+    const id = ++requestSequence.current
+    controller.current?.abort()
+    const current = new AbortController()
+    controller.current = current
     setLoading(true)
-    Promise.all(
-      nodes.map((node) =>
-        getAlertHistory(node.id, 100).catch(() => ({ history: [] }))
-      )
-    ).then((results) => {
-      const allHistory = results.flatMap((r) => r.history).filter(Boolean)
-      const sorted = allHistory.sort(
-        (a, b) => new Date(b.triggered_at).getTime() - new Date(a.triggered_at).getTime()
-      )
+    try {
+      const history = activeOnly
+        ? (await getActiveAlerts(current.signal)).history ?? []
+        : (await Promise.all((nodeIDs ? nodeIDs.split('\u0000') : []).map(nodeID => getAlertHistory(nodeID, 100)))).flatMap(result => result.history ?? [])
+      if (current.signal.aborted || id !== requestSequence.current) return
+      const sorted = history.filter(Boolean).sort((a, b) => Date.parse(b.triggered_at) - Date.parse(a.triggered_at))
       setAlertHistory(sorted)
-      setSelectedResolvedIDs((current) => {
-        if (current.size === 0) return current
-        const availableIDs = new Set(sorted.filter((alert) => alert.resolved_at).map((alert) => alert.id))
-        const next = new Set([...current].filter((id) => availableIDs.has(id)))
-        return next.size === current.size ? current : next
-      })
-      setLoading(false)
-    }).catch(() => {
-      setLoading(false)
-    })
-  }
-
-  // 初始加载
+      setLoadError(undefined)
+      const available = new Set(sorted.filter(alert => alert.resolved_at).map(alert => alert.id))
+      setSelectedResolvedIDs(previous => new Set([...previous].filter(id => available.has(id))))
+    } catch (error) {
+      if (current.signal.aborted || id !== requestSequence.current) return
+      setLoadError(error instanceof Error ? error.message : '读取失败')
+    } finally {
+      if (id === requestSequence.current) setLoading(false)
+    }
+  }, [activeOnly, nodeIDs])
   useEffect(() => {
-    loadAlertHistory()
-  }, [nodes])
-
-  // 定时刷新活跃告警（每30秒）
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadAlertHistory()
-    }, 30000)
-
-    return () => clearInterval(interval)
-  }, [nodes])
+    void loadAlertHistory()
+    const timer = setInterval(() => void loadAlertHistory(), 30_000)
+    return () => { clearInterval(timer); requestSequence.current += 1; controller.current?.abort() }
+  }, [loadAlertHistory])
 
   // 过滤逻辑
   const filteredAlerts = alertHistory.filter((alert) => {
@@ -238,6 +233,7 @@ export function AlertHistoryTab({ nodes }: AlertHistoryTabProps) {
     <div className="space-y-4">
       {toast ? <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} /> : null}
 
+      {loadError && <div role="alert" className="console-notice">告警读取失败: {loadError}<button className="ml-3 underline" onClick={() => void loadAlertHistory()}>重试</button></div>}
       {/* 筛选栏 */}
       <div className="soft-toolbar flex flex-wrap items-center gap-3 p-3">
         {/* 状态筛选按钮组 */}
@@ -291,11 +287,13 @@ export function AlertHistoryTab({ nodes }: AlertHistoryTabProps) {
 
         {/* 节点筛选下拉 */}
         <select
+          aria-label="告警节点筛选"
           value={filterNode}
           onChange={(e) => handleNodeFilterChange(e.target.value)}
           className="soft-input min-h-9 px-3 text-xs font-black"
         >
           <option value="all">所有节点</option>
+          {filterNode !== 'all' && !nodes.some(node => node.id === filterNode) && <option value={filterNode}>{filterNode}（原节点）</option>}
           {nodes.map((node) => (
             <option key={node.id} value={node.id}>
               {node.name || node.hostname}
@@ -344,9 +342,9 @@ export function AlertHistoryTab({ nodes }: AlertHistoryTabProps) {
         {filteredAlerts.length === 0 ? (
           <div className="soft-empty-state p-12 text-center">
             <ShieldCheck className="mx-auto text-success" size={28} aria-hidden="true" />
-            <p className="mt-3 text-sm font-black text-success">目前没有{filterStatus === 'active' ? '活跃' : ''}告警</p>
+            <p className="mt-3 text-sm font-black text-success">{loadError ? '未获取告警记录' : `目前没有${filterStatus === 'active' ? '活跃' : ''}告警`}</p>
             <p className="mt-1 text-xs font-semibold text-muted-foreground">
-              {filterStatus === 'all' ? '所有监控指标正常' : filterStatus === 'active' ? '所有监控指标正常' : '没有已解决的告警记录'}
+              {loadError ? '数据未获取，无法确认告警状态' : filterStatus === 'resolved' ? '没有已解决的告警记录' : '当前读取范围内没有告警记录'}
             </p>
           </div>
         ) : (

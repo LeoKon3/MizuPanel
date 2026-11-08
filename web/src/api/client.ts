@@ -137,8 +137,8 @@ export function getNodeDocker(nodeID: string, signal?: AbortSignal): Promise<Doc
   return request<DockerSnapshotResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker`, signal ? { signal } : undefined)
 }
 
-export function getNodeDockerCompose(nodeID: string): Promise<DockerComposeListResponse> {
-  return request<DockerComposeListResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker/compose`)
+export function getNodeDockerCompose(nodeID: string, signal?: AbortSignal): Promise<DockerComposeListResponse> {
+  return request<DockerComposeListResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/docker/compose`, signal ? { signal } : undefined)
 }
 
 export function runNodeDockerComposeAction(nodeID: string, projectName: string, action: DockerComposeAction, serviceName?: string): Promise<DockerComposeActionResponse> {
@@ -254,8 +254,8 @@ export function createContainerExecSession(nodeID: string, containerID: string):
   return request<SessionTokenResponse>(`/api/nodes/${encodeURIComponent(nodeID)}/containers/${encodeURIComponent(containerID)}/exec/session`, { method: 'POST' })
 }
 
-export function getAlertRules(): Promise<AlertRulesResponse> {
-  return request<AlertRulesResponse>('/api/alerts/rules')
+export function getAlertRules(signal?: AbortSignal): Promise<AlertRulesResponse> {
+  return request<AlertRulesResponse>('/api/alerts/rules', signal ? { signal } : undefined)
 }
 
 export function createAlertRule(rule: Omit<AlertRule, 'id' | 'created_at' | 'updated_at'>): Promise<AlertRule> {
@@ -286,8 +286,8 @@ export function toggleAlertRule(id: number, enabled: boolean): Promise<AlertRule
   })
 }
 
-export function getUptimeMonitors(): Promise<UptimeMonitorsResponse> {
-  return request<UptimeMonitorsResponse>('/api/uptime/monitors')
+export function getUptimeMonitors(signal?: AbortSignal): Promise<UptimeMonitorsResponse> {
+  return request<UptimeMonitorsResponse>('/api/uptime/monitors', signal ? { signal } : undefined)
 }
 
 export function createUptimeMonitor(monitor: UptimeMonitorInput): Promise<UptimeMonitor> {
@@ -428,6 +428,10 @@ export function getAutomationRun(id: number, signal?: AbortSignal): Promise<Auto
   return request<AutomationRunDetail>(`/api/automation/runs/${encodeURIComponent(id.toString())}`, signal ? { signal } : undefined)
 }
 
+export function getActiveAlerts(signal?: AbortSignal): Promise<AlertHistoryResponse> {
+  return request<AlertHistoryResponse>('/api/alerts/active', signal ? { signal } : undefined)
+}
+
 export function getAlertHistory(nodeID: string, limit = 100): Promise<AlertHistoryResponse> {
   return request<AlertHistoryResponse>(`/api/alerts/history?node_id=${encodeURIComponent(nodeID)}&limit=${limit}`)
 }
@@ -448,8 +452,8 @@ export function deleteAlertHistories(ids: number[]): Promise<{ deleted: number }
   })
 }
 
-export function getK8sClusters(): Promise<K8sClustersResponse> {
-  return request<K8sClustersResponse>('/api/k8s/clusters')
+export function getK8sClusters(signal?: AbortSignal): Promise<K8sClustersResponse> {
+  return request<K8sClustersResponse>('/api/k8s/clusters', signal ? { signal } : undefined)
 }
 
 export function getApplicationServices(signal?: AbortSignal): Promise<ApplicationServiceSummary[]> {
@@ -458,6 +462,10 @@ export function getApplicationServices(signal?: AbortSignal): Promise<Applicatio
 
 export function getApplicationService(id: string, signal?: AbortSignal): Promise<ApplicationServiceDetail> {
   return request<ApplicationServiceDetail>(`/api/services/${encodeURIComponent(id)}`, signal ? { signal } : undefined)
+}
+
+export function checkApplicationService(id: string, signal?: AbortSignal): Promise<import('../types').ApplicationServiceHealthCheck> {
+  return request(`/api/services/${encodeURIComponent(id)}/check`, { method: 'POST', signal })
 }
 
 export function createApplicationService(input: ApplicationServiceInput): Promise<ApplicationServiceDetail> {

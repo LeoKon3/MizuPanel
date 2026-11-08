@@ -2,130 +2,152 @@
 
 [Back to README](../README.en.md) · [中文](screenshots.md)
 
-These screenshots reflect the current interface. The README keeps only a compact preview; this page contains the fuller gallery.
+Captured from the **v0.1.33** production build on **2026-11-09**, at **1440 × 900**. Both README languages use this same current Chinese-language interface capture set. These are real pages, not the `8081` design prototype or mock API fixtures.
 
-## Overview
+IP addresses, the Provider endpoint, and private conversation content are redacted where needed; installation credentials and kubeconfig contents are omitted. No data was added for presentation. Empty, disabled, and offline states are shown as they appeared, and not every page has received the same depth of visual redesign.
 
-<table>
-  <tr>
-    <td width="50%">
-      <a href="../assets/screenshots/dashboard.png"><img src="../assets/screenshots/dashboard.png" alt="Overview page" width="100%" /></a>
-      <br /><sub>Overview at a 1440px desktop viewport.</sub>
-    </td>
-    <td width="50%">
-      <a href="../assets/screenshots/overview.png"><img src="../assets/screenshots/overview.png" alt="Overview at a 1280px desktop viewport" width="100%" /></a>
-      <br /><sub>Overview at a 1280px desktop viewport.</sub>
-    </td>
-  </tr>
-</table>
 
-The overview shows node status, Kubernetes cluster status, active alerts, resource trends, server status, and quick actions.
-
-## Application Service Center
-
-<p align="center">
-  <a href="../assets/screenshots/services.png">
-    <img src="../assets/screenshots/services.png" alt="Application Service Center" width="100%" />
-  </a>
-</p>
-
-The Application Service Center groups seven existing operations resource types into logical business services with combined health, reasons, deployment locations, resource scale, recent activity, and deep links back to each owning module.
-
-## Hosts And Agents
+## Overview And Themes
 
 <table>
   <tr>
     <td width="50%">
-      <a href="../assets/screenshots/host-detail.png"><img src="../assets/screenshots/host-detail.png" alt="Host detail" width="100%" /></a>
-      <br /><sub>Host detail, metric charts, Docker workspace, systemd, processes, files, and Agent management.</sub>
+      <a href="../assets/screenshots/overview-light.png"><img src="../assets/screenshots/overview-light.png" alt="Light overview: real status summaries, attention items, and recent tasks." width="100%" /></a>
+      <br /><sub>Light overview: real status summaries, attention items, and recent tasks.</sub>
     </td>
     <td width="50%">
-      <a href="../assets/screenshots/add-host.png"><img src="../assets/screenshots/add-host.png" alt="Add host" width="100%" /></a>
-      <br /><sub>Add hosts with Linux or Windows install commands; Agents keep persistent identities and support diagnostics and secure upgrades.</sub>
+      <a href="../assets/screenshots/overview-dark.png"><img src="../assets/screenshots/overview-dark.png" alt="The same overview in dark mode, with the same information structure." width="100%" /></a>
+      <br /><sub>The same overview in dark mode, with the same information structure.</sub>
     </td>
   </tr>
 </table>
 
-## Task Center
+Overview is the default entry point, with links to the corresponding host, alert, probe, application-service, and Kubernetes pages. An empty run history is shown honestly.
 
-<p align="center">
-  <a href="../assets/screenshots/tasks.png">
-    <img src="../assets/screenshots/tasks.png" alt="Task Center" width="100%" />
-  </a>
-</p>
 
-The Task Center brings scheduled tasks, the script library, and run history together, with bounded Shell automation across one or more Agents.
-
-## Kubernetes
+## Host Workspace
 
 <table>
   <tr>
     <td width="50%">
-      <a href="../assets/screenshots/kubernetes.png"><img src="../assets/screenshots/kubernetes.png" alt="Kubernetes clusters" width="100%" /></a>
-      <br /><sub>Kubernetes cluster access and search.</sub>
+      <a href="../assets/screenshots/hosts.png"><img src="../assets/screenshots/hosts.png" alt="Separate host list: stable ordering, status/group filters, and live resource metrics." width="100%" /></a>
+      <br /><sub>Separate host list: stable ordering, status/group filters, and live resource metrics.</sub>
     </td>
     <td width="50%">
-      <a href="../assets/screenshots/k8s-detail.png"><img src="../assets/screenshots/k8s-detail.png" alt="Kubernetes detail" width="100%" /></a>
-      <br /><sub>Cluster detail, resource summary, Namespace, Node, Pod, Workload, Service, and Ingress views.</sub>
+      <a href="../assets/screenshots/host-overview.png"><img src="../assets/screenshots/host-overview.png" alt="Full-width host overview: resource trends, system information, network and disk I/O." width="100%" /></a>
+      <br /><sub>Full-width host overview: resource trends, system information, network and disk I/O.</sub>
     </td>
   </tr>
   <tr>
-    <td colspan="2">
-      <a href="../assets/screenshots/k8s-create-resource.png"><img src="../assets/screenshots/k8s-create-resource.png" alt="Create Kubernetes resource" width="100%" /></a>
-      <br /><sub>Create resources with YAML preview, Dry Run, and forms for multiple resource kinds.</sub>
+    <td width="100%">
+      <a href="../assets/screenshots/host-processes.png"><img src="../assets/screenshots/host-processes.png" alt="Process view: search, sorting, and aligned numeric columns." width="100%" /></a>
+      <br /><sub>Process view: search, sorting, and aligned numeric columns.</sub>
     </td>
   </tr>
 </table>
+
+IP addresses are redacted. Host names, states, and metrics come from the running environment; no terminal commands, reboot, or other host changes were performed.
+
+
+## Application Services
+
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/application-services.png"><img src="../assets/screenshots/application-services.png" alt="Real empty list: this environment has no application services yet." width="100%" /></a>
+      <br /><sub>Real empty list: this environment has no application services yet.</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/service-editor.png"><img src="../assets/screenshots/service-editor.png" alt="Resource editor: type-specific selection, search, and a cross-category selection list." width="100%" /></a>
+      <br /><sub>Resource editor: type-specific selection, search, and a cross-category selection list.</sub>
+    </td>
+  </tr>
+</table>
+
+The create dialog was opened only to show its layout; nothing was created or saved. The incident workspace and unified event stream are available after a logical service is created. No mock data is presented as configured services.
+
 
 ## Alerts
 
 <table>
   <tr>
     <td width="50%">
-      <a href="../assets/screenshots/alerts.png"><img src="../assets/screenshots/alerts.png" alt="Alerts" width="100%" /></a>
-      <br /><sub>Alert rules, active alerts, and alert history.</sub>
+      <a href="../assets/screenshots/alert-history.png"><img src="../assets/screenshots/alert-history.png" alt="Alert history with trigger and recovery delivery states." width="100%" /></a>
+      <br /><sub>Alert history with trigger and recovery delivery states.</sub>
     </td>
     <td width="50%">
-      <a href="../assets/screenshots/alert-rules.png"><img src="../assets/screenshots/alert-rules.png" alt="Alert rules" width="100%" /></a>
-      <br /><sub>Alert rule list and rule management.</sub>
+      <a href="../assets/screenshots/alert-rule-list.png"><img src="../assets/screenshots/alert-rule-list.png" alt="Existing rules: the rule shown is disabled." width="100%" /></a>
+      <br /><sub>Existing rules: the rule shown is disabled.</sub>
     </td>
   </tr>
 </table>
 
-## Uptime Monitoring
+Existing records and rules are shown as-is; no rules were enabled, records deleted, or notifications sent while capturing.
 
-<p align="center">
-  <a href="../assets/screenshots/uptime.png">
-    <img src="../assets/screenshots/uptime.png" alt="Uptime monitoring" width="100%" />
-  </a>
-</p>
 
-The Server runs scheduled or manual HTTP, HTTPS, and TCP checks and presents status, latency, incidents, and certificate-expiry warnings.
+## Task Center And Uptime Monitoring
 
-## Audit Trail
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/task-center.png"><img src="../assets/screenshots/task-center.png" alt="Scheduled tasks, script library, and run-history entries; no schedules are configured." width="100%" /></a>
+      <br /><sub>Scheduled tasks, script library, and run-history entries; no schedules are configured.</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/uptime-monitoring.png"><img src="../assets/screenshots/uptime-monitoring.png" alt="HTTP, HTTPS, and TCP monitoring entry point; no probes are configured." width="100%" /></a>
+      <br /><sub>HTTP, HTTPS, and TCP monitoring entry point; no probes are configured.</sub>
+    </td>
+  </tr>
+</table>
 
-<p align="center">
-  <a href="../assets/screenshots/audit.png">
-    <img src="../assets/screenshots/audit.png" alt="Audit Trail" width="100%" />
-  </a>
-</p>
+No scripts were run, schedules created, or probes triggered for these screenshots.
 
-The Audit Trail traces sensitive operations by time, module, node, and result while excluding commands, file contents, credentials, and other secret material.
 
-## AI Natural-Language Operations
+## Kubernetes And Audit
 
-<p align="center">
-  <a href="../assets/screenshots/ai-drawer.png">
-    <img src="../assets/screenshots/ai-drawer.png" alt="AI operations assistant drawer" width="100%" />
-  </a>
-</p>
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/kubernetes-clusters.png"><img src="../assets/screenshots/kubernetes-clusters.png" alt="Cluster list with the actual offline reason; the node IP is redacted." width="100%" /></a>
+      <br /><sub>Cluster list with the actual offline reason; the node IP is redacted.</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/audit-log.png"><img src="../assets/screenshots/audit-log.png" alt="Audit filters; no events exist in the selected time window." width="100%" /></a>
+      <br /><sub>Audit filters; no events exist in the selected time window.</sub>
+    </td>
+  </tr>
+</table>
 
-The top-bar AI assistant opens as an overlay drawer with keyboard-resizable width, Provider-grouped conversation model switching, and new-conversation support. Read-only tools run automatically; state-changing operations require explicit confirmation.
+The configured Kubernetes API is currently unreachable, so old online-cluster and resource-creation screenshots are not reused. No Kubernetes resources were created and no audit events were cleaned up.
 
-<p align="center">
-  <a href="../assets/screenshots/ai-provider-settings.png">
-    <img src="../assets/screenshots/ai-provider-settings.png" alt="AI Provider settings" width="100%" />
-  </a>
-</p>
 
-System Settings lets one OpenAI Chat Completions compatible Provider connection manage multiple models, with discovery, selective import, per-model probes, and default/fallback routing. API keys are encrypted and never echoed back.
+## System Settings
+
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/settings-general.png"><img src="../assets/screenshots/settings-general.png" alt="Separate general settings view: metric retention and the current version." width="100%" /></a>
+      <br /><sub>Separate general settings view: metric retention and the current version.</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/settings-models.png"><img src="../assets/screenshots/settings-models.png" alt="AI model settings: Providers and child models, with the Provider endpoint redacted." width="100%" /></a>
+      <br /><sub>AI model settings: Providers and child models, with the Provider endpoint redacted.</sub>
+    </td>
+  </tr>
+</table>
+
+General settings and AI models are separate views. Model settings retain connections, capability checks, and routing; removed autonomous-execution policy controls are not shown. No settings or models were changed or tested during capture.
+
+
+## AI Operations Assistant
+
+<table>
+  <tr>
+    <td width="100%">
+      <a href="../assets/screenshots/ai-assistant.png"><img src="../assets/screenshots/ai-assistant.png" alt="On-demand AI overlay drawer; existing conversation content is hidden." width="100%" /></a>
+      <br /><sub>On-demand AI overlay drawer; existing conversation content is hidden.</sub>
+    </td>
+  </tr>
+</table>
+
+This capture shows the drawer, model selector, and composer without sending messages or executing tools. “会话内容已隐藏” is a screenshot redaction notice, not a product empty state.

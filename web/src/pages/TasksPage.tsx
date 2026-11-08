@@ -11,6 +11,7 @@ import type { AutomationNotificationPolicy, AutomationRun, AutomationRunsQuery, 
 
 type TasksPageProps = {
   nodes: Node[]
+  navigationVersion?: number
 }
 
 type TasksTab = 'tasks' | 'scripts' | 'runs'
@@ -45,8 +46,8 @@ const timeRanges: Array<{ value: TimeRange, label: string, hours?: number }> = [
   { value: 'all', label: '全部时间' }
 ]
 
-export function TasksPage({ nodes }: TasksPageProps) {
-  const [activeTab, setActiveTab] = useState<TasksTab>('tasks')
+export function TasksPage({ nodes, navigationVersion }: TasksPageProps) {
+  const [activeTab, setActiveTab] = useState<TasksTab>(() => new URLSearchParams(window.location.search).get('tab') === 'runs' ? 'runs' : 'tasks')
   const [scripts, setScripts] = useState<AutomationScript[]>([])
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [runs, setRuns] = useState<AutomationRun[]>([])
@@ -66,7 +67,7 @@ export function TasksPage({ nodes }: TasksPageProps) {
   const [runNodeID, setRunNodeID] = useState('')
   const [runScriptID, setRunScriptID] = useState('')
   const [runTaskID, setRunTaskID] = useState('')
-  const [runTimeRange, setRunTimeRange] = useState<TimeRange>('7d')
+  const [runTimeRange, setRunTimeRange] = useState<TimeRange>(() => new URLSearchParams(window.location.search).get('range') === '24h' ? '24h' : '7d')
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null)
   const [scriptForm, setScriptForm] = useState<{ mode: 'create' | 'edit', script?: AutomationScript, draft: ScriptDraft }>()
   const [taskForm, setTaskForm] = useState<{ mode: 'create' | 'edit', task?: ScheduledTask, draft: TaskDraft }>()
@@ -91,6 +92,14 @@ export function TasksPage({ nodes }: TasksPageProps) {
   const pageFallbackRef = useRef<HTMLButtonElement | null>(null)
   const modalTriggerRef = useRef<HTMLElement | null>(null)
   const detailTriggerRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const runID = Number(params.get('run'))
+    if (params.get('tab') === 'runs' || (Number.isSafeInteger(runID) && runID > 0)) setActiveTab('runs')
+    if (params.get('range') === '24h') setRunTimeRange('24h')
+    setDetailRunID(Number.isSafeInteger(runID) && runID > 0 ? runID : undefined)
+  }, [navigationVersion])
 
   const loadScripts = useCallback(async (showLoading = false) => {
     const requestID = ++scriptsRequestSequence.current
@@ -445,7 +454,12 @@ export function TasksPage({ nodes }: TasksPageProps) {
     setDetailRunID(runID)
   }
 
-  const closeRunDetail = useCallback(() => setDetailRunID(undefined), [])
+  const closeRunDetail = useCallback(() => {
+    setDetailRunID(undefined)
+    const query = new URLSearchParams(window.location.search)
+    query.delete('run')
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${query.size ? `?${query}` : ''}`)
+  }, [])
   const updateRunFromDetail = useCallback((updated: AutomationRun) => {
     setRuns((current) => {
       const index = current.findIndex((run) => run.id === updated.id)
@@ -468,10 +482,7 @@ export function TasksPage({ nodes }: TasksPageProps) {
       {toast ? <Toast message={toast.message} type={toast.type} onClose={closeToast} /> : null}
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-black text-foreground">任务中心</h1>
-          <p className="mt-1 text-sm font-semibold text-muted-foreground">统一管理 Server 端脚本、Cron 计划和每台 Agent 的有限执行结果。</p>
-        </div>
+        <h1 className="text-2xl font-black text-foreground">任务中心</h1>
         <button ref={pageFallbackRef} type="button" onClick={refreshActive} className="soft-button inline-flex min-h-10 items-center justify-center gap-2 border border-border bg-card px-4 text-sm font-black text-foreground hover:border-primary/40 focus:outline-none focus:ring-4 focus:ring-primary/20">
           <RefreshCw size={16} aria-hidden="true" />刷新当前页
         </button>

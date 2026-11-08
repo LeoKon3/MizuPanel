@@ -108,14 +108,11 @@ function planStepSummary(step: AIToolCall) {
 }
 
 function policyDecisionText(decision?: AIPolicyDecision) {
-  if (decision === 'autonomous_allowed') return '策略允许自动执行'
+  if (decision === 'autonomous_allowed') return '已执行'
   if (decision === 'manual_confirmation') return '需要人工确认'
-  if (decision === 'blocked_paused') return 'AI 控制平面已暂停'
-  if (decision === 'blocked_scope') return '节点不在自动执行范围'
-  if (decision === 'blocked_action') return '动作未获自动执行授权'
   if (decision === 'blocked_capability') return '节点能力当前不可用'
   if (decision === 'blocked_verifier') return '终态验证当前不可用'
-  if (decision === 'blocked_policy') return 'AI 控制策略当前不可用'
+  if (decision?.startsWith('blocked_')) return '服务端已阻止执行'
   return ''
 }
 
@@ -128,16 +125,13 @@ function verificationStatusText(status?: AIVerificationStatus) {
 
 function policyReasonText(reason?: string) {
   if (reason === 'read_only') return '只读操作'
-  if (reason === 'confirmation_required') return '默认需要确认'
+  if (reason === 'confirmation_required') return '请在对话中确认'
   if (reason === 'confirmed_by_user') return '已由用户确认'
-  if (reason === 'low_risk_policy') return '动作与节点范围已授权'
-  if (reason === 'paused') return '紧急暂停已启用'
-  if (reason === 'node_outside_scope') return '节点不在授权范围'
-  if (reason === 'action_not_allowed') return '动作未获授权'
+  if (reason === 'low_risk_policy') return '服务端已授权'
   if (reason === 'capability_offline') return '节点能力不可用'
   if (reason === 'verifier_unavailable') return '终态验证不可用'
-  if (reason === 'policy_unavailable') return '策略读取失败'
   if (reason === 'mixed_plan_requires_confirmation') return '计划包含需确认步骤'
+  if (reason) return '服务端已阻止执行'
   return ''
 }
 
@@ -161,7 +155,19 @@ function progressText(progress: AIProgress, labels: Record<string, string>) {
 }
 
 function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPanelProps) {
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(assistant.messageDraft?.content ?? '')
+  const preparedDraftID = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (preparedDraftID.current !== undefined || assistant.composerDraft) setDraft('')
+    preparedDraftID.current = assistant.composerDraft?.id
+  }, [assistant.composerDraft?.id])
+  useEffect(() => { setDraft(assistant.messageDraft?.content ?? '') }, [assistant.messageDraft?.content, assistant.activeConversationID])
+  // Service diagnosis drafts belong to the shared assistant, not either view.
+  const composerContent = assistant.composerDraft?.content ?? assistant.messageDraft?.content ?? draft
+  const updateComposer = (content: string) => {
+    if (assistant.composerDraft) assistant.updateDraft(assistant.composerDraft.id, content)
+    else { setDraft(content); assistant.updateMessageDraft(content) }
+  }
   const [confirmCall, setConfirmCall] = useState<AIToolCall>()
   const [confirmPlan, setConfirmPlan] = useState<AIOperationPlan>()
   const composerRef = useRef<HTMLTextAreaElement>(null)
@@ -198,20 +204,20 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
     return (
       <section key={plan.id} aria-label="AI 变更计划" className={`border-l-2 py-1 pl-3 ${plan.status === 'pending' ? 'border-warning' : plan.status === 'success' ? 'border-success' : 'border-border'}`}>
         <div className="flex min-w-0 items-center justify-between gap-3">
-          <p className="text-xs font-black text-foreground">执行计划 · {plan.steps.length} 步</p>
-          <span className={`shrink-0 text-xs font-black ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
+          <p className="text-xs font-medium text-foreground">执行计划 · {plan.steps.length} 步</p>
+          <span className={`shrink-0 text-xs font-medium ${plan.status === 'pending' ? 'text-warning' : plan.status === 'success' ? 'text-success' : plan.status === 'running' ? 'text-primary' : 'text-muted-foreground'}`}>{planStatusText(plan)}</span>
         </div>
         {!plan.steps.some((step) => step.policy_decision) && (policyDecisionText(plan.policy_decision) || policyReasonText(plan.policy_reason)) ? (
-          <p className="mt-1 break-words text-[11px] font-bold text-muted-foreground">{[policyDecisionText(plan.policy_decision), policyReasonText(plan.policy_reason)].filter(Boolean).join(' · ')}</p>
+          <p className="mt-1 break-words text-[11px] font-medium text-muted-foreground">{[policyDecisionText(plan.policy_decision), policyReasonText(plan.policy_reason)].filter(Boolean).join(' · ')}</p>
         ) : null}
         <ol className="mt-2 space-y-2">
           {plan.steps.map((step, index) => (
             <li key={step.id} className="flex min-w-0 gap-2">
               <span className="mt-0.5 shrink-0"><PlanStepIcon status={step.status} /></span>
               <div className="min-w-0 flex-1">
-                <p className="break-words text-xs font-bold text-foreground">{plan.steps.length > 1 ? `${index + 1}. ` : ''}{planStepSummary(step)}</p>
+                <p className="break-words text-xs font-medium text-foreground">{plan.steps.length > 1 ? `${index + 1}. ` : ''}{planStepSummary(step)}</p>
                 <p className="mt-0.5 break-words text-[11px] font-semibold text-muted-foreground">{toolTarget(step)} · {planStepStatusText(step.status)}</p>
-                {policyStatusText(step) ? <p className="mt-0.5 break-words text-[11px] font-bold text-muted-foreground">{policyStatusText(step)}</p> : null}
+                {policyStatusText(step) ? <p className="mt-0.5 break-words text-[11px] font-medium text-muted-foreground">{policyStatusText(step)}</p> : null}
               </div>
             </li>
           ))}
@@ -219,14 +225,14 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
         {impact ? (
           <div className="mt-3 border-t border-border pt-2" aria-label="已知影响">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-[11px] font-black text-foreground">已知影响</p>
-              {impact.overflow > 0 ? <span className="text-[11px] font-bold text-muted-foreground">另有 {impact.overflow} 项</span> : null}
+              <p className="text-[11px] font-medium text-foreground">已知影响</p>
+              {impact.overflow > 0 ? <span className="text-[11px] font-medium text-muted-foreground">另有 {impact.overflow} 项</span> : null}
             </div>
             {impact.related.length > 0 ? (
               <ul className="mt-1.5 space-y-1">
                 {impact.related.map((resource, index) => (
                   <li key={`${resource.type}-${resource.name}-${index}`} className="flex min-w-0 items-center gap-2 text-[11px] font-semibold text-muted-foreground">
-                    <span className="min-w-0 flex-1 break-words"><span className="font-bold text-foreground">{resource.name}</span> · {impactTypeLabels[resource.type] ?? resource.type}{resource.state ? ` · ${resource.state}` : ''}</span>
+                    <span className="min-w-0 flex-1 break-words"><span className="font-medium text-foreground">{resource.name}</span> · {impactTypeLabels[resource.type] ?? resource.type}{resource.state ? ` · ${resource.state}` : ''}</span>
                     {resource.route ? (
                       <a href={resource.route} title={`打开${resource.name}`} className="soft-button flex h-7 w-7 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground">
                         <ChevronRight size={14} aria-hidden="true" />
@@ -237,13 +243,13 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
                 ))}
               </ul>
             ) : <p className="mt-1.5 text-[11px] font-semibold text-muted-foreground">{impact.available ? '未发现直接关联资源' : '影响信息不可用'}</p>}
-            {!impact.complete ? <p className="mt-1.5 text-[11px] font-bold text-warning">部分资源来源不可用，影响范围可能不完整</p> : null}
+            {!impact.complete ? <p className="mt-1.5 text-[11px] font-medium text-warning">部分资源来源不可用，影响范围可能不完整</p> : null}
           </div>
         ) : null}
         {plan.status === 'pending' ? (
           <div className="mt-3 flex flex-wrap justify-end gap-2">
-            <button type="button" disabled={assistant.operationID === plan.id} onClick={() => void assistant.rejectPlan(plan)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
-            <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmPlan(plan)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
+            <button type="button" disabled={assistant.operationID === plan.id} onClick={() => void assistant.rejectPlan(plan)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
+            <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmPlan(plan)} className="soft-button min-h-9 bg-danger px-3 text-xs font-medium text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
           </div>
         ) : null}
       </section>
@@ -254,15 +260,15 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
     <div key={call.id} className="border-l-2 border-warning py-1 pl-3">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-black text-foreground">{toolLabels[call.tool_name] ?? call.tool_name}</p>
+          <p className="text-sm font-medium text-foreground">{toolLabels[call.tool_name] ?? call.tool_name}</p>
           <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">目标：{toolTarget(call)}</p>
           {call.result_summary ? <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">{call.result_summary}</p> : null}
         </div>
-        <span className="shrink-0 text-xs font-black text-warning">等待确认</span>
+        <span className="shrink-0 text-xs font-medium text-warning">等待确认</span>
       </div>
       <div className="mt-3 flex flex-wrap justify-end gap-2">
-        <button type="button" disabled={assistant.operationID === call.id} onClick={() => void assistant.reject(call)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
-        <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmCall(call)} className="soft-button min-h-9 bg-danger px-3 text-xs font-black text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
+        <button type="button" disabled={assistant.operationID === call.id} onClick={() => void assistant.reject(call)} className="soft-button min-h-9 border border-border bg-card px-3 text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-60">拒绝</button>
+        <button ref={confirmButtonRef} type="button" disabled={Boolean(assistant.operationID)} onClick={() => setConfirmCall(call)} className="soft-button min-h-9 bg-danger px-3 text-xs font-medium text-white hover:brightness-95 disabled:opacity-60">检查并确认</button>
       </div>
     </div>
   )
@@ -294,11 +300,18 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   }
 
   const submit = () => {
-    if (!draft.trim() || assistant.sending) return
-    const content = draft
+    if (!composerContent.trim() || !canSend || assistant.sending || assistant.selectingModel || assistant.loading || assistant.operationID) return
+    const content = composerContent
     followLatestRef.current = true
     setDraft('')
-    void assistant.send(content)
+    if (assistant.composerDraft) {
+      void assistant.send(content, assistant.composerDraft.context)
+      assistant.clearDraft()
+    } else {
+      if (assistant.messageDraft) void assistant.send(content, assistant.messageDraft.context)
+      else void assistant.send(content)
+      assistant.updateMessageDraft('')
+    }
   }
 
   const handleMessagesScroll = () => {
@@ -308,7 +321,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
   }
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
       submit()
     }
@@ -318,20 +331,20 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
       <div ref={messagesViewportRef} onScroll={handleMessagesScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4" data-testid={`ai-${mode}-messages`}>
         {assistant.loading && !assistant.conversation ? (
-          <div className="flex flex-1 items-center justify-center text-sm font-bold text-muted-foreground">
+          <div className="flex flex-1 items-center justify-center text-sm font-medium text-muted-foreground">
             <LoaderCircle className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
             正在加载会话
           </div>
         ) : assistant.error ? (
-          <div className="m-auto max-w-sm border border-danger/30 bg-danger/10 px-4 py-3 text-sm font-bold leading-6 text-danger">
+          <div className="m-auto max-w-sm border border-danger/30 bg-danger/10 px-4 py-3 text-sm font-medium leading-6 text-danger">
             {assistant.error}
           </div>
         ) : assistant.providers.length === 0 ? (
           <div className="m-auto max-w-sm text-center">
             <Bot className="mx-auto h-9 w-9 text-muted-foreground" aria-hidden="true" />
-            <h3 className="mt-3 text-base font-black text-foreground">还没有模型配置</h3>
+            <h3 className="mt-3 text-base font-medium text-foreground">还没有模型配置</h3>
             <p className="mt-2 text-sm font-semibold leading-6 text-muted-foreground">添加 OpenAI Chat Completions 兼容配置并完成能力检测后即可开始运维对话。</p>
-            <button type="button" onClick={onOpenSettings} className="soft-button mt-4 inline-flex min-h-10 items-center gap-2 bg-primary px-4 text-sm font-black text-primary-foreground focus:outline-none focus:ring-4 focus:ring-primary/20">
+            <button type="button" onClick={onOpenSettings} className="soft-button mt-4 inline-flex min-h-10 items-center gap-2 bg-primary px-4 text-sm font-medium text-primary-foreground focus:outline-none focus:ring-4 focus:ring-primary/20">
               <Settings2 size={16} aria-hidden="true" />
               配置模型
             </button>
@@ -339,8 +352,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
         ) : messages.length === 0 && toolCalls.length === 0 && plans.length === 0 ? (
           <div className="m-auto max-w-md text-center">
             <MessageSquarePlus className="mx-auto h-9 w-9 text-primary" aria-hidden="true" />
-            <h3 className="mt-3 text-base font-black text-foreground">开始一次运维对话</h3>
-            <p className="mt-2 text-sm font-semibold leading-6 text-muted-foreground">可以询问当前故障、告警、离线节点、应用服务和拨测状态。状态变更由 Server 策略决定是否需要确认。</p>
+            <h3 className="mt-3 text-base font-medium text-foreground">开始一次运维对话</h3>
           </div>
         ) : (
           <div className="space-y-3">
@@ -349,10 +361,10 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               return (
                 <Fragment key={message.id}>
                   <article className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[88%] min-w-0 border px-3 py-2.5 text-sm font-semibold leading-6 ${message.role === 'user' ? 'border-primary/30 bg-primary text-primary-foreground' : 'border-border bg-surface text-foreground'}`}>
+                    <div className={`max-w-[88%] min-w-0 rounded-lg border px-3 py-2.5 text-sm font-normal leading-6 ${message.role === 'user' ? 'border-border bg-muted text-foreground' : 'border-transparent bg-card text-foreground'}`}>
                       <p className="whitespace-pre-wrap break-words">{message.content}</p>
                       {message.role === 'assistant' && (message.provider_name || message.model) ? (
-                        <p className="mt-1 truncate text-[11px] font-bold opacity-60">
+                        <p className="mt-1 truncate text-[11px] font-medium opacity-60">
                           {turn?.fallback_used ? '备用响应 · ' : ''}{[message.provider_name, message.model].filter(Boolean).join(' / ')}
                           {turn?.fallback_used && turn.requested_model ? `（原请求 ${turn.requested_provider_name} / ${turn.requested_model}）` : ''}
                         </p>
@@ -376,7 +388,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
             ) : null}
 
             {activeSending ? (
-              <div className="space-y-1.5 text-xs font-bold text-muted-foreground" role="status">
+              <div className="space-y-1.5 text-xs font-medium text-muted-foreground" role="status">
                 {(assistant.timeline.length > 0 ? assistant.timeline : assistant.progress ? [assistant.progress] : []).map((event, index, events) => (
                   <div key={`${event.phase}-${event.tool_name ?? ''}-${event.target_name ?? ''}-${index}`} className={`flex min-w-0 items-center gap-2 ${index === events.length - 1 ? 'text-foreground' : 'opacity-60'}`}>
                     {index === events.length - 1 ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" /> : <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />}
@@ -393,28 +405,30 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
       </div>
 
       <div className="shrink-0 border-t border-border bg-surface px-3 py-3">
+        {assistant.composerDraft && <div className="mb-2 flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground"><span className="min-w-0 truncate">诊断目标：{assistant.composerDraft.label}</span><button type="button" aria-label="取消诊断草稿" onClick={() => { assistant.clearDraft(); setDraft('') }} className="shrink-0 rounded p-1 hover:text-foreground"><X size={14} /></button></div>}
+        {!assistant.composerDraft && (assistant.messageDraft?.context.resource_id || assistant.context.resource_id) && <p className="mb-2 text-xs text-muted-foreground">上下文：{assistant.messageDraft?.context.resource_id ?? assistant.context.resource_id}</p>}
         <label htmlFor={`ai-composer-${mode}`} className="sr-only">发送给 AI 运维助手</label>
         <textarea
           ref={composerRef}
           id={`ai-composer-${mode}`}
           rows={3}
-          value={draft}
+          value={composerContent}
           maxLength={16 * 1024}
           disabled={!canSend}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => updateComposer(event.target.value)}
           onKeyDown={handleComposerKeyDown}
           placeholder={canSend ? '询问当前故障、告警或运维操作...' : '先选择已启用且通过检测的模型'}
           className="soft-input max-h-36 min-h-[76px] w-full resize-y px-3 py-2 text-sm font-semibold leading-6 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
         />
         <div className="mt-2 flex items-center justify-between gap-3">
-          <p className="min-w-0 truncate text-[11px] font-bold text-muted-foreground">变更操作由 Server 策略控制</p>
+          <p className="min-w-0 truncate text-[11px] font-medium text-muted-foreground">变更操作需在对话中确认</p>
           {activeSending ? (
             <button type="button" onClick={assistant.stop} title="停止模型请求" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-danger/40 bg-card text-danger focus:outline-none focus:ring-4 focus:ring-danger/20">
               <Square size={15} fill="currentColor" aria-hidden="true" />
               <span className="sr-only">停止模型请求</span>
             </button>
           ) : (
-            <button type="button" onClick={submit} disabled={!draft.trim() || !canSend || assistant.sending || assistant.selectingModel} title="发送消息" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center bg-primary text-primary-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="button" onClick={submit} disabled={!composerContent.trim() || !canSend || assistant.sending || assistant.selectingModel || assistant.loading || Boolean(assistant.operationID)} title="发送消息" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center bg-primary text-primary-foreground focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50">
               <Send size={16} aria-hidden="true" />
               <span className="sr-only">发送消息</span>
             </button>
@@ -427,7 +441,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
           <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="ai-plan-confirm-title" tabIndex={-1} className="soft-modal-shell flex max-h-[min(720px,calc(100vh-32px))] w-full max-w-lg flex-col text-left outline-none" onKeyDown={(event) => { if (event.key === 'Escape') closeConfirmation() }}>
             <div className="soft-modal-header flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3">
               <div className="min-w-0">
-                <p id="ai-plan-confirm-title" className="text-base font-black text-foreground">确认 AI 变更计划</p>
+                <p id="ai-plan-confirm-title" className="text-base font-medium text-foreground">确认 AI 变更计划</p>
                 <p className="mt-1 text-xs font-semibold text-muted-foreground">确认一次后，Server 将按顺序执行全部步骤。</p>
               </div>
               <button type="button" onClick={closeConfirmation} title="关闭确认窗口" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground">
@@ -443,7 +457,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               <ol className="border-y border-border">
                 {confirmPlan.steps.map((step, index) => (
                   <li key={step.id} className="border-b border-border py-3 last:border-b-0">
-                    <p className="break-words font-black text-foreground">{index + 1}. {toolLabels[step.tool_name] ?? step.tool_name}</p>
+                    <p className="break-words font-medium text-foreground">{index + 1}. {toolLabels[step.tool_name] ?? step.tool_name}</p>
                     <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">目标：{toolTarget(step)}</p>
                     {step.result_summary ? <p className="mt-1 break-words text-xs font-semibold text-muted-foreground">{step.result_summary}</p> : null}
                   </li>
@@ -452,8 +466,8 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               <p className="font-semibold leading-6 text-muted-foreground">执行每一步前，Server 都会重新检查目标和当前能力；校验失败时不会继续后续步骤。</p>
             </div>
             <div className="soft-modal-footer flex shrink-0 justify-end gap-2 border-t px-4 py-3">
-              <button type="button" onClick={closeConfirmation} className="soft-button min-h-10 border border-border bg-card px-4 text-sm font-black text-muted-foreground hover:text-foreground">取消</button>
-              <button type="button" disabled={Boolean(assistant.operationID)} onClick={() => { const plan = confirmPlan; closeConfirmation(); void assistant.confirmPlan(plan) }} className="soft-button min-h-10 bg-danger px-4 text-sm font-black text-white hover:brightness-95 disabled:opacity-60">
+              <button type="button" onClick={closeConfirmation} className="soft-button min-h-10 border border-border bg-card px-4 text-sm font-medium text-muted-foreground hover:text-foreground">取消</button>
+              <button type="button" disabled={Boolean(assistant.operationID)} onClick={() => { const plan = confirmPlan; closeConfirmation(); void assistant.confirmPlan(plan) }} className="soft-button min-h-10 bg-danger px-4 text-sm font-medium text-white hover:brightness-95 disabled:opacity-60">
                 {assistant.operationID ? '执行中...' : '确认执行计划'}
               </button>
             </div>
@@ -466,7 +480,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
           <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="ai-confirm-title" tabIndex={-1} className="soft-modal-shell w-full max-w-md text-left outline-none" onKeyDown={(event) => { if (event.key === 'Escape') closeConfirmation() }}>
             <div className="soft-modal-header flex items-start justify-between gap-3 border-b px-4 py-3">
               <div className="min-w-0">
-                <p id="ai-confirm-title" className="text-base font-black text-foreground">确认 AI 运维操作</p>
+                <p id="ai-confirm-title" className="text-base font-medium text-foreground">确认 AI 运维操作</p>
                 <p className="mt-1 text-xs font-semibold text-muted-foreground">该操作将改变目标运行状态，确认后立即执行且不会再次询问模型。</p>
               </div>
               <button type="button" onClick={closeConfirmation} title="关闭确认窗口" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground">
@@ -478,7 +492,7 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               <div className="flex gap-3 border border-warning/30 bg-warning/10 px-3 py-3 text-warning">
                 <CircleAlert className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
                 <div className="min-w-0">
-                  <p className="font-black">{toolLabels[confirmCall.tool_name] ?? confirmCall.tool_name}</p>
+                  <p className="font-medium">{toolLabels[confirmCall.tool_name] ?? confirmCall.tool_name}</p>
                   <p className="mt-1 break-words font-semibold">目标：{toolTarget(confirmCall)}</p>
                   {confirmCall.node_id ? <p className="mt-1 break-all text-xs font-semibold opacity-80">节点：{confirmCall.node_id}</p> : null}
                   {confirmCall.result_summary ? <p className="mt-2 break-words text-xs font-semibold opacity-90">{confirmCall.result_summary}</p> : null}
@@ -487,8 +501,8 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
               <p className="font-semibold leading-6 text-muted-foreground">执行前 Server 会重新检查目标是否存在、节点是否在线以及 Agent 能力是否仍满足要求。校验失败时不会执行。</p>
             </div>
             <div className="soft-modal-footer flex justify-end gap-2 border-t px-4 py-3">
-              <button type="button" onClick={closeConfirmation} className="soft-button min-h-10 border border-border bg-card px-4 text-sm font-black text-muted-foreground hover:text-foreground">取消</button>
-              <button type="button" disabled={Boolean(assistant.operationID)} onClick={() => { const call = confirmCall; closeConfirmation(); void assistant.confirm(call) }} className="soft-button min-h-10 bg-danger px-4 text-sm font-black text-white hover:brightness-95 disabled:opacity-60">
+              <button type="button" onClick={closeConfirmation} className="soft-button min-h-10 border border-border bg-card px-4 text-sm font-medium text-muted-foreground hover:text-foreground">取消</button>
+              <button type="button" disabled={Boolean(assistant.operationID)} onClick={() => { const call = confirmCall; closeConfirmation(); void assistant.confirm(call) }} className="soft-button min-h-10 bg-danger px-4 text-sm font-medium text-white hover:brightness-95 disabled:opacity-60">
                 {assistant.operationID ? '执行中...' : '确认执行'}
               </button>
             </div>
@@ -501,6 +515,26 @@ function ConversationPanel({ assistant, mode, onOpenSettings }: ConversationPane
 
 export function AIAssistantDrawer({ assistant, onOpenWorkspace, onOpenSettings }: { assistant: AIAssistantState, onOpenWorkspace: () => void, onOpenSettings: () => void }) {
   const [resizing, setResizing] = useState(false)
+  const drawerRef = useRef<HTMLElement>(null)
+  const closeRef = useRef(assistant.closeDrawer)
+  closeRef.current = assistant.closeDrawer
+  useEffect(() => {
+    if (!assistant.drawerOpen) return
+    const previous = document.activeElement as HTMLElement | null
+    drawerRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      // Nested operation confirmations own Escape/Tab until they close.
+      if (drawerRef.current?.querySelector('[role="dialog"]')) return
+      if (event.key === 'Escape') { event.preventDefault(); closeRef.current() }
+      if (event.key === 'Tab') {
+        const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]') ?? []).filter(el => !el.closest('[hidden]'))
+        if (event.shiftKey && document.activeElement === focusable[0]) { event.preventDefault(); focusable[focusable.length - 1]?.focus() }
+        else if (!event.shiftKey && document.activeElement === focusable[focusable.length - 1]) { event.preventDefault(); focusable[0]?.focus() }
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('keydown', onKey); if (previous?.isConnected) previous.focus() }
+  }, [assistant.drawerOpen])
 
   useEffect(() => {
     if (!resizing) return
@@ -534,15 +568,13 @@ export function AIAssistantDrawer({ assistant, onOpenWorkspace, onOpenSettings }
 
   return (
     <>
-      <aside aria-label="AI 运维助手" className="soft-drawer fixed inset-y-0 right-0 z-50 flex min-w-0 flex-col" style={{ width: `${assistant.drawerWidth}px`, maxWidth: 'calc(100vw - 24px)' }}>
+      <div className="fixed inset-0 z-40 bg-black/15" aria-hidden="true" onClick={assistant.closeDrawer} />
+      <aside ref={drawerRef} aria-label="AI 运维助手" className="console-ai-drawer soft-drawer fixed inset-y-0 right-0 z-50 flex min-w-0 flex-col" style={{ width: `${assistant.drawerWidth}px`, maxWidth: 'calc(100vw - 24px)' }}>
         <div role="separator" aria-label="调整 AI 助手宽度" aria-orientation="vertical" aria-valuemin={420} aria-valuemax={720} aria-valuenow={assistant.drawerWidth} tabIndex={0} onPointerDown={(event: PointerEvent<HTMLDivElement>) => { event.preventDefault(); setResizing(true) }} onKeyDown={handleResizeKey} className={`absolute inset-y-0 left-0 z-10 w-2 -translate-x-1/2 cursor-col-resize focus:outline-none focus:ring-2 focus:ring-primary ${resizing ? 'bg-primary/20' : 'hover:bg-primary/10'}`} />
         <header className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Bot className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-black text-foreground">AI 运维助手</p>
-              <p className="truncate text-[11px] font-semibold text-muted-foreground">{assistant.conversation?.conversation.title ?? '新会话'}</p>
-            </div>
+            <p className="truncate text-sm font-medium text-foreground">AI 运维助手</p>
           </div>
           <button type="button" onClick={() => void assistant.newConversation()} title="新建会话" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground"><Plus size={16} aria-hidden="true" /><span className="sr-only">新建会话</span></button>
           <button type="button" onClick={onOpenWorkspace} title="打开完整工作台" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground"><Maximize2 size={16} aria-hidden="true" /><span className="sr-only">打开完整工作台</span></button>
@@ -562,13 +594,10 @@ export function AIAssistantDrawer({ assistant, onOpenWorkspace, onOpenSettings }
 export function AIWorkspacePage({ assistant, onOpenSettings }: { assistant: AIAssistantState, onOpenSettings: () => void }) {
   const activeConversation = assistant.conversation?.conversation
   return (
-    <section aria-label="AI 运维工作台" className="flex h-[calc(100vh-112px)] min-w-0 overflow-hidden border border-border bg-card shadow-sm">
+    <section aria-label="AI 运维工作台" className="console-ai-workspace flex h-[calc(100vh-112px)] min-w-0 overflow-hidden border border-border bg-card">
       <aside className="flex w-[284px] shrink-0 flex-col border-r border-border bg-surface">
         <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-3">
-          <div className="min-w-0">
-            <p className="text-sm font-black text-foreground">AI 运维</p>
-            <p className="text-[11px] font-semibold text-muted-foreground">本地持久化会话</p>
-          </div>
+          <p className="min-w-0 text-sm font-medium text-foreground">AI 运维</p>
           <button type="button" title="新建会话" onClick={() => void assistant.newConversation()} className="soft-button flex h-9 w-9 shrink-0 items-center justify-center bg-primary text-primary-foreground"><Plus size={16} aria-hidden="true" /><span className="sr-only">新建会话</span></button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
@@ -577,7 +606,7 @@ export function AIWorkspacePage({ assistant, onOpenSettings }: { assistant: AIAs
           ) : assistant.conversations.map((conversation) => (
             <div key={conversation.id} className={`mb-1 flex min-w-0 items-center gap-1 border px-2 py-2 ${assistant.activeConversationID === conversation.id ? 'border-primary/30 bg-primary/10' : 'border-transparent hover:border-border hover:bg-card'}`}>
               <button type="button" onClick={() => void assistant.selectConversation(conversation.id)} className="min-w-0 flex-1 text-left focus:outline-none">
-                <span className="block truncate text-sm font-black text-foreground">{conversation.title}</span>
+                <span className="block truncate text-sm font-medium text-foreground">{conversation.title}</span>
                 <span className="mt-0.5 block truncate text-[11px] font-semibold text-muted-foreground">{new Date(conversation.updated_at).toLocaleString()}</span>
               </button>
               <button type="button" title="删除会话" onClick={() => void assistant.deleteConversation(conversation.id)} className="soft-button flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground hover:bg-danger/10 hover:text-danger"><Trash2 size={14} aria-hidden="true" /><span className="sr-only">删除会话</span></button>
@@ -588,10 +617,7 @@ export function AIWorkspacePage({ assistant, onOpenSettings }: { assistant: AIAs
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-4 py-3">
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-black text-foreground">{activeConversation?.title ?? '新会话'}</h2>
-            <p className="mt-0.5 truncate text-xs font-semibold text-muted-foreground">查询自动执行，变更由策略控制</p>
-          </div>
+          <h2 className="min-w-0 truncate text-base font-medium text-foreground">{activeConversation?.title ?? '新会话'}</h2>
           <div className="flex min-w-0 items-center gap-2">
             <div className="w-[min(520px,48vw)] min-w-[360px]"><AIModelSelector assistant={assistant} idPrefix="ai-workspace" /></div>
             <button type="button" onClick={onOpenSettings} title="模型设置" className="soft-button flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground hover:text-foreground"><Settings2 size={16} aria-hidden="true" /><span className="sr-only">模型设置</span></button>
@@ -605,13 +631,13 @@ export function AIWorkspacePage({ assistant, onOpenSettings }: { assistant: AIAs
 
 export function AITopbarButton({ onClick, open }: { onClick: () => void, open: boolean }) {
   return (
-    <button type="button" onClick={onClick} aria-pressed={open} title="AI 运维助手" className={`soft-button flex h-10 w-10 items-center justify-center border focus:outline-none focus:ring-4 focus:ring-primary/20 ${open ? 'border-primary/40 bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground hover:text-foreground'}`}>
+    <button type="button" onClick={onClick} aria-pressed={open} title="AI 运维助手" className={`console-button console-ghost ${open ? 'bg-muted' : ''}`}>
       <Bot size={18} aria-hidden="true" />
-      <span className="sr-only">AI 运维助手</span>
+      <span>AI 运维助手</span>
     </button>
   )
 }
 
 export function AIWorkspaceLink({ onClick }: { onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="inline-flex items-center gap-1 text-xs font-black text-primary">打开 AI 工作台 <ChevronRight size={14} aria-hidden="true" /></button>
+  return <button type="button" onClick={onClick} className="inline-flex items-center gap-1 text-xs font-medium text-primary">打开 AI 工作台 <ChevronRight size={14} aria-hidden="true" /></button>
 }

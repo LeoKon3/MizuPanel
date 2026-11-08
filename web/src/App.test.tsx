@@ -5,6 +5,9 @@ import App from './App'
 import { APIError, createInstallCommand, getAuthSession, getNodes, login, logout, setUnauthorizedHandler } from './api/client'
 
 vi.mock('./api/client', () => ({
+  getActiveAlerts: vi.fn(async () => ({ history: [] })),
+  getApplicationServices: vi.fn(async () => ([])),
+  getUptimeMonitors: vi.fn(async () => ({ monitors: [] })),
   APIError: class APIError extends Error {
     constructor(public status: number, message: string) {
       super(message)
@@ -89,8 +92,39 @@ vi.mock('./api/client', () => ({
 
 describe('App', () => {
   beforeEach(() => {
-    window.history.pushState({}, '', '/')
+    window.history.pushState({}, '', '/nodes')
     vi.clearAllMocks()
+  })
+
+  test('opens overview at root while keeping the explicit host list and details directly reachable', async () => {
+    window.history.replaceState({}, '', '/')
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: '概览', level: 1 })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('搜索主机...')).not.toBeInTheDocument()
+    expect(window.location.pathname).toBe('/')
+    fireEvent.click(within(screen.getByRole('heading', { name: '概览', level: 1 }).parentElement!).getByRole('button', { name: '查看主机' }))
+    expect(window.location.pathname).toBe('/nodes')
+    expect(await screen.findByPlaceholderText('搜索主机...')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Oracle SG' }))
+    expect(await screen.findByRole('heading', { name: 'Oracle SG', level: 1 })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/nodes/node-1')
+  })
+
+  test('overview does not wait for a hung host request and reports its timeout', async () => {
+    vi.useFakeTimers()
+    let signal: AbortSignal | undefined
+    vi.mocked(getNodes).mockImplementationOnce((value) => { signal = value; return new Promise(() => {}) }).mockImplementationOnce(() => new Promise(() => {}))
+    window.history.replaceState({}, '', '/')
+    const view = render(<App />)
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(screen.getByRole('heading', { name: '概览', level: 1 })).toBeInTheDocument()
+      expect(screen.getByText('正在读取主机…')).toBeInTheDocument()
+      expect(screen.getByText('最近 24 小时没有执行记录。')).toBeInTheDocument()
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+      expect(signal?.aborted).toBe(true)
+      expect(screen.getByText(/主机：主机读取超时/)).toBeInTheDocument()
+    } finally { view.unmount(); vi.useRealTimers() }
   })
 
   test('renders dashboard title and node card without authentication', async () => {
@@ -102,9 +136,9 @@ describe('App', () => {
     expect(screen.queryByText('轻量级自托管服务器监控面板')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Light' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Dark' })).toBeInTheDocument()
-    expect(await screen.findAllByText('Oracle SG')).toHaveLength(2)
-    expect(screen.getByText('平均磁盘')).toBeInTheDocument()
-    expect(screen.getByText('异常节点')).toBeInTheDocument()
+    expect(await screen.findAllByText('Oracle SG')).toHaveLength(1)
+    expect(screen.queryByText('平均磁盘')).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '磁盘' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: '登录 MizuPanel' })).not.toBeInTheDocument()
   })
 
@@ -131,7 +165,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '登录' }))
 
     await waitFor(() => expect(login).toHaveBeenCalledWith('admin', 'secret'))
-    expect(await screen.findAllByText('Oracle SG')).toHaveLength(2)
+    expect(await screen.findAllByText('Oracle SG')).toHaveLength(1)
     expect(screen.getByText('admin')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '退出登录' }))
@@ -150,7 +184,7 @@ describe('App', () => {
 
     render(<App />)
 
-    expect(await screen.findAllByText('Oracle SG')).toHaveLength(2)
+    expect(await screen.findAllByText('Oracle SG')).toHaveLength(1)
     expect(screen.getByText('admin')).toBeInTheDocument()
     expect(unauthorizedCallback).toBeDefined()
 
@@ -189,7 +223,7 @@ describe('App', () => {
 
     const sidebarNavigation = await screen.findByRole('navigation', { name: '侧边导航' })
     fireEvent.click(within(sidebarNavigation).getByRole('button', { name: '概览' }))
-    fireEvent.click(await screen.findByRole('button', { name: '添加服务器' }))
+    fireEvent.click(await screen.findByRole('button', { name: '添加主机' }))
 
     expect(await screen.findByRole('dialog', { name: '添加主机' })).toBeInTheDocument()
     await waitFor(() => expect(createInstallCommand).toHaveBeenCalledWith('linux'))
@@ -202,7 +236,7 @@ describe('App', () => {
     fireEvent.click(within(sidebarNavigation).getByRole('button', { name: '审计日志' }))
 
     expect(window.location.pathname).toBe('/audit')
-    expect(await screen.findAllByRole('heading', { name: '审计日志', level: 1 })).toHaveLength(2)
+    expect(await screen.findAllByRole('heading', { name: '审计日志', level: 1 })).toHaveLength(1)
     expect(screen.getByLabelText('审计日志筛选')).toBeInTheDocument()
   })
 

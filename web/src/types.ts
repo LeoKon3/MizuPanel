@@ -1,28 +1,6 @@
 export type RangeOption = '1h' | '6h' | '24h' | '3d' | '7d'
 export type AgentMode = 'normal' | 'ops'
 
-export type AIControlMode = 'confirm_all' | 'low_risk_auto' | 'paused'
-
-export type AIControlAction =
-  | 'docker.container.start'
-  | 'docker.container.restart'
-  | 'compose.service.start'
-  | 'compose.service.restart'
-  | 'systemd.service.start'
-  | 'systemd.service.restart'
-
-export type AIControlSettings = {
-  mode: AIControlMode
-  allowed_actions: AIControlAction[]
-  node_scope: string[]
-  revision: number
-  updated_at: string | null
-  scoped_node_count: number
-  emergency_stopped: boolean
-}
-
-export type AIControlSettingsUpdate = Pick<AIControlSettings, 'mode' | 'allowed_actions' | 'node_scope'>
-
 export type AuthSessionResponse = {
   auth_enabled: boolean
   authenticated: boolean
@@ -38,12 +16,9 @@ export type SettingsResponse = {
   metrics_retention: RangeOption
   metrics_retention_seconds: number
   max_metrics_retention: RangeOption
-  ai_control: AIControlSettings
 }
 
-export type SettingsUpdate =
-  | { metrics_retention: RangeOption, ai_control?: never }
-  | { metrics_retention?: never, ai_control: AIControlSettingsUpdate }
+export type SettingsUpdate = { metrics_retention: RangeOption }
 
 export type SystemAboutResponse = {
   version: string
@@ -1209,6 +1184,39 @@ export type ApplicationServiceDetail = ApplicationServiceSummary & {
   recent_audit: ApplicationServiceAuditActivity[]
 }
 
+export type ApplicationServiceHealthCheck = {
+  service: ApplicationServiceDetail
+  status: 'healthy' | 'issues' | 'inconclusive'
+  started_at: string
+  checked_at: string
+  summary: string
+  checks: Array<{
+    resource_id: string
+    name: string
+    status: 'healthy' | 'issues' | 'unavailable'
+    message: string
+    checked_at?: string
+  }>
+}
+
+export type ServiceResourceOption = {
+  key: string
+  label: string
+  detail: string
+  resource: ApplicationServiceResource
+}
+
+export type ServiceEvent = {
+  id: string
+  kind: 'alert' | 'task' | 'audit'
+  at: string
+  label: string
+  title: string
+  detail: string
+  path: string
+  danger: boolean
+}
+
 export type ApplicationServiceInput = {
   name: string
   description: string
@@ -1437,4 +1445,22 @@ export type AIStreamDelta = {
 export type AIStreamReset = {
   turn_id?: string
   reason?: string
+}
+
+// Shared view contracts for the read-only operations overview.
+export type OverviewSourceState<T> = {
+  data?: T
+  loading: boolean
+  error?: string
+  updatedAt?: number
+}
+export type OverviewAttention = {
+  id: string
+  name: string
+  source: string
+  severity: 'fault' | 'warning' | 'unknown'
+  reason: string
+  timestamp?: string
+  timeLabel: string
+  links: Array<{ label: string; path: string }>
 }

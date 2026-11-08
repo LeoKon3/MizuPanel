@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import App from './App'
 
 vi.mock('./api/client', () => ({
+  getActiveAlerts: vi.fn(async () => ({ history: [] })),
+  getK8sClusters: vi.fn(async () => ({ clusters: [] })),
   setUnauthorizedHandler: vi.fn(),
   getAuthSession: vi.fn(async () => ({ auth_enabled: false, authenticated: true, username: '' })),
   getNodes: vi.fn(async () => ({
@@ -63,7 +65,7 @@ describe('App routing', () => {
 
     render(<App />)
 
-    expect(await screen.findAllByText('Oracle SG')).toHaveLength(2)
+    expect(await screen.findAllByText('Oracle SG')).toHaveLength(1)
     await waitFor(() => expect(window.location.pathname).toBe('/nodes/node-1'))
   })
 
@@ -97,13 +99,15 @@ describe('App routing', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/services'))
   })
 
-  test('places application services between hosts and task center', async () => {
+  test('puts overview first and settings last while preserving service and task entries', async () => {
     render(<App />)
     await screen.findAllByText('Oracle SG')
 
     const labels = within(screen.getByRole('navigation', { name: '侧边导航' }))
       .getAllByRole('button')
       .map((button) => button.textContent?.trim())
-    expect(labels.slice(1, 4)).toEqual(['主机', '应用服务', '任务中心'])
+    expect(labels.slice(0, 3)).toEqual(['概览', '主机', '应用服务'])
+    expect(labels[labels.length - 1]).toBe('系统设置')
+    expect(labels).toContain('任务中心')
   })
 })

@@ -52,6 +52,7 @@ function deferred<Value>() {
 
 describe('UptimePage', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/uptime')
     vi.mocked(api.getUptimeMonitors).mockResolvedValue({ monitors: [] })
     vi.mocked(api.createUptimeMonitor).mockResolvedValue(baseMonitor)
     vi.mocked(api.updateUptimeMonitor).mockResolvedValue(baseMonitor)
@@ -64,6 +65,17 @@ describe('UptimePage', () => {
 
   afterEach(() => {
     vi.clearAllMocks()
+  })
+
+  test('opens the requested monitor history directly without running a check', async () => {
+    window.history.replaceState({}, '', '/uptime?monitor=1')
+    vi.mocked(api.getUptimeMonitors).mockResolvedValue({ monitors: [baseMonitor] })
+    render(<UptimePage navigationVersion={1} />)
+    const dialog = await screen.findByRole('dialog', { name: '服务拨测历史' })
+    await waitFor(() => expect(api.getUptimeResults).toHaveBeenCalledWith(1, 50))
+    expect(api.checkUptimeMonitor).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭服务拨测历史' }))
+    expect(window.location.search).not.toContain('monitor=')
   })
 
   test('renders the loading and empty states', async () => {

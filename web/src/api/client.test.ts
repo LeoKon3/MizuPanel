@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeDockerResources, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, runNodeDockerComposeDeployment, runNodeDockerResourceAction, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
+import { getActiveAlerts, createContainerExecSession, createInstallCommand, createNodeGroup, createNodeTag, createTerminalSession, deleteAlertHistories, deleteAlertHistory, deleteNode, deleteNodeGroup, deleteNodePath, deleteNodeTag, getAgentLogs, getAgentStatus, getAuthSession, getNodeDocker, getNodeDockerResources, getNodeFiles, getNodeGroups, getNodeMetrics, getNodeProcesses, getNodeTags, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, resolveAlertHistory, restartAgent, runNodeDockerComposeDeployment, runNodeDockerResourceAction, startSSHInstall, startSSHUninstall, updateBatchNodeMetadata, updateNodeGroup, updateNodeTag, updateSettings, uploadNodeFile, writeNodeFile } from './client'
 import { checkUptimeMonitor, createUptimeMonitor, deleteUptimeMonitor, getUptimeIncidents, getUptimeMonitors, getUptimeResults, toggleUptimeMonitor, updateUptimeMonitor } from './client'
 import { createAutomationScript, createScheduledTask, deleteAutomationScript, deleteScheduledTask, getAutomationRun, getAutomationRuns, getAutomationScripts, getScheduledTasks, runAutomationScript, runScheduledTask, toggleScheduledTask, updateAutomationScript, updateScheduledTask } from './client'
 import { createApplicationService, deleteApplicationService, getApplicationService, getApplicationServices, updateApplicationService } from './client'
@@ -31,6 +31,13 @@ describe('api client', () => {
     expect(session.auth_enabled).toBe(true)
     expect(session.authenticated).toBe(false)
     expect(loginResponse.username).toBe('admin')
+  })
+
+  test('reads active alerts without a node or historical limit, supporting cancellation', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ history: [] })))
+    const controller = new AbortController()
+    expect(await getActiveAlerts(controller.signal)).toEqual({ history: [] })
+    expect(fetchMock).toHaveBeenCalledWith('/api/alerts/active', { signal: controller.signal })
   })
 
   test('fetches nodes from the REST API', async () => {
@@ -94,27 +101,12 @@ describe('api client', () => {
   })
 
   test('fetches and updates system settings', async () => {
-    const aiControl = {
-      mode: 'confirm_all', allowed_actions: [], node_scope: [], revision: 1,
-      updated_at: null, scoped_node_count: 0, emergency_stopped: false
-    }
     const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(JSON.stringify({ metrics_retention: '6h', metrics_retention_seconds: 21600, max_metrics_retention: '7d', ai_control: aiControl })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d', ai_control: aiControl })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d',
-        ai_control: { ...aiControl, mode: 'low_risk_auto', allowed_actions: ['docker.container.restart'], node_scope: ['node-1'], revision: 2, scoped_node_count: 1 }
-      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ metrics_retention: '6h', metrics_retention_seconds: 21600, max_metrics_retention: '7d' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ metrics_retention: '24h', metrics_retention_seconds: 86400, max_metrics_retention: '7d' })))
 
     const current = await getSettings()
     const updated = await updateSettings({ metrics_retention: '24h' })
-    const policy = await updateSettings({
-      ai_control: {
-        mode: 'low_risk_auto',
-        allowed_actions: ['docker.container.restart'],
-        node_scope: ['node-1']
-      }
-    })
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/settings')
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/settings', {
@@ -122,20 +114,8 @@ describe('api client', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ metrics_retention: '24h' })
     })
-    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ai_control: {
-          mode: 'low_risk_auto',
-          allowed_actions: ['docker.container.restart'],
-          node_scope: ['node-1']
-        }
-      })
-    })
     expect(current.metrics_retention).toBe('6h')
     expect(updated.metrics_retention).toBe('24h')
-    expect(policy.ai_control.scoped_node_count).toBe(1)
   })
 
   test('fetches system about information', async () => {

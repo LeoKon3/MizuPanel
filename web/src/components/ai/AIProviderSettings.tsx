@@ -384,18 +384,26 @@ export function AIProviderSettings() {
   }
 
   return (
-    <section className="border-t border-border bg-surface/20 px-4 py-5 sm:px-5" aria-labelledby="ai-provider-settings-title">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 id="ai-provider-settings-title" className="text-xl font-black text-foreground">Provider 与模型</h3>
+    <section className="overflow-hidden rounded-[20px] border border-border bg-card shadow-sm" aria-labelledby="ai-provider-settings-title">
+      <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-6">
+        <div className="min-w-0">
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-primary/10 text-primary">
+              <RadioTower className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
+            </span>
+            <h3 id="ai-provider-settings-title" className="text-lg font-black text-foreground">Provider 与模型</h3>
+          </div>
+        </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {allModels.length > 0 ? <button type="button" onClick={toggleAllModels} className="soft-button inline-flex min-h-10 items-center gap-2 border border-border bg-card px-3 text-sm font-black text-foreground"><ListChecks size={16} aria-hidden="true" />{allModelsSelected ? '取消全选' : '全选模型'}</button> : null}
-          <button ref={addButtonRef} type="button" onClick={openCreateProvider} className="soft-button inline-flex min-h-10 items-center gap-2 bg-primary px-4 text-sm font-black text-primary-foreground focus:outline-none focus:ring-4 focus:ring-primary/20">
+          {allModels.length > 0 ? <button type="button" onClick={toggleAllModels} className="soft-button inline-flex min-h-10 items-center gap-2 rounded-full border border-border bg-card px-4 text-sm font-black text-foreground hover:bg-surface"><ListChecks size={16} aria-hidden="true" />{allModelsSelected ? '取消全选' : '全选模型'}</button> : null}
+          <button ref={addButtonRef} type="button" onClick={openCreateProvider} className="soft-button inline-flex min-h-10 items-center gap-2 rounded-full bg-primary px-4 text-sm font-black text-primary-foreground focus:outline-none focus:ring-4 focus:ring-primary/20">
             <Plus size={16} aria-hidden="true" />添加 Provider
           </button>
         </div>
       </div>
 
-      {selectedModels.length > 0 ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border border-border bg-surface px-3 py-2.5 text-sm">
+      <div className="border-t border-border px-5 pb-5 pt-4 sm:px-6">
+      {selectedModels.length > 0 ? <div className="sticky top-[72px] z-10 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-border bg-surface/95 px-4 py-3 text-sm shadow-sm backdrop-blur">
         <div className="flex min-w-0 items-center gap-3">
           <span className="font-black text-foreground">已选择 {selectedModels.length} 个模型</span>
           {selectedModelsHaveRoute ? <span className="text-xs font-semibold text-warning">默认/备用模型需先解除标记</span> : null}
@@ -406,7 +414,8 @@ export function AIProviderSettings() {
         </div>
       </div> : null}
 
-      <div className="mt-4 overflow-hidden border border-border bg-card">
+      <div className="mt-4 overflow-x-auto rounded-[16px] border border-border bg-card">
+        <div className="min-w-[720px]">
         {loading ? (
           <div className="flex min-h-28 items-center justify-center text-sm font-bold text-muted-foreground"><LoaderCircle className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />正在加载 AI 配置</div>
         ) : providers.length === 0 ? (
@@ -416,7 +425,7 @@ export function AIProviderSettings() {
           const providerBusy = busyID === provider.id
           return (
             <div key={provider.id} className="border-b border-border last:border-b-0">
-              <div className="grid min-w-0 grid-cols-[36px_44px_minmax(220px,1fr)_minmax(210px,0.8fr)_auto] items-center gap-2 px-3 py-2.5">
+              <div className="grid min-w-0 grid-cols-[36px_40px_minmax(170px,1.2fr)_minmax(150px,0.8fr)_auto] items-center gap-2 px-3 py-2.5">
                 <button type="button" onClick={() => toggleExpanded(provider.id)} title={isExpanded ? '收起模型' : '展开模型'} aria-expanded={isExpanded} className="soft-button flex h-9 w-9 items-center justify-center text-muted-foreground hover:bg-surface hover:text-foreground">
                   {isExpanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}<span className="sr-only">{isExpanded ? '收起模型' : '展开模型'}</span>
                 </button>
@@ -452,7 +461,7 @@ export function AIProviderSettings() {
                     const modelBusy = busyID === model.id || busyID === `probe-${model.id}` || busyID?.endsWith(`-${model.id}`)
                     const routed = model.is_default || model.is_fallback
                     return (
-                      <div key={model.id} className="grid min-w-0 grid-cols-[34px_80px_minmax(220px,1fr)_minmax(230px,0.9fr)_auto] items-center gap-2 border-b border-border/70 py-2 pl-14 pr-3 last:border-b-0">
+                      <div key={model.id} className="grid min-w-0 grid-cols-[32px_68px_minmax(170px,1.2fr)_minmax(170px,0.9fr)_auto] items-center gap-2 border-b border-border/70 py-2 pl-14 pr-3 last:border-b-0">
                         <label className="flex items-center justify-center" title="选择模型">
                           <input type="checkbox" aria-label={`选择模型 ${model.display_name || model.model_id}`} checked={selectedModelIDs.has(model.id)} disabled={Boolean(busyID)} onChange={() => toggleModelSelection(model.id)} className="h-4 w-4 accent-primary" />
                         </label>
@@ -489,6 +498,8 @@ export function AIProviderSettings() {
             </div>
           )
         })}
+        </div>
+      </div>
       </div>
 
       {editingProvider ? (

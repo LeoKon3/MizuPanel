@@ -41,7 +41,7 @@ const statusCopy: Record<UptimeMonitorStatus, { label: string, className: string
   down: { label: '故障', className: 'border-danger/30 bg-danger/10 text-danger', dot: 'bg-danger' }
 }
 
-export function UptimePage() {
+export function UptimePage({ navigationVersion }: { navigationVersion?: number } = {}) {
   const [monitors, setMonitors] = useState<UptimeMonitor[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
@@ -243,7 +243,7 @@ export function UptimePage() {
     }
   }
 
-  const openHistory = async (monitor: UptimeMonitor, trigger: HTMLButtonElement) => {
+  const openHistory = async (monitor: UptimeMonitor, trigger: HTMLButtonElement | null) => {
     const requestID = ++historyRequestSequence.current
     historyTriggerRef.current = trigger
     setHistoryMonitor(monitor)
@@ -267,7 +267,24 @@ export function UptimePage() {
     }
   }
 
+  const historyOpener = useRef(openHistory)
+  historyOpener.current = openHistory
+  const openedQuery = useRef('')
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('monitor'))
+    const key = `${navigationVersion ?? 0}:${id}`
+    if (!Number.isSafeInteger(id) || id <= 0) { openedQuery.current = ''; return }
+    if (loading || openedQuery.current === key) return
+    const monitor = monitors.find(item => item.id === id)
+    if (!monitor) { if (!error) setError('指定的拨测不存在或已删除'); return }
+    openedQuery.current = key
+    void historyOpener.current(monitor, pageFallbackFocusRef.current)
+  }, [navigationVersion, loading, monitors, error])
+
   const closeHistory = () => {
+    const query = new URLSearchParams(window.location.search)
+    query.delete('monitor')
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${query.size ? `?${query}` : ''}`)
     historyRequestSequence.current += 1
     setHistoryMonitor(undefined)
     setHistoryLoading(false)
@@ -292,10 +309,7 @@ export function UptimePage() {
       {toast ? <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} /> : null}
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-black text-foreground">服务拨测</h1>
-          <p className="mt-1 text-sm font-semibold text-muted-foreground">由 Server 定时检查 HTTP、HTTPS 和 TCP 服务，并复用告警渠道发送故障与恢复通知。</p>
-        </div>
+        <h1 className="text-2xl font-black text-foreground">服务拨测</h1>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => void loadMonitors(false)} className="soft-button inline-flex min-h-10 cursor-pointer items-center gap-2 border border-border bg-card px-4 text-sm font-black text-foreground hover:border-primary/40 focus:outline-none focus:ring-4 focus:ring-primary/20">
             <RefreshCw size={16} aria-hidden="true" />刷新

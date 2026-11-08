@@ -522,12 +522,8 @@ export function LogsPage({ nodes }: LogsPageProps) {
     <div className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-4">
       {toast ? <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} /> : null}
       <section className="soft-panel shrink-0 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
-          <div>
-            <h1 className="text-2xl font-black text-foreground">统一日志中心</h1>
-            <p className="mt-1 text-sm font-semibold text-muted-foreground">按需查询单一目标；日志不会集中采集、持久化或建立索引。</p>
-          </div>
-          <div className="rounded-full border border-border bg-muted/50 px-3 py-1.5 text-xs font-black text-muted-foreground">第一阶段 · 单目标排障</div>
+        <div className="border-b border-border pb-4">
+          <h1 className="text-2xl font-black text-foreground">统一日志中心</h1>
         </div>
 
         <div className="mt-4 grid gap-2 xl:grid-cols-6">

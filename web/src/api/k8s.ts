@@ -60,16 +60,16 @@ export function fetchK8sNodes(clusterID: string): Promise<K8sNodesResponse> {
   return request<K8sNodesResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/nodes`)
 }
 
-export function fetchK8sDeployments(clusterID: string, namespace?: string): Promise<K8sDeploymentsResponse> {
-  return request<K8sDeploymentsResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/deployments${namespaceQuery(namespace)}`)
+export function fetchK8sDeployments(clusterID: string, namespace?: string, signal?: AbortSignal): Promise<K8sDeploymentsResponse> {
+  return request<K8sDeploymentsResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/deployments${namespaceQuery(namespace)}`, signal ? { signal } : undefined)
 }
 
-export function fetchK8sStatefulSets(clusterID: string, namespace?: string): Promise<K8sStatefulSetsResponse> {
-  return request<K8sStatefulSetsResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/statefulsets${namespaceQuery(namespace)}`)
+export function fetchK8sStatefulSets(clusterID: string, namespace?: string, signal?: AbortSignal): Promise<K8sStatefulSetsResponse> {
+  return request<K8sStatefulSetsResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/statefulsets${namespaceQuery(namespace)}`, signal ? { signal } : undefined)
 }
 
-export function fetchK8sDaemonSets(clusterID: string, namespace?: string): Promise<K8sDaemonSetsResponse> {
-  return request<K8sDaemonSetsResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/daemonsets${namespaceQuery(namespace)}`)
+export function fetchK8sDaemonSets(clusterID: string, namespace?: string, signal?: AbortSignal): Promise<K8sDaemonSetsResponse> {
+  return request<K8sDaemonSetsResponse>(`/api/k8s/clusters/${encodeURIComponent(clusterID)}/daemonsets${namespaceQuery(namespace)}`, signal ? { signal } : undefined)
 }
 
 export function fetchK8sServices(clusterID: string, namespace?: string): Promise<K8sServicesResponse> {

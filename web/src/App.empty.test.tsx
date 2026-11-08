@@ -56,6 +56,10 @@ function deferred<T>() {
 }
 
 vi.mock('./api/client', () => ({
+  getActiveAlerts: vi.fn(async () => ({ history: [] })),
+  getApplicationServices: vi.fn(async () => ([])),
+  getUptimeMonitors: vi.fn(async () => ({ monitors: [] })),
+  getAutomationRuns: vi.fn(async () => ({ runs: [], next_before_id: null })),
   setUnauthorizedHandler: vi.fn(),
   getAuthSession: vi.fn(async () => ({ auth_enabled: false, authenticated: true, username: '' })),
   login: vi.fn(async () => ({ authenticated: true, username: 'admin' })),
@@ -101,6 +105,7 @@ const createInstallCommandMock = vi.mocked(createInstallCommand)
 const getNodesMock = vi.mocked(getNodes)
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/nodes')
   createInstallCommandMock.mockReset()
   createInstallCommandMock.mockImplementation(async (platform = 'linux') => {
     if (platform === 'windows') return windowsInstallResponse
@@ -223,7 +228,7 @@ describe('App empty state', () => {
       expect(screen.queryByRole('dialog', { name: '添加主机' })).not.toBeInTheDocument()
       expect(screen.getAllByText('New Agent Host').length).toBeGreaterThan(0)
       expect(createInstallCommandMock).toHaveBeenCalledTimes(1)
-      expect(window.location.pathname).toBe('/')
+      expect(window.location.pathname).toBe('/nodes')
     } finally {
       unmount()
       vi.clearAllTimers()
@@ -231,7 +236,7 @@ describe('App empty state', () => {
     }
   })
 
-  test('stops node discovery polling when the install dialog closes', async () => {
+  test('returns to normal list polling after installation discovery closes', async () => {
     vi.useFakeTimers()
     const { unmount } = render(<App />)
 
@@ -249,7 +254,10 @@ describe('App empty state', () => {
         await vi.advanceTimersByTimeAsync(30_000)
       })
 
-      expect(getNodesMock).toHaveBeenCalledTimes(2)
+      expect(getNodesMock).toHaveBeenCalledTimes(8)
+      unmount()
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(getNodesMock).toHaveBeenCalledTimes(8)
     } finally {
       unmount()
       vi.clearAllTimers()

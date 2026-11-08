@@ -15,7 +15,7 @@ import (
 	"github.com/mizupanel/mizupanel/internal/server/store"
 )
 
-func testAlertRouter(t *testing.T) (*http.ServeMux, *store.AlertStore) {
+func testAlertRouter(t *testing.T, auth ...AuthConfig) (*http.ServeMux, *store.AlertStore) {
 	t.Helper()
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -28,7 +28,11 @@ func testAlertRouter(t *testing.T) (*http.ServeMux, *store.AlertStore) {
 	nodes := store.NewNodeStore(database)
 	metrics := store.NewMetricStore(database)
 	alerts := store.NewAlertStore(database)
-	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Alerts: alerts})
+	config := AuthConfig{}
+	if len(auth) > 0 {
+		config = auth[0]
+	}
+	mux := NewRouter(RouterDependencies{Nodes: nodes, Metrics: metrics, Alerts: alerts, Auth: config})
 	return mux, alerts
 }
 

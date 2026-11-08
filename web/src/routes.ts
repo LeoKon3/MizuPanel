@@ -51,7 +51,7 @@ export function routeForPath(pathname: string): AppRoute {
   if (pathname === '/uptime') return { kind: 'uptime' }
   if (pathname === '/audit') return { kind: 'audit' }
   if (pathname === '/tasks') return { kind: 'tasks' }
-  if (pathname === '/overview') return { kind: 'overview' }
+  if (pathname === '/' || pathname === '/overview') return { kind: 'overview' }
   if (pathname === '/logs') return { kind: 'logs' }
   if (pathname === '/ai') return { kind: 'ai' }
   return { kind: 'dashboard' }

@@ -1,4 +1,4 @@
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Line, LineChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
 import { formatPercent, formatSpeed } from '../lib/format'
 import type { Metric } from '../types'
@@ -20,6 +20,7 @@ type ChartSummaryItem = {
 }
 
 type MetricsChartProps = {
+  bare?: boolean
   metrics: Metric[]
   dataKey?: MetricKey
   series?: ChartSeries[]
@@ -45,16 +46,16 @@ const chartVarByKey: Partial<Record<MetricKey, string>> = {
   cpu_usage: '--chart-cpu',
   memory_usage: '--chart-memory',
   disk_usage: '--chart-disk',
-  disk_read_speed: '--chart-network-out',
-  disk_write_speed: '--chart-network-in',
+  disk_read_speed: '--chart-network-in',
+  disk_write_speed: '--chart-network-out',
   rx_speed: '--chart-network-in',
   tx_speed: '--chart-network-out',
   load1: '--chart-load',
-  load5: '--chart-memory',
-  load15: '--chart-network-out'
+  load5: '--chart-load-five',
+  load15: '--chart-load-fifteen'
 }
 
-export function MetricsChart({ metrics, dataKey, series, summaryItems = [], title, color, unitLabel = '使用率 %', domain, range, onRangeChange, emptyText = '等待指标数据' }: MetricsChartProps) {
+export function MetricsChart({ bare = false, metrics, dataKey, series, summaryItems = [], title, color, unitLabel = '使用率 %', domain, range, onRangeChange, emptyText = '等待指标数据' }: MetricsChartProps) {
   const chartSeries = series?.length ? series : dataKey ? [{ dataKey, label: title, color, unitLabel }] : []
   const latestMetric = metrics.length > 0 ? metrics[metrics.length - 1] : undefined
   const defaultSummaryItems = summaryItems.length > 0
@@ -76,10 +77,10 @@ export function MetricsChart({ metrics, dataKey, series, summaryItems = [], titl
   const tickColor = cssVar('--muted-foreground', '#64748b')
 
   return (
-    <section aria-label={title} className="rounded-[14px] border border-border bg-card p-3 shadow-sm">
-      <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
+    <section aria-label={title} className={`console-metric-chart ${bare ? "is-bare" : ""}`}>
+      {!bare && <><div className="mb-2 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="font-display text-base font-black text-foreground">{title}</h3>
+          <h3 className="font-display text-base font-medium text-foreground">{title}</h3>
         </div>
         {range && onRangeChange ? (
           <div className="flex rounded-xl border border-border bg-surface p-1" aria-label={`${title} 时间范围`}>
@@ -89,7 +90,7 @@ export function MetricsChart({ metrics, dataKey, series, summaryItems = [], titl
                 type="button"
                 aria-pressed={range === item}
                 onClick={() => onRangeChange(item)}
-                className={`min-h-7 cursor-pointer rounded-lg px-2.5 text-[11px] font-black transition focus:outline-none focus:ring-4 focus:ring-primary/20 ${range === item ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-card hover:text-foreground'}`}
+                className={`min-h-7 cursor-pointer rounded-lg px-2.5 text-[11px] font-medium transition focus:outline-none focus:ring-4 focus:ring-primary/20 ${range === item ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-card hover:text-foreground'}`}
               >
                 {item}
               </button>
@@ -100,21 +101,22 @@ export function MetricsChart({ metrics, dataKey, series, summaryItems = [], titl
       <div className="mb-2 flex min-h-10 flex-wrap items-end gap-x-4 gap-y-1">
         {defaultSummaryItems.length > 0 ? defaultSummaryItems.map((item, index) => (
           <div key={`${item.label || 'summary'}-${index}`} className="min-w-0">
-            {item.label ? <p className="text-[11px] font-black text-muted-foreground">{item.label}</p> : null}
-            <p className={`${defaultSummaryItems.length === 1 ? 'text-[32px]' : 'text-sm'} font-black leading-none text-foreground`} style={item.color ? { color: item.color } : undefined}>{item.value}</p>
+            {item.label ? <p className="inline-flex items-center gap-1.5 text-xs font-normal text-muted-foreground">{chartSeries.length > 1 && <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: cssVar(chartVarByKey[chartSeries.find(series => series.label === item.label)?.dataKey ?? chartSeries[index]?.dataKey] ?? '', chartSeries[index]?.color ?? color) }} />}{item.label}</p> : null}
+            <p className={`${defaultSummaryItems.length === 1 ? 'text-[24px]' : 'text-sm'} font-medium leading-none text-foreground`} style={item.color ? { color: item.color } : undefined}>{item.value}</p>
           </div>
         )) : chartSeries.length === 1 ? (
-          <span className="rounded-full border border-border bg-muted px-2.5 py-1 text-xs font-black text-muted-foreground">{chartSeries[0].unitLabel || unitLabel}</span>
+          <span className="rounded-full border border-border bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">{chartSeries[0].unitLabel || unitLabel}</span>
         ) : chartSeries.map((item) => (
-          <span key={item.dataKey} className="inline-flex items-center gap-2 rounded-full border border-border bg-muted px-2.5 py-1 text-xs font-black text-muted-foreground">
+          <span key={item.dataKey} className="inline-flex items-center gap-2 rounded-full border border-border bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: cssVar(chartVarByKey[item.dataKey] ?? '', item.color) }} />
             {item.label}
           </span>
         ))}
       </div>
-      <div className="h-40">
+      </>}
+      <div className={bare ? "h-[196px]" : "h-36"}>
         {data.length === 0 || chartSeries.length === 0 || !hasChartData ? (
-          <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-border bg-surface px-4 text-center text-sm font-black text-muted-foreground">
+          <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-border bg-surface px-4 text-center text-sm font-medium text-muted-foreground">
             {emptyText}
           </div>
         ) : (
@@ -123,36 +125,28 @@ export function MetricsChart({ metrics, dataKey, series, summaryItems = [], titl
             height="100%"
             initialDimension={{ width: 320, height: 160 }}
           >
-            <AreaChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
-              <defs>
-                {chartSeries.map((item) => {
-                  const strokeColor = cssVar(chartVarByKey[item.dataKey] ?? '', item.color)
-                  const gradientId = getGradientId(title, item.dataKey)
-                  return (
-                    <linearGradient key={item.dataKey} id={gradientId} x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="5%" stopColor={strokeColor} stopOpacity={0.3} />
-                      <stop offset="95%" stopColor={strokeColor} stopOpacity={0.04} />
-                    </linearGradient>
-                  )
-                })}
-              </defs>
+            <LineChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
               <XAxis
                 dataKey="time"
+                type="number"
+                scale="time"
+                domain={['dataMin', 'dataMax']}
+                tickFormatter={value => new Date(Number(value)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}
                 stroke={tickColor}
-                style={{ fontSize: '11px', fontWeight: 600 }}
+                style={{ fontSize: '12px', fontWeight: 400 }}
                 tickLine={false}
                 minTickGap={40}
               />
               <YAxis
                 stroke={tickColor}
-                style={{ fontSize: '11px', fontWeight: 600 }}
+                style={{ fontSize: '12px', fontWeight: 400 }}
                 tickLine={false}
                 axisLine={false}
                 domain={yDomain}
                 ticks={yTicks}
                 tickFormatter={(value) => formatYAxisTick(Number(value), unitLabel, isPercentChart)}
-                width={40}
+                width={unitLabel.includes('bytes/s') ? 58 : 40}
               />
               <Tooltip
                 contentStyle={{
@@ -163,8 +157,9 @@ export function MetricsChart({ metrics, dataKey, series, summaryItems = [], titl
                   boxShadow: '0 4px 12px rgb(0 0 0 / 0.1)',
                   fontSize: 12,
                   padding: '6px 10px',
-                  fontWeight: 600
+                  fontWeight: 400
                 }}
+                labelFormatter={value => new Date(Number(value)).toLocaleTimeString('zh-CN', { hour12: false })}
                 formatter={(value, name) => {
                   const numericValue = typeof value === 'number' ? value : Number(value ?? 0)
                   const label = String(name)
@@ -174,22 +169,20 @@ export function MetricsChart({ metrics, dataKey, series, summaryItems = [], titl
               {chartSeries.map((item) => {
                 const strokeColor = cssVar(chartVarByKey[item.dataKey] ?? '', item.color)
                 return (
-                  <Area
+                  <Line
                     key={item.dataKey}
-                    type="monotone"
+                    type="linear"
                     dataKey={item.dataKey}
                     name={item.label}
                     stroke={strokeColor}
                     strokeWidth={2}
-                    fill={`url(#${getGradientId(title, item.dataKey)})`}
-                    fillOpacity={1}
                     dot={false}
                     activeDot={{ r: 4 }}
                     isAnimationActive={false}
                   />
                 )
               })}
-            </AreaChart>
+            </LineChart>
           </ResponsiveContainer>
         )}
       </div>
@@ -223,7 +216,7 @@ function buildSampledRows(metrics: Metric[], chartSeries: ChartSeries[], range?:
     .sort(([a], [b]) => a - b)
     .map(([bucket, entry]) => {
       const row: ChartRow = {
-        time: new Date(bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        time: bucket
       }
       chartSeries.forEach((item) => {
         const stat = entry[item.dataKey]
@@ -235,7 +228,7 @@ function buildSampledRows(metrics: Metric[], chartSeries: ChartSeries[], range?:
 
 function buildRow(metric: Metric, chartSeries: ChartSeries[]) {
   const row: ChartRow = {
-    time: new Date(metric.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    time: Date.parse(metric.created_at)
   }
   chartSeries.forEach((item) => {
     const value = metric[item.dataKey]
@@ -307,7 +300,7 @@ function buildYAxisTicks(domain: [number, number]) {
 
 function formatYAxisTick(value: number, unitLabel: string, isPercentChart: boolean) {
   if (isPercentChart) return `${Math.round(value)}%`
-  if (unitLabel.includes('bytes/s')) return formatSpeed(value)
+  if (unitLabel.includes('bytes/s')) return formatSpeed(value).replace(' KB/s', 'K/s').replace(' MB/s', 'M/s').replace(' GB/s', 'G/s').replace(' B/s', 'B/s')
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
 
@@ -315,10 +308,6 @@ function formatTooltipValue(value: number, unitLabel: string) {
   if (unitLabel.includes('bytes/s')) return formatSpeed(value)
   if (unitLabel.includes('%')) return formatPercent(value)
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '—'
-}
-
-function getGradientId(title: string, dataKey: MetricKey) {
-  return `${title}-${String(dataKey)}-gradient`.replace(/[^a-zA-Z0-9_-]/g, '-')
 }
 
 function formatChartValue(value: number | undefined, unitLabel: string) {

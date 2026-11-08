@@ -10,6 +10,24 @@ import (
 	"github.com/mizupanel/mizupanel/internal/server/store"
 )
 
+func (s *Server) handleActiveAlerts(alertStore *store.AlertStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		history, err := alertStore.GetEnabledActiveAlertHistory()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if history == nil {
+			history = make([]store.AlertHistory, 0)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"history": history})
+	}
+}
+
 func (s *Server) handleAlertHistory(alertStore *store.AlertStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

@@ -7,6 +7,8 @@ export const aiProvidersChangedEvent = 'mizupanel:ai-providers-changed'
 
 export type AIToast = { type: 'success' | 'error', message: string }
 
+export type AIComposerDraft = { id: number, content: string, context: AIRequestContext, label: string }
+
 export type AIAssistantState = {
   drawerOpen: boolean
   drawerWidth: number
@@ -28,6 +30,12 @@ export type AIAssistantState = {
   streamedContent: string
   context: AIRequestContext
   turnResults: Record<string, AITurn>
+  composerDraft?: AIComposerDraft
+  messageDraft?: { content: string; context: AIRequestContext }
+  updateMessageDraft: (content: string) => void
+  prepareDraft: (content: string, context: AIRequestContext, label: string) => void
+  updateDraft: (id: number, content: string) => void
+  clearDraft: () => void
   openDrawer: () => void
   closeDrawer: () => void
   setDrawerWidth: (width: number) => void
@@ -39,7 +47,7 @@ export type AIAssistantState = {
   selectConversation: (id: string) => Promise<void>
   newConversation: () => Promise<AIConversation | undefined>
   deleteConversation: (id: string) => Promise<void>
-  send: (content: string) => Promise<void>
+  send: (content: string, contextOverride?: AIRequestContext) => Promise<void>
   stop: () => void
   confirm: (call: AIToolCall) => Promise<void>
   reject: (call: AIToolCall) => Promise<void>
@@ -139,6 +147,10 @@ export function useAIAssistantState(): AIAssistantState {
   const [streamedContent, setStreamedContent] = useState('')
   const [context, setContextState] = useState<AIRequestContext>({ page: 'overview' })
   const [turnResults, setTurnResults] = useState<Record<string, AITurn>>({})
+  const [composerDraft, setComposerDraft] = useState<AIComposerDraft>()
+  const [messageDrafts, setMessageDrafts] = useState<Record<string, { content: string; context: AIRequestContext }>>({})
+  const messageDraft = messageDrafts[activeConversationID ?? '__new__']
+  const draftSequence = useRef(0)
   const conversationRequest = useRef(0)
   const conversationController = useRef<AbortController | undefined>(undefined)
   const conversationRefreshRequest = useRef(0)
@@ -287,6 +299,23 @@ export function useAIAssistantState(): AIAssistantState {
 
   const closeDrawer = useCallback(() => setDrawerOpen(false), [])
 
+  const prepareDraft = useCallback((content: string, requestContext: AIRequestContext, label: string) => {
+    setComposerDraft({ id: ++draftSequence.current, content, context: requestContext, label })
+    openDrawer()
+  }, [openDrawer])
+  const updateDraft = useCallback((id: number, content: string) => {
+    setComposerDraft((current) => current?.id === id ? { ...current, content } : current)
+  }, [])
+  const clearDraft = useCallback(() => setComposerDraft(undefined), [])
+
+  const updateMessageDraft = useCallback((content: string) => {
+    const key = activeConversationRef.current ?? '__new__'
+    setMessageDrafts(current => {
+      if (!content) { const next = { ...current }; delete next[key]; return next }
+      return { ...current, [key]: { content, context: current[key]?.context ?? { ...contextRef.current } } }
+    })
+  }, [])
+
   const setDrawerWidth = useCallback((width: number) => {
     setDrawerWidthState(Math.max(420, Math.min(720, Math.round(width))))
   }, [])
@@ -385,9 +414,10 @@ export function useAIAssistantState(): AIAssistantState {
     }
   }, [cancelModelSelection, commitSelectedModel, conversations, loadConversation, providers])
 
-  const send = useCallback(async (content: string) => {
+  const send = useCallback(async (content: string, contextOverride?: AIRequestContext) => {
     const trimmed = content.trim()
     if (!trimmed || sending || selectingModel) return
+    const requestContext = contextOverride ?? contextRef.current
 
     let conversationID = activeConversationRef.current
     let executionModelID = selectedModelRef.current
@@ -430,7 +460,7 @@ export function useAIAssistantState(): AIAssistantState {
         setProgress(event)
         setTimeline((current) => sameProgress(current[current.length - 1], event) ? current : [...current, event].slice(-8))
       }, {
-        context: contextRef.current,
+        context: requestContext,
         onDelta: (event) => {
           if (activeConversationRef.current === conversationID) {
             setStreamedContent((current) => `${current}${event.content}`.slice(0, 16 * 1024))
@@ -572,6 +602,12 @@ export function useAIAssistantState(): AIAssistantState {
     streamedContent,
     context,
     turnResults,
+    composerDraft,
+    messageDraft,
+    updateMessageDraft,
+    prepareDraft,
+    updateDraft,
+    clearDraft,
     openDrawer,
     closeDrawer,
     setDrawerWidth,
@@ -590,5 +626,5 @@ export function useAIAssistantState(): AIAssistantState {
     confirmPlan,
     rejectPlan,
     clearToast
-  }), [activeConversationID, clearToast, closeDrawer, confirm, confirmPlan, context, conversation, conversations, deleteConversation, drawerOpen, drawerWidth, ensureLoaded, error, loading, newConversation, openDrawer, operationID, progress, providers, refreshProviders, reject, rejectPlan, selectedModelID, selectedProviderID, selectConversation, selectModel, selectProvider, selectingModel, send, sending, sendingConversationID, setContext, setDrawerWidth, stop, streamedContent, timeline, toast, turnResults])
+  }), [activeConversationID, clearToast, closeDrawer, confirm, confirmPlan, context, conversation, conversations, deleteConversation, drawerOpen, drawerWidth, ensureLoaded, error, loading, newConversation, openDrawer, operationID, progress, providers, refreshProviders, reject, rejectPlan, selectedModelID, selectedProviderID, selectConversation, selectModel, selectProvider, selectingModel, send, sending, sendingConversationID, setContext, setDrawerWidth, stop, streamedContent, timeline, toast, turnResults, composerDraft, messageDraft, updateMessageDraft, prepareDraft, updateDraft, clearDraft])
 }

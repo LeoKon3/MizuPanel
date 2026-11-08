@@ -164,11 +164,7 @@ export default function CreateContainerModal({ open, nodeId, onClose, onCreate }
     <div className="soft-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4">
       <section role="dialog" aria-modal="true" aria-label="创建容器" className="soft-modal-shell flex max-h-[90vh] w-full max-w-4xl flex-col outline-none">
         <div className="soft-modal-header flex shrink-0 items-start justify-between gap-3 border-b px-5 py-4">
-          <div className="min-w-0">
-            <p className="text-[11px] font-black uppercase tracking-[0.24em] text-primary">Docker Container</p>
-            <h3 className="mt-1 font-display text-2xl font-black tracking-tight text-foreground">创建容器</h3>
-            <p className="mt-2 text-sm font-bold leading-6 text-primary">通过可视化配置生成并执行 docker run 命令</p>
-          </div>
+          <h3 className="font-display text-2xl font-black tracking-tight text-foreground">创建容器</h3>
           <button type="button" aria-label="关闭" onClick={onClose} className="soft-button inline-flex h-9 w-9 shrink-0 items-center justify-center border border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 focus:outline-none focus:ring-4 focus:ring-primary/20">
             <X size={16} aria-hidden="true" />
           </button>

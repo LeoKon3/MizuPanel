@@ -6,6 +6,11 @@ import { createInstallCommand, deleteNode, getNodeDocker, getNodeMetrics, getNod
 import type { Metric, Node } from './types'
 
 vi.mock('./api/client', () => ({
+  getActiveAlerts: vi.fn(async () => ({ history: [] })),
+  getApplicationServices: vi.fn(async () => ([])),
+  getUptimeMonitors: vi.fn(async () => ({ monitors: [] })),
+  getAutomationRuns: vi.fn(async () => ({ runs: [], next_before_id: null })),
+  getK8sClusters: vi.fn(async () => ({ clusters: [] })),
   setUnauthorizedHandler: vi.fn(),
   getAuthSession: vi.fn(async () => ({ auth_enabled: false, authenticated: true, username: '' })),
   createInstallCommand: vi.fn(),
@@ -87,6 +92,7 @@ const metric: Metric = {
 
 describe('App regression behavior', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/nodes')
     vi.mocked(createInstallCommand).mockReset()
     vi.mocked(createInstallCommand).mockResolvedValue({ command: 'install command', install_token: 'install-token' })
     vi.mocked(getNodes).mockReset()
@@ -100,15 +106,16 @@ describe('App regression behavior', () => {
     vi.mocked(getNodeDocker).mockResolvedValue({ node_id: 'node-1', collected_at: 0, available: false, error: '', containers: [] })
   })
 
-  test('falls back to the first node when the route node id is invalid', async () => {
+  test('does not silently change the target when the route node id is invalid', async () => {
     window.history.pushState({}, '', '/nodes/missing-node')
     vi.mocked(getNodes).mockResolvedValueOnce({ nodes })
     vi.mocked(getNodeMetrics).mockResolvedValue({ metrics: [] })
 
     render(<App />)
 
-    expect(await screen.findAllByText('Oracle SG')).toHaveLength(2)
-    await waitFor(() => expect(window.location.pathname).toBe('/nodes/node-1'))
+    expect(await screen.findByRole('heading', { name: '未找到主机' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/nodes/missing-node')
+    expect(screen.queryByRole('heading', { name: 'Oracle SG' })).not.toBeInTheDocument()
   })
 
   test('clears previous chart metrics while loading a newly selected node', async () => {
@@ -119,23 +126,25 @@ describe('App regression behavior', () => {
 
     render(<App />)
 
-    expect(await screen.findAllByText('Oracle SG')).toHaveLength(2)
+    fireEvent.click(await screen.findByRole('button', { name: 'Oracle SG' }))
+    await screen.findByRole('heading', { name: 'Oracle SG' })
     await waitFor(() => expect(screen.queryAllByText('等待指标数据')).toHaveLength(0))
 
-    fireEvent.click(screen.getByRole('button', { name: /Tokyo JP/ }))
+    fireEvent.click(screen.getByRole('button', { name: '切换主机，当前 Oracle SG' }))
+    fireEvent.click(screen.getByRole('button', { name: '切换到 Tokyo JP' }))
 
-    expect(await screen.findAllByText('Tokyo JP')).toHaveLength(2)
+    expect(await screen.findAllByText('Tokyo JP')).toHaveLength(1)
     expect(screen.getAllByText('等待指标数据').length).toBeGreaterThan(0)
   })
 
   test('does not show a separate remove-node action because Agent uninstall handles cleanup', async () => {
-    window.history.pushState({}, '', '/')
+    window.history.pushState({}, '', '/nodes')
     vi.mocked(getNodes).mockResolvedValueOnce({ nodes })
     vi.mocked(getNodeMetrics).mockResolvedValue({ metrics: [] })
 
     render(<App />)
 
-    expect(await screen.findAllByText('Oracle SG')).toHaveLength(2)
+    expect(await screen.findAllByText('Oracle SG')).toHaveLength(1)
     expect(screen.queryByRole('button', { name: '移除节点记录' })).not.toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: '移除节点记录' })).not.toBeInTheDocument()
     expect(deleteNode).not.toHaveBeenCalled()
@@ -153,6 +162,7 @@ describe('App regression behavior', () => {
   })
 
   test('shows metric load errors without opening login', async () => {
+    window.history.replaceState({}, '', '/nodes/node-1')
     vi.mocked(getNodes).mockResolvedValueOnce({ nodes })
     vi.mocked(getNodeMetrics).mockRejectedValueOnce(Object.assign(new Error('Request failed: 401'), { status: 401 }))
 
@@ -191,7 +201,7 @@ describe('App regression behavior', () => {
 
     render(<App />)
 
-    expect(await screen.findAllByText('北京 CN')).toHaveLength(2)
+    expect(await screen.findAllByText('北京 CN')).toHaveLength(1)
     await waitFor(() => expect(getNodeMetrics).toHaveBeenCalledWith('节点 2', '1h'))
   })
 })

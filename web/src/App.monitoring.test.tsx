@@ -2,10 +2,15 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import App from './App'
-import { getAgentLogs, getAgentStatus, getNodeDocker, getNodeDockerCompose, getNodeMetrics, getNodeProcesses, getNodes, restartAgent } from './api/client'
+import { getAgentLogs, getAgentStatus, getNodeDocker, getNodeDockerCompose, getNodeMetrics, getNodeProcesses, getNodeSystemdServices, getNodes, restartAgent } from './api/client'
 import type { DockerSnapshotResponse, MetricsResponse, NodesResponse, ProcessSnapshotResponse } from './types'
 
 vi.mock('./api/client', () => ({
+  getActiveAlerts: vi.fn(async () => ({ history: [] })),
+  getApplicationServices: vi.fn(async () => ([])),
+  getUptimeMonitors: vi.fn(async () => ({ monitors: [] })),
+  getAutomationRuns: vi.fn(async () => ({ runs: [], next_before_id: null })),
+  getK8sClusters: vi.fn(async () => ({ clusters: [] })),
   setUnauthorizedHandler: vi.fn(),
   getAuthSession: vi.fn(async () => ({ auth_enabled: false, authenticated: true, username: '' })),
   createInstallCommand: vi.fn(async () => ({ command: 'install', install_token: 'token' })),
@@ -116,6 +121,8 @@ const dockerSnapshot: DockerSnapshotResponse = {
 
 describe('node monitoring detail', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/nodes/node-1')
+    nodesResponse.nodes[0].latest_metric!.created_at = new Date().toISOString()
     vi.mocked(getNodes).mockReset()
     vi.mocked(getNodeMetrics).mockReset()
     vi.mocked(getNodeProcesses).mockReset()
@@ -132,6 +139,27 @@ describe('node monitoring detail', () => {
     vi.mocked(getAgentStatus).mockResolvedValue({ version: '0.1.0', user: 'root', mode: 'ops', terminal_enabled: true, docker_available: true, service_name: 'mizupanel-agent', uptime: 3600, collected_at: 1710000000 })
     vi.mocked(getAgentLogs).mockResolvedValue({ lines: 100, content: 'mizupanel-agent started', collected_at: 1710000001 })
     vi.mocked(restartAgent).mockResolvedValue({ accepted: true, message: '重启命令已下发，等待 Agent 重新连接' })
+  })
+
+  test('loads system services from a deep link and again after switching hosts without manual refresh', async () => {
+    window.history.replaceState({}, '', '/nodes/node-1?section=services')
+    vi.mocked(getNodeSystemdServices).mockResolvedValue({ success: false, supported: false, services: [], error: 'fresh-systemd-response' })
+    render(<App />)
+    expect(await screen.findByText('fresh-systemd-response')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '切换主机，当前 Oracle SG' }))
+    fireEvent.click(screen.getByRole('button', { name: '切换到 Tokyo JP' }))
+    await screen.findByRole('heading', { name: 'Tokyo JP' })
+    await waitFor(() => expect(getNodeSystemdServices).toHaveBeenCalledWith('node-2'))
+    expect(await screen.findByText('fresh-systemd-response')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '系统服务' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('keeps the initial Compose request when opening its deep link', async () => {
+    window.history.replaceState({}, '', '/nodes/node-1?section=containers&docker=compose')
+    vi.mocked(getNodeDockerCompose).mockResolvedValue({ success: true, supported: true, projects: [{ name: 'deep-linked-compose', config_files: ['/srv/compose.yml'], services: [] }] })
+    render(<App />)
+    expect(await screen.findByText('deep-linked-compose')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Compose' })).toHaveAttribute('aria-selected', 'true')
   })
 
   test('loads snapshots and shows them behind detail section buttons', async () => {
@@ -157,8 +185,8 @@ describe('node monitoring detail', () => {
     expect(within(loadChart).getByText('5m')).toBeInTheDocument()
     expect(within(loadChart).getByText('15m')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'CPU 使用率' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '内存使用率' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '磁盘使用率' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '内存 使用率' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '磁盘 使用率' })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '网络 I/O' })).toBeInTheDocument()
     const diskIOChart = screen.getByRole('region', { name: '磁盘 I/O' })
     expect(within(diskIOChart).getByText('读')).toBeInTheDocument()
@@ -166,10 +194,10 @@ describe('node monitoring detail', () => {
     expect(within(diskIOChart).getByText('写')).toBeInTheDocument()
     expect(within(diskIOChart).getByText('8.0 KB/s')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '系统负载' })).toBeInTheDocument()
-    expect(within(screen.getByRole('region', { name: 'CPU 使用率' })).getByRole('button', { name: '1h' })).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(within(screen.getByRole('region', { name: 'CPU 使用率' })).getByRole('button', { name: '6h' }))
-    expect(within(screen.getByRole('region', { name: 'CPU 使用率' })).getByRole('button', { name: '6h' })).toHaveAttribute('aria-pressed', 'true')
-    expect(within(screen.getByRole('region', { name: '内存使用率' })).getByRole('button', { name: '1h' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(screen.getByLabelText('资源时间范围')).getByRole('button', { name: '1h' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(screen.getByLabelText('资源时间范围')).getByRole('button', { name: '6h' }))
+    expect(within(screen.getByLabelText('资源时间范围')).getByRole('button', { name: '6h' })).toHaveAttribute('aria-pressed', 'true')
+    expect(getNodeMetrics).toHaveBeenCalledWith('node-1', '6h')
     expect(screen.queryByRole('region', { name: '进程 Top' })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Docker 容器' })).not.toBeInTheDocument()
 
@@ -202,7 +230,8 @@ describe('node monitoring detail', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Compose' }))
     await waitFor(() => expect(getNodeDockerCompose).toHaveBeenCalledWith('node-1'))
 
-    fireEvent.click(screen.getByRole('button', { name: /Tokyo JP/ }))
+    fireEvent.click(screen.getByRole('button', { name: '切换主机，当前 Oracle SG' }))
+    fireEvent.click(screen.getByRole('button', { name: '切换到 Tokyo JP' }))
     await screen.findByRole('heading', { name: 'Tokyo JP' })
     fireEvent.click(screen.getByRole('button', { name: '容器信息' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Compose' }))
@@ -347,7 +376,8 @@ describe('node monitoring detail', () => {
     await waitFor(() => expect(dockerRegion).toHaveTextContent('Agent 当前用户没有权限访问 Docker'))
 
     vi.mocked(getNodeDocker).mockResolvedValue({ ...dockerSnapshot, node_id: 'node-2' })
-    fireEvent.click(screen.getByRole('button', { name: /Tokyo JP/ }))
+    fireEvent.click(screen.getByRole('button', { name: '切换主机，当前 Oracle SG' }))
+    fireEvent.click(screen.getByRole('button', { name: '切换到 Tokyo JP' }))
     await waitFor(() => expect(getNodeDocker).toHaveBeenCalledWith('node-2'))
     const refreshedDockerRegion = screen.getByRole('region', { name: 'Docker 容器' })
     expect(within(refreshedDockerRegion).getByLabelText('搜索容器')).toBeInTheDocument()

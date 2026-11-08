@@ -107,7 +107,7 @@ export function BatchAgentUpgradeModal({ nodes, onClose, onFinished }: BatchAgen
     <div className="soft-modal-overlay fixed inset-0 z-50 flex items-center justify-center px-3 py-5">
       <section role="dialog" aria-modal="true" aria-label="批量升级 Agent" className="soft-modal-shell flex max-h-[90vh] w-full max-w-3xl flex-col">
         <header className="soft-modal-header flex items-start justify-between gap-3 border-b px-5 py-4">
-          <div><p className="text-xs font-black tracking-[0.16em] text-primary">LATEST AGENT</p><h3 className="mt-1 text-lg font-black text-foreground">批量升级 Agent</h3><p className="mt-1 text-xs font-bold text-muted-foreground">只升级到当前 Server 提供的最新版本，最多并发 4 台。</p></div>
+          <h3 className="text-lg font-black text-foreground">批量升级 Agent</h3>
           <button type="button" aria-label="关闭" onClick={onClose} className="soft-button inline-flex h-9 w-9 items-center justify-center border border-border bg-card text-muted-foreground"><X size={16} /></button>
         </header>
 

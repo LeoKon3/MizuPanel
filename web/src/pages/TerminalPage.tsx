@@ -181,8 +181,7 @@ export function TerminalPage({ kind, node, nodeID, container, containerID }: Ter
         <header className="mb-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-glass">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
-              <p className="text-[11px] font-black uppercase tracking-[0.24em] text-primary">{kind === 'node' ? 'Node Terminal' : 'Docker Exec'}</p>
-              <h1 className="mt-1 truncate font-display text-2xl font-black tracking-tight text-foreground">{title}</h1>
+              <h1 className="truncate font-display text-2xl font-black tracking-tight text-foreground">{title}</h1>
               <p className="mt-1 truncate text-xs font-bold text-muted-foreground">{subtitle}</p>
               <p className="mt-2 text-xs font-bold leading-5 text-warning">终端运行在 Agent 服务用户权限下；MizuPanel 不保存 root、sudo、SSH 或 Docker 凭据，也不会绕过系统权限。</p>
             </div>

@@ -62,6 +62,13 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleServiceRoutes(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/services/"))
+	if strings.HasSuffix(id, "/check") {
+		serviceID := strings.TrimSuffix(id, "/check")
+		if serviceID != "" && !strings.Contains(serviceID, "/") {
+			s.handleServiceHealthCheck(w, r, serviceID)
+			return
+		}
+	}
 	if id == "" || strings.Contains(id, "/") {
 		writeError(w, http.StatusNotFound, "应用服务不存在")
 		return

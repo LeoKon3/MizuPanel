@@ -2,6 +2,106 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.33 - 2026-11-09
+
+### Changed
+
+- Replaced the raster brand mark with a compact geometric M drawn as pure SVG,
+  matching the console's restrained, flat visual style without a background tile.
+- Unified the sidebar and browser favicon around the same vector asset, with
+  light/dark and forced-color treatments; retained the previous favicon URL for
+  compatibility and the original JPEG as an unused source asset.
+
+## v0.1.32 - 2026-11-08
+
+### Changed
+
+- Unified Application Services with the framed-sheet console: stable service
+  tables, status filters, full-width resource details, and one event timeline.
+- Moved destructive service deletion into an explicit menu and retained its
+  confirmation; health rechecks and AI diagnosis remain user-triggered.
+- Reworked service editing into resource-type selection, search, and a persistent
+  cross-category selection list, without changing the underlying resources.
+
+### Fixed
+
+- Kept the previous service snapshot after refresh failures, and filtered the
+  supplied recent events before limiting the timeline to the latest eight.
+- Protected unsaved service edits on close and navigation; ignored late reads or
+  saves for old targets and cancelled pending resource catalog requests on exit.
+- Kept catalog failures distinct from empty results, preserved existing resource
+  associations, and added independent retry for unavailable resource sources.
+
+## v0.1.31 - 2026-11-08
+
+### Changed
+
+- Made Overview the default homepage while keeping the host list and host-detail
+  URLs directly accessible and preserving the approved host workspace.
+- Replaced aggregate resource charts with current-status summaries, cross-resource
+  attention items, stable host shortcuts, and the latest runs from the last 24 hours.
+- Linked overview evidence to the exact host, active-alert filter, probe history,
+  application service, Kubernetes cluster, or task-run details.
+
+### Fixed
+
+- Added a read-only, authenticated active-alert query covering all unresolved
+  alerts from enabled rules, without truncation to recent per-host history.
+- Loaded overview sources independently with timeout, cancellation, stale-response
+  protection and explicit unavailable/stale states instead of false zero counts.
+- Kept the overview usable when the initial host request is slow or unavailable.
+
+## v0.1.30 - 2026-11-08
+
+### Changed
+
+- Adopted the approved framed-sheet console shell with matching light and dark
+  themes, restrained typography, and a full-width host workspace.
+- Separated the host list from host details. The list keeps stable name ordering,
+  real resource metrics, group/tag filters, batch actions, and terminal access.
+- Reorganized host overview into resource trends and system information, while
+  preserving process, Docker/Compose, Systemd, file, log, and Agent operations.
+- Kept the AI assistant as an on-demand overlay with the existing model selection,
+  conversation, and explicit operation-confirmation flow.
+
+### Fixed
+
+- Preserved list filters and position when returning from host details; switching
+  hosts retains the active section but does not carry old target data or drafts.
+- Protected unsaved file and Compose edits when navigating or using browser back.
+- Kept the first Systemd and Compose reads valid when opening a host deep link
+  or switching targets, rather than discarding them during initialization.
+- Distinguished offline or stale metrics from real zero values, and refreshed
+  visible host snapshots without reordering rows or clearing existing data.
+- Preserved ordinary AI drafts and their captured context across drawer/workspace
+  views; Chinese input-method confirmation no longer submits a message.
+
+## v0.1.29 - 2026-10-18
+
+### Added
+
+- Added an application-service incident workspace with recent-event timelines,
+  service-scoped AI diagnosis drafts, and health rechecks against linked probes.
+
+### Changed
+
+- Reorganized System Settings into a Material 3-inspired two-page workspace
+  separating General settings from Provider and model management.
+- Removed configurable AI automation policies; mutations now always require
+  confirmation in the AI conversation flow.
+- Simplified page and panel headings by removing decorative eyebrow labels and
+  redundant subtitle copy.
+- Updated the sidebar brand mark and browser favicon to use the custom MizuPanel
+  logo.
+
+### Fixed
+
+- Prevented Provider and model rows from forcing page-wide horizontal scrolling
+  on 1280-pixel desktop displays.
+- Prevented late health-check responses from replacing newly saved service data.
+- Preserved edited AI diagnosis drafts across drawer and workspace views, and
+  kept drafts intact when message submission is temporarily disabled.
+
 ## v0.1.28 - 2026-08-24
 
 ### Fixed

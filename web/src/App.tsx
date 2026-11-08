@@ -1,20 +1,19 @@
-import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarClock, X } from 'lucide-react'
-import { Area, AreaChart, ResponsiveContainer } from 'recharts'
+import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Plus, RefreshCw, Search, X } from 'lucide-react'
 
 import { createInstallCommand, deleteNodePath, getAgentLogs, getAgentStatus, getAgentUpgradeStatus, getAuthSession, getConnectionDiagnostics, getNodeDocker, getNodeDockerCompose, getNodeDockerResources, getNodeFiles, getNodeMetrics, getNodeProcesses, getNodeSystemdServices, getNodes, getSettings, getSystemAbout, login, logout, readNodeFile, rebootNode, restartAgent, runNodeDockerComposeAction, runNodeDockerComposeDeployment, runNodeDockerResourceAction, runNodeSystemdServiceAction, setUnauthorizedHandler, startSSHUninstall, updateSettings, upgradeAgent, uploadNodeFile, writeNodeFile } from './api/client'
-import { BrandLogo } from './components/BrandLogo'
+import { AppShell } from './components/AppShell'
+import { NodeSwitcher } from './components/NodeSwitcher'
+import { usePanelNavigation } from './lib/usePanelNavigation'
+import { nodeDisplayStatus } from './lib/nodeStatus'
 import { AIAssistantDrawer, AITopbarButton, AIWorkspacePage } from './components/ai/AIAssistant'
 import { useAIAssistantState } from './components/ai/useAIAssistantState'
 import { HostBatchTable } from './components/HostBatchTable'
-import { MetricCard } from './components/MetricCard'
-import { NodeOrganizationControls, type HostGroupFilter, type HostTagFilter, type HostViewMode } from './components/NodeOrganizationControls'
-import { formatBytes, formatPercent, formatSpeed } from './lib/format'
+import { NodeOrganizationControls, type HostGroupFilter, type HostTagFilter } from './components/NodeOrganizationControls'
 import { currentRoute, nodePath, pageForRoute, type AppPage } from './routes'
 import { AlertsPage } from './pages/AlertsPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { NodeDetail } from './pages/NodeDetail'
-import { NodeList } from './pages/NodeList'
 import { OverviewPage } from './pages/OverviewPage'
 import { SystemSettingsPage } from './pages/SystemSettingsPage'
 import { TerminalPage } from './pages/TerminalPage'
@@ -26,12 +25,11 @@ import { TasksPage } from './pages/TasksPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { LogsPage } from './pages/LogsPage'
 import ConnectK8sClusterModal from './components/ConnectK8sClusterModal'
-import type { AIControlSettingsUpdate, AIRequestContext, DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
+import type { AIRequestContext, DockerComposeAction, DockerComposeDeploymentRequest, DockerComposeDeploymentResponse, DockerComposeListResponse, DockerContainer, DockerResourceAction, DockerResourceListResponse, DockerResourceType, DockerSnapshotResponse, InstallPlatform, Metric, Node, NodeGroupSummary, NodeTagSummary, ProcessSnapshotResponse, RangeOption, SettingsResponse, SystemAboutResponse, SystemdServiceAction, SystemdServiceListResponse } from './types'
 
-type NavPage = Exclude<AppPage, 'history' | 'logs' | 'ai'>
 type ThemeMode = 'light' | 'dark'
 
-type HostFilter = 'all' | 'online' | 'offline'
+type HostFilter = 'all' | 'online' | 'offline' | 'stale'
 
 const rangeSeconds: Record<RangeOption, number> = {
   '1h': 3600,
@@ -56,33 +54,6 @@ function storedTheme(): ThemeMode {
 function storedSidebarCollapsed() {
   return window.localStorage.getItem('mizupanel-sidebar-collapsed') === 'true'
 }
-
-const pageCopy: Record<AppPage, { title: string, description: string }> = {
-  overview: { title: '概览', description: '用现有节点和指标数据汇总当前面板状态。' },
-  hosts: { title: '主机', description: '查看节点状态、指标、文件和节点级操作。' },
-  history: { title: '历史记录', description: '按节点和时间范围查看历史指标。' },
-  settings: { title: '系统设置', description: '调整 MizuPanel 的全局运行参数。' },
-  alerts: { title: '告警', description: '查看告警记录和配置告警规则。' },
-  uptime: { title: '服务拨测', description: '从 Server 网络持续检查 HTTP、HTTPS 和 TCP 服务。' },
-  audit: { title: '审计日志', description: '追溯平台敏感操作的操作者、目标与结果。' },
-  tasks: { title: '任务中心', description: '统一管理脚本、Cron 计划和多节点执行记录。' },
-  services: { title: '应用服务', description: '聚合运行资源、健康原因和近期运维活动。' },
-  logs: { title: '日志', description: '日志接口接入前仅提供控制台空状态壳。' },
-  ai: { title: 'AI 运维', description: '通过受控工具查询状态并确认运维操作。' },
-  k8s: { title: 'Kubernetes 集群', description: '管理通过 Agent 节点连接的 K8s 集群。' }
-}
-
-const navItems: Array<{ page: NavPage, label: string, icon: 'overview' | 'hosts' | 'services' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'k8s' }> = [
-  { page: 'overview', label: '概览', icon: 'overview' },
-  { page: 'hosts', label: '主机', icon: 'hosts' },
-  { page: 'services', label: '应用服务', icon: 'services' },
-  { page: 'tasks', label: '任务中心', icon: 'tasks' },
-  { page: 'k8s', label: 'Kubernetes', icon: 'k8s' },
-  { page: 'alerts', label: '告警', icon: 'alerts' },
-  { page: 'uptime', label: '服务拨测', icon: 'uptime' },
-  { page: 'audit', label: '审计日志', icon: 'audit' },
-  { page: 'settings', label: '系统设置', icon: 'settings' }
-]
 
 const installNodeDiscoveryIntervalMs = 3_000
 const installNodeDiscoveryWindowMs = 2 * 60_000
@@ -123,22 +94,29 @@ export default function App() {
   const [loginError, setLoginError] = useState<string>()
   const [loginLoading, setLoginLoading] = useState(false)
   const [nodes, setNodes] = useState<Node[]>([])
-  const [selectedNodeID, setSelectedNodeID] = useState<string>()
+  const [nodesError, setNodesError] = useState<string>()
+  const [nodesUpdatedAt, setNodesUpdatedAt] = useState<number>()
+  const [nodesLoading, setNodesLoading] = useState(false)
+  const [historyNodeID, setSelectedNodeID] = useState<string>()
+  const selectedNodeID = route.kind === 'node-detail' || route.kind === 'node-terminal' || route.kind === 'container-exec' ? route.nodeID : page === 'history' ? historyNodeID : undefined
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  const hostScrollTop = useRef(0)
+  const [nodesRefreshing, setNodesRefreshing] = useState(false)
+  const [snapshotNow, setSnapshotNow] = useState(Date.now)
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [processSnapshot, setProcessSnapshot] = useState<ProcessSnapshotResponse>()
   const [dockerSnapshot, setDockerSnapshot] = useState<DockerSnapshotResponse>()
   const [dockerCompose, setDockerCompose] = useState<DockerComposeListResponse>()
   const [dockerResources, setDockerResources] = useState<DockerResourceListResponse>()
   const [systemdServices, setSystemdServices] = useState<SystemdServiceListResponse>()
+  const [monitoringNodeID, setMonitoringNodeID] = useState<string>()
   const [monitoringLoading, setMonitoringLoading] = useState(false)
   const [range, setRange] = useState<RangeOption>('1h')
   const [error, setError] = useState<string>()
   const [search, setSearch] = useState('')
   const [hostFilter, setHostFilter] = useState<HostFilter>('all')
-  const [hostView, setHostView] = useState<HostViewMode>('browse')
   const [hostGroupFilter, setHostGroupFilter] = useState<HostGroupFilter>('all')
   const [hostTagFilter, setHostTagFilter] = useState<HostTagFilter>('all')
-  const [hostMetricsHistory, setHostMetricsHistory] = useState<Array<{ cpu: number; memory: number; disk: number }>>([])
   const [installPlatform, setInstallPlatform] = useState<InstallPlatform>('linux')
   const [installCommand, setInstallCommand] = useState<string>()
   const [installCommandWarning, setInstallCommandWarning] = useState<string>()
@@ -156,12 +134,13 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [connectK8sClusterModalOpen, setConnectK8sClusterModalOpen] = useState(false)
   const [k8sClustersRefreshKey, setK8sClustersRefreshKey] = useState(0)
-  const [selectedK8sClusterID, setSelectedK8sClusterID] = useState<string>()
   const addHostButtonRef = useRef<HTMLButtonElement>(null)
+  const installTriggerRef = useRef<HTMLElement | null>(null)
+  const nodesRequestID = useRef(0)
+  const nodesController = useRef<AbortController | null>(null)
   const installCommandCodeRef = useRef<HTMLElement>(null)
   const installCommandDialogRef = useRef<HTMLElement>(null)
   const installCommandRequestID = useRef(0)
-  const preserveEmptyInstallSelectionRef = useRef(false)
   const dockerSnapshotRequestID = useRef(0)
   const dockerComposeRequestID = useRef(0)
   const dockerResourcesRequestID = useRef(0)
@@ -203,36 +182,62 @@ export default function App() {
     void aiAssistant.ensureLoaded()
   }, [aiAssistant.ensureLoaded, authEnabled, authenticated, page])
 
-  useEffect(() => {
-    const handlePopState = () => {
-      const nextRoute = currentRoute()
-      setPage(pageForRoute(nextRoute))
-      setRouteVersion((value) => value + 1)
-    }
-    window.addEventListener('popstate', handlePopState)
-    return () => window.removeEventListener('popstate', handlePopState)
-  }, [])
+  const { navigate: navigateWithinPanel, registerGuard } = usePanelNavigation(() => {
+    setPage(pageForRoute(currentRoute()))
+    setRouteVersion(value => value + 1)
+    setError(undefined)
+  })
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      nodesRequestID.current += 1
+      nodesController.current?.abort()
+      nodesController.current = null
+      setNodesLoading(false)
       setAuthenticated(false)
       setCurrentUsername('')
       setError('登录已过期，请重新登录')
     })
   }, [])
 
-  const loadNodes = useCallback(() => {
-    return getNodes()
-      .then((response) => {
-        setNodes(response.nodes)
-        const routeNodeID = route.kind === 'node-detail' || route.kind === 'node-terminal' || route.kind === 'container-exec' ? route.nodeID : undefined
-        const routeNodeExists = routeNodeID ? response.nodes.some((node) => node.id === routeNodeID) : false
-        setSelectedNodeID((current) => {
-          if (current && response.nodes.some((node) => node.id === current)) return current
-          return routeNodeExists ? routeNodeID : response.nodes[0]?.id
-        })
+  const loadNodes = useCallback(async (signal?: AbortSignal) => {
+    const requestID = ++nodesRequestID.current
+    nodesController.current?.abort()
+    const controller = new AbortController()
+    nodesController.current = controller
+    const cancel = () => controller.abort()
+    signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted) controller.abort()
+    setNodesLoading(true)
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let aborted: (() => void) | undefined
+    try {
+      const deadline = new Promise<never>((_, reject) => {
+        aborted = () => reject(new DOMException('请求已取消', 'AbortError'))
+        controller.signal.addEventListener('abort', aborted, { once: true })
+        if (controller.signal.aborted) aborted()
+        timeout = setTimeout(() => { reject(new Error('主机读取超时')); controller.abort() }, 15_000)
       })
-  }, [route])
+      const response = await Promise.race([getNodes(controller.signal), deadline])
+      if (signal?.aborted || requestID !== nodesRequestID.current) return
+      setNodes(response.nodes)
+      setNodesError(undefined)
+      setNodesUpdatedAt(Date.now())
+      setSelectedNodeID(current => current && response.nodes.some(node => node.id === current) ? current : response.nodes[0]?.id)
+    } catch (error) {
+      if (signal?.aborted || requestID !== nodesRequestID.current) return
+      setNodesError(error instanceof Error ? error.message : '主机读取失败')
+      throw error
+    } finally {
+      clearTimeout(timeout)
+      signal?.removeEventListener('abort', cancel)
+      if (aborted) controller.signal.removeEventListener('abort', aborted)
+      if (requestID === nodesRequestID.current) {
+        nodesController.current = null
+        setNodesLoading(false)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -243,7 +248,11 @@ export default function App() {
         setAuthenticated(response.authenticated)
         setCurrentUsername(response.username)
         if (!response.auth_enabled || response.authenticated) {
-          return loadNodes()
+          const pending = loadNodes()
+          if (pageForRoute(currentRoute()) === 'overview') {
+            // The overview's independent sources should not wait for hosts.
+            void pending.catch(() => undefined)
+          } else return pending
         }
       })
       .catch((err: unknown) => {
@@ -254,17 +263,28 @@ export default function App() {
       })
     return () => {
       cancelled = true
+      nodesRequestID.current += 1
+      nodesController.current?.abort()
+      nodesController.current = null
     }
   }, [loadNodes])
 
   useEffect(() => {
-    if (page !== 'hosts' || !selectedNodeID) return
-    const activeRoute = currentRoute()
-    if (activeRoute.kind !== 'dashboard' && activeRoute.kind !== 'node-detail') return
-    if (window.location.pathname !== nodePath(selectedNodeID)) {
-      window.history.replaceState({}, '', nodePath(selectedNodeID))
+    if (loading || (authEnabled && !authenticated) || installCommandOpen || (page !== 'hosts' && page !== 'overview')) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    let controller: AbortController | undefined
+    const refresh = async () => {
+      if (nodesController.current) { timer = setTimeout(refresh, 5000); return }
+      controller = new AbortController()
+      try { await loadNodes(controller.signal) }
+      catch { /* Retain the last snapshot; its age remains visible. */ }
+      if (active) setSnapshotNow(Date.now())
+      if (active) timer = setTimeout(refresh, 5000)
     }
-  }, [page, selectedNodeID])
+    timer = setTimeout(refresh, 5000)
+    return () => { active = false; clearTimeout(timer); controller?.abort() }
+  }, [loading, authEnabled, authenticated, page, installCommandOpen, loadNodes])
 
   useEffect(() => {
     if (page !== 'history' && page !== 'settings') return
@@ -305,23 +325,25 @@ export default function App() {
   }, [range, settings])
 
   useEffect(() => {
-    if (!selectedNodeID) {
+    if (loading || (authEnabled && !authenticated) || !selectedNodeID) {
       setMetrics([])
       return
     }
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
     setMetrics([])
-    getNodeMetrics(selectedNodeID, range)
-      .then((response) => {
+    const refresh = async () => {
+      try {
+        const response = await getNodeMetrics(selectedNodeID, range)
         if (!cancelled) setMetrics(response.metrics)
-      })
-      .catch((err: unknown) => {
+      } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : '指标加载失败')
-      })
-    return () => {
-      cancelled = true
+      }
+      if (!cancelled) timer = setTimeout(refresh, 15000)
     }
-  }, [selectedNodeID, range])
+    void refresh()
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [selectedNodeID, range, loading, authEnabled, authenticated])
 
   const refreshDockerSnapshot = async (nodeID: string) => {
     const requestID = ++dockerSnapshotRequestID.current
@@ -407,28 +429,25 @@ export default function App() {
     return response
   }
 
-  useEffect(() => {
-    // Invalidate late refresh responses for the previous host before clearing its state.
+  useLayoutEffect(() => {
+    // Reset before the new detail's passive effects start Compose/Systemd reads.
+    // A parent passive reset would invalidate those freshly started requests.
+    setMonitoringNodeID(selectedNodeID)
     dockerSnapshotRequestID.current += 1
     dockerComposeRequestID.current += 1
     dockerResourcesRequestID.current += 1
     systemdRequestID.current += 1
-    if (!selectedNodeID) {
-      setProcessSnapshot(undefined)
-      setDockerSnapshot(undefined)
-      setDockerCompose(undefined)
-      setDockerResources(undefined)
-      setSystemdServices(undefined)
-      setMonitoringLoading(false)
-      return
-    }
-    let cancelled = false
     setProcessSnapshot(undefined)
     setDockerSnapshot(undefined)
     setDockerCompose(undefined)
     setDockerResources(undefined)
     setSystemdServices(undefined)
-    setMonitoringLoading(true)
+    setMonitoringLoading(!loading && (!authEnabled || authenticated) && Boolean(selectedNodeID))
+  }, [selectedNodeID, loading, authEnabled, authenticated])
+
+  useEffect(() => {
+    if (loading || (authEnabled && !authenticated) || !selectedNodeID) return
+    let cancelled = false
     Promise.all([getNodeProcesses(selectedNodeID), getNodeDocker(selectedNodeID)])
       .then(([processes, docker]) => {
         if (!cancelled) {
@@ -448,83 +467,27 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [selectedNodeID])
-
-  const onlineNodes = nodes.filter((node) => node.status === 'online').length
-  const averages = useMemo(() => {
-    const latest = nodes.map((node) => node.latest_metric).filter((metric): metric is Metric => Boolean(metric))
-    const average = (key: 'cpu_usage' | 'memory_usage' | 'disk_usage') => latest.length === 0 ? 0 : latest.reduce((sum, metric) => sum + metric[key], 0) / latest.length
-    return { cpu: average('cpu_usage'), memory: average('memory_usage'), disk: average('disk_usage') }
-  }, [nodes])
-
-  // 加载所有在线节点的历史指标平均值，用于主机页顶部卡片的 sparkline
-  useEffect(() => {
-    if (page !== 'hosts') return
-    const onlineNodeList = nodes.filter((node) => node.status === 'online')
-    if (onlineNodeList.length === 0) {
-      setHostMetricsHistory([])
-      return
-    }
-
-    let cancelled = false
-    Promise.all(
-      onlineNodeList.map((node) => getNodeMetrics(node.id, '1h').catch(() => ({ metrics: [] })))
-    ).then((results) => {
-      if (cancelled) return
-      // 按时间戳聚合各节点指标
-      const timestampMap = new Map<string, { cpu: number[]; memory: number[]; disk: number[] }>()
-      results.forEach((result) => {
-        result.metrics.forEach((metric) => {
-          const ts = metric.created_at
-          if (!timestampMap.has(ts)) {
-            timestampMap.set(ts, { cpu: [], memory: [], disk: [] })
-          }
-          const entry = timestampMap.get(ts)!
-          entry.cpu.push(metric.cpu_usage)
-          entry.memory.push(metric.memory_usage)
-          entry.disk.push(metric.disk_usage)
-        })
-      })
-
-      // 计算每个时间点的平均值并按时间排序
-      const avgHistory = Array.from(timestampMap.entries())
-        .map(([timestamp, values]) => ({
-          timestamp,
-          cpu: values.cpu.reduce((a, b) => a + b, 0) / values.cpu.length,
-          memory: values.memory.reduce((a, b) => a + b, 0) / values.memory.length,
-          disk: values.disk.reduce((a, b) => a + b, 0) / values.disk.length,
-        }))
-        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-        .map(({ cpu, memory, disk }) => ({ cpu, memory, disk }))
-
-      setHostMetricsHistory(avgHistory)
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [page, nodes])
+  }, [selectedNodeID, loading, authEnabled, authenticated])
 
   const filteredNodes = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     return nodes.filter((node) => {
-      if (hostFilter !== 'all' && node.status !== hostFilter) return false
+      if (hostFilter !== 'all' && nodeDisplayStatus(node, snapshotNow) !== hostFilter) return false
       if (hostGroupFilter === 'ungrouped' && node.group) return false
       if (hostGroupFilter !== 'all' && hostGroupFilter !== 'ungrouped' && node.group?.id !== hostGroupFilter) return false
       if (hostTagFilter !== 'all' && !(node.tags ?? []).some((tag) => tag.id === hostTagFilter)) return false
       if (!keyword) return true
       return [node.name, node.hostname, node.ip, node.os, node.arch, node.group?.name ?? '', ...(node.tags ?? []).map((tag) => tag.name)].some((value) => value.toLowerCase().includes(keyword))
-    })
-  }, [hostFilter, hostGroupFilter, hostTagFilter, nodes, search])
+    }).sort((a, b) => (a.name || a.hostname).localeCompare(b.name || b.hostname, 'zh-CN', { numeric: true }) || a.id.localeCompare(b.id))
+  }, [hostFilter, hostGroupFilter, hostTagFilter, nodes, search, snapshotNow])
   const hostGroups = useMemo(() => uniqueNodeGroups(nodes), [nodes])
   const hostTags = useMemo(() => uniqueNodeTags(nodes), [nodes])
-  const visibleSelectedNode = useMemo(() => filteredNodes.find((node) => node.id === selectedNodeID), [filteredNodes, selectedNodeID])
   const selectedMetrics = useMemo(() => selectedNodeID ? metrics.filter((metric) => metric.node_id === selectedNodeID) : [], [metrics, selectedNodeID])
   const selectedProcessSnapshot = processSnapshot?.node_id === selectedNodeID ? processSnapshot : undefined
   const selectedDockerSnapshot = dockerSnapshot?.node_id === selectedNodeID ? dockerSnapshot : undefined
-  const selectedDockerCompose = selectedNodeID ? dockerCompose : undefined
+  const selectedDockerCompose = monitoringNodeID === selectedNodeID ? dockerCompose : undefined
   const selectedDockerResources = dockerResources?.node_id === selectedNodeID ? dockerResources : undefined
-  const selectedSystemdServices = selectedNodeID ? systemdServices : undefined
+  const selectedSystemdServices = monitoringNodeID === selectedNodeID ? systemdServices : undefined
   const routeNode = useMemo(() => route.kind === 'node-detail' || route.kind === 'node-terminal' || route.kind === 'container-exec' ? nodes.find((node) => node.id === route.nodeID) : undefined, [nodes, route])
   const routeContainer = useMemo<DockerContainer | undefined>(() => {
     if (route.kind !== 'container-exec') return undefined
@@ -532,18 +495,12 @@ export default function App() {
   }, [route, selectedDockerSnapshot])
 
   useEffect(() => {
-    if (preserveEmptyInstallSelectionRef.current) {
-      preserveEmptyInstallSelectionRef.current = false
-      return
-    }
-    if (page === 'hosts' && filteredNodes.length > 0 && !visibleSelectedNode) {
-      setSelectedNodeID(filteredNodes[0].id)
-    }
-  }, [filteredNodes, page, visibleSelectedNode])
-
-  useEffect(() => {
     if (!installCommandOpen) return
 
+    nodesRequestID.current += 1
+    nodesController.current?.abort()
+    nodesController.current = null
+    setNodesLoading(false)
     let active = true
     let timeoutID: number | undefined
     let activeRequest: AbortController | undefined
@@ -561,12 +518,12 @@ export default function App() {
       const controller = new AbortController()
       activeRequest = controller
       try {
+        const requestID = ++nodesRequestID.current
         const response = await getNodes(controller.signal)
-        if (!active || Date.now() >= expiresAt) return
+        if (!active || Date.now() >= expiresAt || requestID !== nodesRequestID.current) return
+        setNodesError(undefined)
+        setNodesUpdatedAt(Date.now())
         if (installDiscoveryNodesChanged(nodesRef.current, response.nodes)) {
-          if (!selectedNodeIDRef.current && currentRoute().kind === 'dashboard') {
-            preserveEmptyInstallSelectionRef.current = true
-          }
           nodesRef.current = response.nodes
           setNodes(response.nodes)
         }
@@ -664,7 +621,8 @@ export default function App() {
     setInstallCommandCopied(false)
     setInstallCommandLoading(false)
     setInstallCommandOpen(false)
-    addHostButtonRef.current?.focus()
+    if (installTriggerRef.current?.isConnected) installTriggerRef.current.focus()
+    else addHostButtonRef.current?.focus()
   }
 
   const handleInstallCommandKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -693,11 +651,8 @@ export default function App() {
     }
   }
 
-  const hostFilterButtonClass = (filter: HostFilter, activeClass: string, inactiveClass: string) => (
-    `min-h-10 cursor-pointer rounded-2xl px-4 text-sm font-black transition focus:outline-none focus:ring-4 ${hostFilter === filter ? activeClass : inactiveClass}`
-  )
-
-  const showInstallCommand = () => {
+  const showInstallCommand = (event?: MouseEvent<HTMLButtonElement>) => {
+    installTriggerRef.current = event?.currentTarget ?? (document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : addHostButtonRef.current)
     setInstallCommandOpen(true)
     setInstallPlatform('linux')
     requestInstallCommand('linux')
@@ -712,53 +667,25 @@ export default function App() {
   const getLegacyAgentUpgradeCommand = () => createInstallCommand('linux').then((response) => response.command)
 
   const openPage = (nextPage: AppPage) => {
-    setPage(nextPage)
-    const path = nextPage === 'overview'
-      ? '/overview'
-      : nextPage === 'history'
-      ? '/history'
-      : nextPage === 'ai'
-        ? '/ai'
-      : nextPage === 'services'
-        ? '/services'
-      : nextPage === 'settings'
-        ? '/settings'
-        : nextPage === 'alerts'
-          ? '/alerts'
-          : nextPage === 'uptime'
-            ? '/uptime'
-          : nextPage === 'audit'
-            ? '/audit'
-          : nextPage === 'tasks'
-            ? '/tasks'
-          : nextPage === 'logs'
-            ? '/logs'
-            : nextPage === 'k8s'
-              ? '/k8s/clusters'
-              : selectedNodeID ? nodePath(selectedNodeID) : '/'
-    if (window.location.pathname !== path) {
-      window.history.pushState({}, '', path)
-    }
-    setRouteVersion((value) => value + 1)
+    const paths: Record<AppPage, string> = { hosts: '/nodes', overview: '/overview', history: '/history', ai: '/ai', services: '/services', settings: '/settings', alerts: '/alerts', uptime: '/uptime', audit: '/audit', tasks: '/tasks', logs: '/logs', k8s: '/k8s/clusters' }
+    navigateWithinPanel(paths[nextPage])
   }
-
-  const openService = (serviceID: string) => {
-    setPage('services')
-    window.history.pushState({}, '', `/services/${encodeURIComponent(serviceID)}`)
-    setRouteVersion((value) => value + 1)
+  const openService = (id: string) => navigateWithinPanel(`/services/${encodeURIComponent(id)}`)
+  const backToServices = () => navigateWithinPanel('/services')
+  const openNode = (node: Node, preserveSection = false) => {
+    const params = new URLSearchParams(window.location.search)
+    const section = params.get('section')
+    const query = preserveSection && section ? `?section=${encodeURIComponent(section)}` : ''
+    setSwitcherOpen(false)
+    if (range !== '1h' && range !== '6h') setRange('1h')
+    navigateWithinPanel(`${nodePath(node.id)}${query}`)
   }
-
-  const backToServices = () => {
-    setPage('services')
-    window.history.pushState({}, '', '/services')
-    setRouteVersion((value) => value + 1)
-  }
-
-  const navigateWithinPanel = (path: string) => {
-    window.history.pushState({}, '', path)
-    const nextRoute = currentRoute()
-    setPage(pageForRoute(nextRoute))
-    setRouteVersion((value) => value + 1)
+  const refreshHostList = async () => {
+    if (nodesRefreshing) return
+    setNodesRefreshing(true)
+    try { await loadNodes(); setError(undefined) }
+    catch (err) { setError(err instanceof Error ? err.message : '主机列表刷新失败') }
+    finally { setNodesRefreshing(false) }
   }
 
   const openAIWorkspace = () => {
@@ -772,19 +699,8 @@ export default function App() {
     openPage('settings')
   }
 
-  const openK8sClusterDetail = (clusterID: string) => {
-    setSelectedK8sClusterID(clusterID)
-    const path = `/k8s/clusters/${encodeURIComponent(clusterID)}`
-    window.history.pushState({}, '', path)
-    setRouteVersion(v => v + 1)
-  }
-
-  const backToK8sClusters = () => {
-    setSelectedK8sClusterID(undefined)
-    const path = '/k8s/clusters'
-    window.history.pushState({}, '', path)
-    setRouteVersion(v => v + 1)
-  }
+  const openK8sClusterDetail = (id: string) => navigateWithinPanel(`/k8s/clusters/${encodeURIComponent(id)}`)
+  const backToK8sClusters = () => navigateWithinPanel('/k8s/clusters')
 
   const saveSettings = () => {
     setSettingsSaving(true)
@@ -798,13 +714,6 @@ export default function App() {
       })
       .catch((err: unknown) => setSettingsError(err instanceof Error ? err.message : '系统设置保存失败'))
       .finally(() => setSettingsSaving(false))
-  }
-
-  const saveAIControlSettings = (aiControl: AIControlSettingsUpdate) => {
-    return updateSettings({ ai_control: aiControl }).then((response) => {
-      setSettings(response)
-      return response.ai_control
-    })
   }
 
   const handleLogin = () => {
@@ -822,11 +731,17 @@ export default function App() {
   }
 
   const handleLogout = () => {
+    nodesRequestID.current += 1
+    nodesController.current?.abort()
+    nodesController.current = null
+    setNodesLoading(false)
     logout()
       .then(() => {
         setAuthenticated(false)
         setCurrentUsername('')
         setNodes([])
+        setNodesError(undefined)
+        setNodesUpdatedAt(undefined)
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : '退出登录失败'))
   }
@@ -1033,200 +948,54 @@ export default function App() {
     </div>
   ) : null
 
-  const latestMetrics = nodes.map((node) => node.latest_metric).filter((metric): metric is Metric => Boolean(metric))
-  const networkIn = latestMetrics.reduce((sum, metric) => sum + metric.rx_speed, 0)
-  const networkOut = latestMetrics.reduce((sum, metric) => sum + metric.tx_speed, 0)
-  const averageLoad = latestMetrics.length === 0 ? 0 : latestMetrics.reduce((sum, metric) => sum + metric.load1, 0) / latestMetrics.length
-  const contentCopy = pageCopy[page]
   const hostContent = (
-    <div data-testid="host-page-container" className="mx-auto flex w-full max-w-[1400px] flex-col gap-4">
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <TopStatCard title="节点总数" value={String(nodes.length)} subtitle={`在线 ${onlineNodes} · 离线 ${nodes.length - onlineNodes}`} tone="blue" />
-        <TopStatCard title="平均 CPU" value={formatPercent(averages.cpu)} subtitle="最新采样" tone="green" sparklineData={hostMetricsHistory.map(h => h.cpu)} />
-        <TopStatCard title="平均内存" value={formatPercent(averages.memory)} subtitle="最新采样" tone="green" sparklineData={hostMetricsHistory.map(h => h.memory)} />
-        <TopStatCard title="平均磁盘" value={formatPercent(averages.disk)} subtitle="最新采样" tone="orange" sparklineData={hostMetricsHistory.map(h => h.disk)} />
-        <TopStatCard title="异常节点" value={String(nodes.length - onlineNodes)} subtitle="离线或未上报" tone="red" />
-      </section>
-
-      <NodeOrganizationControls view={hostView} onViewChange={setHostView} groupFilter={hostGroupFilter} onGroupFilterChange={setHostGroupFilter} tagFilter={hostTagFilter} onTagFilterChange={setHostTagFilter} groups={hostGroups} tags={hostTags} onChanged={loadNodes} />
-
-      {nodes.length === 0 ? (
-        <section className="soft-empty-state px-6 py-12 text-center">
-          <p className="font-display text-3xl font-black text-foreground">暂无节点接入</p>
-          <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">在目标服务器执行 Agent 安装命令后，节点会自动出现在这里。</p>
-          <button
-            ref={addHostButtonRef}
-            type="button"
-            onClick={showInstallCommand}
-            aria-expanded={installCommandOpen}
-            aria-controls="agent-install-command"
-            className="soft-button mt-6 min-h-11 cursor-pointer bg-primary px-5 text-sm font-black text-primary-foreground shadow-sm hover:brightness-110 focus:outline-none focus:ring-4 focus:ring-primary/20"
-          >
-            安装目标主机 Agent 进行采集
-          </button>
-        </section>
-      ) : hostView === 'batch' ? (
-        <HostBatchTable nodes={filteredNodes} onOpenNode={(node) => { setSelectedNodeID(node.id); setHostView('browse') }} onNodesChanged={loadNodes} />
-      ) : (
-        <div data-testid="host-main-grid" className="grid min-w-0 gap-3 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
-          <section data-testid="host-list-panel" className="soft-panel min-w-0 p-3 xl:w-[320px]">
-            <div className="mb-3 min-w-0">
-              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary">主机</p>
-              <h2 className="mt-1 text-lg font-black tracking-tight text-foreground">主机</h2>
-            </div>
-            <label htmlFor="host-search" className="sr-only">搜索主机</label>
-            <input
-              id="host-search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索主机..."
-              className="soft-input min-h-10 w-full px-3 text-sm font-semibold placeholder:text-muted-foreground"
-            />
-            <div className="mt-2 flex flex-wrap items-center gap-2" role="toolbar" aria-label="主机筛选与操作">
-              <button type="button" aria-pressed={hostFilter === 'all'} onClick={() => setHostFilter('all')} className={hostFilterButtonClass('all', 'bg-foreground text-background shadow-sm focus:ring-primary/20', 'border border-border bg-card text-muted-foreground hover:text-foreground focus:ring-border')}>全部 {nodes.length}</button>
-              <button type="button" aria-pressed={hostFilter === 'online'} onClick={() => setHostFilter('online')} className={hostFilterButtonClass('online', 'border border-success/30 bg-success/10 text-success shadow-sm focus:ring-success/20', 'border border-success/30 bg-card text-success hover:bg-success/10 focus:ring-success/20')}>在线 {onlineNodes}</button>
-              <button type="button" aria-pressed={hostFilter === 'offline'} onClick={() => setHostFilter('offline')} className={hostFilterButtonClass('offline', 'border border-border bg-muted text-foreground shadow-sm focus:ring-border', 'border border-border bg-card text-muted-foreground hover:text-foreground focus:ring-border')}>离线 {nodes.length - onlineNodes}</button>
-              <button
-                ref={addHostButtonRef}
-                type="button"
-                onClick={showInstallCommand}
-                aria-label="添加主机"
-                aria-expanded={installCommandOpen}
-                aria-controls="agent-install-command"
-                className="soft-button ml-auto flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center bg-primary text-lg font-black text-primary-foreground shadow-sm hover:brightness-110 focus:outline-none focus:ring-4 focus:ring-primary/20"
-              >
-                +
-              </button>
-            </div>
-            <div className="mt-3">
-              {filteredNodes.length > 0 ? (
-                <NodeList nodes={filteredNodes} selectedNodeID={selectedNodeID} onSelectNode={(node) => setSelectedNodeID(node.id)} />
-              ) : (
-                <div className="soft-empty-state p-5 text-center">
-                  <p className="text-sm font-black text-foreground">未找到匹配主机</p>
-                  <p className="mt-1 text-xs font-semibold leading-5 text-muted-foreground">请调整筛选或搜索关键词。</p>
-                </div>
-              )}
-            </div>
-            <div className="mt-3 flex items-center justify-between border-t border-border pt-3 text-xs font-black text-muted-foreground">
-              <span>共 {nodes.length} 台主机</span>
-              <span>当前显示 {filteredNodes.length} 台</span>
-            </div>
-          </section>
-          <NodeDetail node={visibleSelectedNode} metrics={selectedMetrics} processSnapshot={selectedProcessSnapshot} dockerSnapshot={selectedDockerSnapshot} dockerCompose={selectedDockerCompose} dockerResources={selectedDockerResources} systemdServices={selectedSystemdServices} monitoringLoading={monitoringLoading} range={range} onRangeChange={setRange} onLoadFiles={getNodeFiles} onReadFile={readNodeFile} onWriteFile={writeNodeFile} onUploadFile={uploadNodeFile} onDeletePath={deleteNodePath} onRebootNode={rebootNode} onSSHUninstall={startSSHUninstall} onGetAgentStatus={getAgentStatus} onGetConnectionDiagnostics={getConnectionDiagnostics} onUpgradeAgent={upgradeAgent} onGetAgentUpgradeStatus={getAgentUpgradeStatus} onGetLegacyAgentUpgradeCommand={getLegacyAgentUpgradeCommand} onRestartAgent={restartAgent} onGetAgentLogs={getAgentLogs} onRefreshDocker={refreshDockerSnapshot} onRefreshDockerCompose={refreshDockerCompose} onDockerComposeAction={runDockerComposeAction} onDockerComposeDeployment={runDockerComposeDeployment} onRefreshDockerResources={refreshDockerResources} onDockerResourceAction={runDockerResourceAction} onRefreshSystemdServices={refreshSystemdServices} onSystemdServiceAction={runSystemdServiceAction} onNodeOrganizationChanged={loadNodes} />
+    <section data-testid="host-page-container" className="console-host-page">
+      {route.kind === 'node-detail' ? routeNode ? (
+        <NodeDetail key={routeNode.id} node={routeNode} navigationVersion={routeVersion} onRegisterLeaveGuard={registerGuard} onBack={() => openPage('hosts')} onSwitchNode={() => setSwitcherOpen(true)} metrics={selectedMetrics} processSnapshot={selectedProcessSnapshot} dockerSnapshot={selectedDockerSnapshot} dockerCompose={selectedDockerCompose} dockerResources={selectedDockerResources} systemdServices={selectedSystemdServices} monitoringLoading={monitoringLoading} range={range} onRangeChange={setRange} onLoadFiles={getNodeFiles} onReadFile={readNodeFile} onWriteFile={writeNodeFile} onUploadFile={uploadNodeFile} onDeletePath={deleteNodePath} onRebootNode={rebootNode} onSSHUninstall={startSSHUninstall} onGetAgentStatus={getAgentStatus} onGetConnectionDiagnostics={getConnectionDiagnostics} onUpgradeAgent={upgradeAgent} onGetAgentUpgradeStatus={getAgentUpgradeStatus} onGetLegacyAgentUpgradeCommand={getLegacyAgentUpgradeCommand} onRestartAgent={restartAgent} onGetAgentLogs={getAgentLogs} onRefreshDocker={refreshDockerSnapshot} onRefreshDockerCompose={refreshDockerCompose} onDockerComposeAction={runDockerComposeAction} onDockerComposeDeployment={runDockerComposeDeployment} onRefreshDockerResources={refreshDockerResources} onDockerResourceAction={runDockerResourceAction} onRefreshSystemdServices={refreshSystemdServices} onSystemdServiceAction={runSystemdServiceAction} onNodeOrganizationChanged={loadNodes} />
+      ) : <div className="console-empty"><h1>未找到主机</h1><p>主机可能已被删除，或当前账号无法访问。</p><button className="console-button" onClick={() => openPage('hosts')}>返回主机列表</button></div> : <>
+        <div className="console-page-title"><h1>主机 <span>{nodes.length}</span></h1><button ref={addHostButtonRef} type="button" className="console-button console-primary" onClick={showInstallCommand} aria-label="添加主机" aria-expanded={installCommandOpen} aria-controls="agent-install-command"><Plus size={16} />添加主机</button></div>
+        <div className="console-status-tabs" role="toolbar" aria-label="主机筛选与操作">{(['all', 'online', 'offline', 'stale'] as const).map(status => <button type="button" key={status} aria-pressed={hostFilter === status} onClick={() => setHostFilter(status)}>{{ all: '全部', online: '在线', offline: '离线', stale: '数据过期' }[status]} {status === 'all' ? nodes.length : nodes.filter(node => nodeDisplayStatus(node, snapshotNow) === status).length}</button>)}</div>
+        <div className="console-host-toolbar"><label className="console-search"><Search size={15} /><input aria-label="搜索主机" placeholder="搜索主机..." value={search} onChange={event => setSearch(event.target.value)} /></label>
+          <NodeOrganizationControls compact view="browse" onViewChange={() => {}} groupFilter={hostGroupFilter} onGroupFilterChange={setHostGroupFilter} tagFilter={hostTagFilter} onTagFilterChange={setHostTagFilter} groups={hostGroups} tags={hostTags} onChanged={loadNodes} />
+          <button type="button" className="console-icon-button" aria-label="刷新主机" disabled={nodesRefreshing} onClick={() => void refreshHostList()}><RefreshCw size={16} className={nodesRefreshing ? 'animate-spin' : undefined} /></button>
         </div>
-      )}
-    </div>
+        {nodes.length === 0 ? <div className="console-empty"><h2>暂无节点接入</h2><p>在目标服务器执行 Agent 安装命令后，节点会自动出现在这里。</p><button className="console-button" aria-expanded={installCommandOpen} aria-controls="agent-install-command" onClick={showInstallCommand}>安装目标主机 Agent 进行采集</button></div> : <>
+          <HostBatchTable workspace nodes={filteredNodes} filterKey={`${search}|${hostFilter}|${hostGroupFilter}|${hostTagFilter}`} scrollTop={hostScrollTop.current} onScroll={top => { hostScrollTop.current = top }} onOpenNode={node => openNode(node)} onNodesChanged={loadNodes} />
+          <div className="console-table-footer"><span>共 {nodes.length} 台主机 · 当前显示 {filteredNodes.length} 台</span><span>按名称排序</span></div>
+        </>}
+      </>}
+    </section>
   )
 
   return (
-    <main className="soft-page min-h-screen text-foreground">
-      <div className="flex min-h-screen">
-        <div className={`relative sticky top-0 h-screen shrink-0 transition-[width] duration-300 ease-in-out motion-reduce:transition-none ${sidebarCollapsed ? 'w-[72px]' : 'w-[232px]'}`}>
-          <aside
-            aria-label="MizuPanel 侧边栏"
-            data-collapsed={sidebarCollapsed ? 'true' : 'false'}
-            className="soft-sidebar flex h-full w-full overflow-hidden flex-col border-r border-sidebar-border text-sidebar-foreground transition-[width] duration-300 ease-in-out motion-reduce:transition-none"
-          >
-            <div className={`flex h-16 items-center border-b border-sidebar-border transition-[padding,justify-content] duration-300 ease-in-out motion-reduce:transition-none ${sidebarCollapsed ? 'justify-center px-2' : 'justify-start px-4'}`}>
-              <div className="flex min-w-0 items-center gap-3 overflow-hidden">
-                <BrandLogo className="h-9 w-9 shrink-0 drop-shadow-sm" />
-                <div className={`min-w-0 overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-in-out motion-reduce:transition-none ${sidebarCollapsed ? 'max-w-0 -translate-x-2 opacity-0' : 'max-w-[120px] translate-x-0 opacity-100'}`}>
-                  <p className="truncate text-sm font-black text-sidebar-foreground">MizuPanel</p>
-                  <p className="truncate text-[11px] font-bold text-muted-foreground">自托管监控面板</p>
-                </div>
-              </div>
-            </div>
-            <nav aria-label="侧边导航" className={`flex flex-1 flex-col gap-1 py-4 transition-[padding] duration-300 ease-in-out motion-reduce:transition-none ${sidebarCollapsed ? 'px-2' : 'px-3'}`}>
-              {navItems.map((item) => {
-                const active = page === item.page
-                return (
-                  <button
-                    key={item.page}
-                    type="button"
-                    title={item.label}
-                    aria-current={active ? 'page' : undefined}
-                    onClick={() => openPage(item.page)}
-                    className={`soft-button flex min-h-11 cursor-pointer items-center text-sm font-black transition-[background-color,color,box-shadow,gap,padding] duration-300 ease-in-out focus:outline-none focus:ring-4 focus:ring-primary/20 motion-reduce:transition-none ${active ? 'bg-sidebar-active text-sidebar-active-foreground shadow-sm' : 'text-sidebar-foreground hover:bg-muted hover:text-foreground'} ${sidebarCollapsed ? 'justify-center gap-0 px-0' : 'gap-3 px-3'}`}
-                  >
-                    <span aria-hidden="true" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-current"><NavIcon name={item.icon} /></span>
-                    <span data-testid="sidebar-nav-label" className={`overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-300 ease-in-out motion-reduce:transition-none ${sidebarCollapsed ? 'max-w-0 -translate-x-1 opacity-0' : 'max-w-[140px] translate-x-0 opacity-100'}`}>{item.label}</span>
-                  </button>
-                )
-              })}
-            </nav>
-          </aside>
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed((current) => !current)}
-            aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
-            title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
-            className="absolute right-0 top-4 z-30 flex h-9 w-9 translate-x-1/2 cursor-pointer items-center justify-center rounded-full border border-sidebar-border bg-card text-sidebar-foreground shadow-sm transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-4 focus:ring-primary/20"
-          >
-            <CollapseIcon collapsed={sidebarCollapsed} />
-          </button>
-        </div>
-
-        <section className="flex min-w-0 flex-1 flex-col">
-          <header className="soft-topbar sticky top-0 z-20 border-b border-header-border px-4 py-3 backdrop-blur md:px-6">
-            <div className="flex justify-end">
-              <h1 className="sr-only">{contentCopy.title}</h1>
-              <div className="flex flex-wrap items-center gap-2">
-                <AITopbarButton onClick={aiAssistant.openDrawer} open={aiAssistant.drawerOpen} />
-                {authenticated && currentUsername ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-black text-foreground">{currentUsername}</span>
-                    <button
-                      type="button"
-                      onClick={handleLogout}
-                      className="soft-button min-h-9 cursor-pointer border border-border bg-card px-3 text-xs font-black text-muted-foreground hover:border-danger/50 hover:text-danger focus:outline-none focus:ring-4 focus:ring-primary/20"
-                    >
-                      退出登录
-                    </button>
-                  </div>
-                ) : null}
-                <div className="soft-toolbar flex p-1" aria-label="主题切换">
-                  {(['light', 'dark'] as const).map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      onClick={() => setTheme(item)}
-                      aria-pressed={theme === item}
-                      className={`soft-button inline-flex min-h-9 cursor-pointer items-center gap-2 px-3 text-xs font-black focus:outline-none focus:ring-4 focus:ring-primary/20 ${theme === item ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
-                    >
-                      {item === 'light' ? <SunIcon /> : <MoonIcon />}
-                      {item === 'light' ? 'Light' : 'Dark'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <div className="flex-1 px-3 py-4 sm:px-5 lg:px-6">
-            <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4">
+    <>
+    <AppShell page={page} collapsed={sidebarCollapsed} onCollapse={() => setSidebarCollapsed(value => !value)} onNavigate={openPage} theme={theme} onTheme={setTheme} username={authenticated ? currentUsername : undefined} onLogout={handleLogout} aiButton={<AITopbarButton onClick={aiAssistant.openDrawer} open={aiAssistant.drawerOpen} />}>
+      <div className="console-page-content">
               {error ? <div className="rounded-xl border border-danger/30 bg-danger/10 px-5 py-4 font-semibold text-danger shadow-sm">{error}</div> : null}
 
               {installCommandDialog}
 
               {page === 'overview' ? (
-                <OverviewPage nodes={nodes} onlineNodes={onlineNodes} onAddServer={showInstallCommand} onSelectedNodeChange={setSelectedNodeID} />
+                <OverviewPage nodes={nodes} nodesError={nodesError} nodesUpdatedAt={nodesUpdatedAt} nodesLoading={nodesLoading} onRefreshNodes={loadNodes} onAddServer={showInstallCommand} onNavigate={navigateWithinPanel} />
               ) : page === 'ai' ? (
                 <AIWorkspacePage assistant={aiAssistant} onOpenSettings={openAISettings} />
               ) : page === 'history' ? (
                 <HistoryPage nodes={nodes} selectedNodeID={selectedNodeID} metrics={metrics} range={range} settings={settings} onSelectNode={setSelectedNodeID} onRangeChange={setRange} />
               ) : page === 'settings' ? (
-                <SystemSettingsPage settings={settings} about={systemAbout} nodes={nodes} selectedRetention={settingsRetention} saving={settingsSaving} message={settingsMessage} error={settingsError} onSelectRetention={setSettingsRetention} onSave={saveSettings} onSaveAIControl={saveAIControlSettings} />
+                <SystemSettingsPage settings={settings} about={systemAbout} selectedRetention={settingsRetention} saving={settingsSaving} message={settingsMessage} error={settingsError} onSelectRetention={setSettingsRetention} onSave={saveSettings} />
               ) : page === 'alerts' ? (
-                <AlertsPage nodes={nodes} />
+                <AlertsPage nodes={nodes} navigationVersion={routeVersion} />
               ) : page === 'uptime' ? (
-                <UptimePage />
+                <UptimePage navigationVersion={routeVersion} />
               ) : page === 'audit' ? (
                 <AuditPage nodes={nodes} />
               ) : page === 'tasks' ? (
-                <TasksPage nodes={nodes} />
+                <TasksPage nodes={nodes} navigationVersion={routeVersion} />
               ) : page === 'services' ? (
-                <ServicesPage serviceID={route.kind === 'service-detail' ? route.serviceID : undefined} onOpenService={openService} onBack={backToServices} onNavigate={navigateWithinPanel} />
+                <ServicesPage onRegisterLeaveGuard={registerGuard} serviceID={route.kind === 'service-detail' ? route.serviceID : undefined} onOpenService={openService} onBack={backToServices} onNavigate={navigateWithinPanel} diagnosisBusy={aiAssistant.sending || Boolean(aiAssistant.operationID) || aiAssistant.loading} onDiagnose={(service) => aiAssistant.prepareDraft(
+                  `请诊断当前应用服务（ID：${service.id}）。先调用 diagnose_incident，scope_type 使用 application_service、scope_id 使用该服务 ID，读取当前证据。按“已观察到的事实、可能原因、尚缺的信息、建议操作”组织回答，标明证据来源和时间；不要把时间接近当作因果关系。先完成只读诊断，如建议变更，必须保留人工确认，并说明处理后应如何验证服务恢复。`,
+                  { page: 'services', resource_type: 'application_service', resource_id: service.id }, service.name
+                )} />
               ) : page === 'k8s' ? (
                 route.kind === 'k8s-cluster-detail' ? (
                   <K8sClusterDetailPage
@@ -1254,12 +1023,11 @@ export default function App() {
               ) : page === 'logs' ? (
                 <LogsPage nodes={nodes} />
               ) : hostContent}
-            </div>
-          </div>
-        </section>
       </div>
-      <AIAssistantDrawer assistant={aiAssistant} onOpenWorkspace={openAIWorkspace} onOpenSettings={openAISettings} />
-    </main>
+    </AppShell>
+    {switcherOpen && <NodeSwitcher nodes={nodes} selectedID={selectedNodeID} onClose={() => setSwitcherOpen(false)} onSelect={node => openNode(node, true)} />}
+    <AIAssistantDrawer assistant={aiAssistant} onOpenWorkspace={openAIWorkspace} onOpenSettings={openAISettings} />
+    </>
   )
 }
 
@@ -1277,110 +1045,4 @@ function uniqueNodeTags(nodes: Node[]): NodeTagSummary[] {
     for (const tag of node.tags ?? []) tags.set(tag.id, tag)
   }
   return [...tags.values()]
-}
-
-function TopStatCard({ title, value, subtitle, tone, sparklineData }: { title: string, value: string, subtitle: string, tone: 'blue' | 'green' | 'orange' | 'red', sparklineData?: number[] }) {
-  const dotClass = tone === 'green' ? 'bg-success' : tone === 'orange' ? 'bg-warning' : tone === 'red' ? 'bg-danger' : 'bg-info'
-  const sparklineColors = {
-    blue: '#93c5fd',
-    green: '#6ee7b7',
-    orange: '#fdba74',
-    red: '#fca5a5',
-  }
-  const sparklineColor = sparklineColors[tone]
-  const gradientId = `top-stat-gradient-${tone}`
-  const chartData = sparklineData ? sparklineData.map((v, i) => ({ index: i, value: v })) : []
-  const hasSparkline = sparklineData && sparklineData.length > 0
-
-  return (
-    <div className="soft-stat-card h-[96px] p-4">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <p className="truncate text-xs font-black text-muted-foreground">{title}</p>
-        <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
-      </div>
-      <div className="flex items-end justify-between gap-2">
-        <div className="min-w-0">
-          <p className="font-display text-2xl font-black tracking-tight text-foreground">{value}</p>
-          <p className="mt-1 truncate text-xs font-semibold text-muted-foreground">{subtitle}</p>
-        </div>
-        {hasSparkline && (
-          <div className="h-9 w-24 shrink-0">
-            <ResponsiveContainer
-              width="100%"
-              height="100%"
-              initialDimension={{ width: 96, height: 36 }}
-            >
-              <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
-                <defs>
-                  <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={sparklineColor} stopOpacity={0.18} />
-                    <stop offset="95%" stopColor={sparklineColor} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <Area
-                  type="natural"
-                  dataKey="value"
-                  stroke={sparklineColor}
-                  strokeWidth={1.2}
-                  fill={`url(#${gradientId})`}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function NavIcon({ name }: { name: 'overview' | 'hosts' | 'services' | 'history' | 'settings' | 'alerts' | 'uptime' | 'audit' | 'tasks' | 'logs' | 'k8s' }) {
-  const common = "h-5 w-5"
-  if (name === 'overview') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></svg>
-  }
-  if (name === 'hosts') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="6" rx="2" /><rect x="4" y="14" width="16" height="6" rx="2" /><path d="M7.5 7h.01M7.5 17h.01M11 7h6M11 17h6" /></svg>
-  }
-  if (name === 'services') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="5" width="7" height="6" rx="1.5" /><rect x="13.5" y="13" width="7" height="6" rx="1.5" /><path d="M10.5 8h3a3 3 0 0 1 3 3v2M7 11v5a3 3 0 0 0 3 3h3.5" /></svg>
-  }
-  if (name === 'k8s') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8.5 4.5v9L12 21l-8.5-4.5v-9L12 3z" /><path d="M12 8v8M8 10l8 4M8 14l8-4" /></svg>
-  }
-  if (name === 'history') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12a8 8 0 1 0 2.35-5.65" /><path d="M4 5.5v4h4" /><path d="M12 8v4l2.5 2" /></svg>
-  }
-  if (name === 'alerts') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-  }
-  if (name === 'uptime') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 12h4l2-6 4.5 12 2.5-6h4" /><circle cx="12" cy="12" r="9" /></svg>
-  }
-  if (name === 'audit') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3.5 19 6v5.2c0 4.2-2.7 7.5-7 9.3-4.3-1.8-7-5.1-7-9.3V6l7-2.5Z" /><path d="m9 12 2 2 4-4" /></svg>
-  }
-  if (name === 'tasks') return <CalendarClock aria-hidden="true" className={common} strokeWidth={2.1} />
-  if (name === 'settings') {
-    return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3.5v2.25M12 18.25v2.25M5.99 5.99l1.6 1.6M16.41 16.41l1.6 1.6M3.5 12h2.25M18.25 12h2.25M5.99 18.01l1.6-1.6M16.41 7.59l1.6-1.6" /><circle cx="12" cy="12" r="3.5" /></svg>
-  }
-  return <svg aria-hidden="true" viewBox="0 0 24 24" className={common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 3.5h8L19.5 8v12.5h-13z" /><path d="M14.5 3.5V8h5" /><path d="M9 12h6M9 16h6" /></svg>
-}
-
-function CollapseIcon({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 7h16M4 12h16M4 17h16" />
-      <path d={collapsed ? 'm14 9 3 3-3 3' : 'm10 9-3 3 3 3'} />
-    </svg>
-  )
-}
-
-function SunIcon() {
-  return <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M4.5 4.5l1.4 1.4M18.1 18.1l1.4 1.4M2.5 12h2M19.5 12h2M4.5 19.5l1.4-1.4M18.1 5.9l1.4-1.4" /></svg>
-}
-
-function MoonIcon() {
-  return <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 7 7 0 1 0 20.5 14.5Z" /></svg>
 }

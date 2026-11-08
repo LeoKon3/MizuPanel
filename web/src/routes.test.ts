@@ -10,6 +10,9 @@ describe('route parsing', () => {
     ['/services/service%2Fone', { kind: 'service-detail', serviceID: 'service/one' }],
     ['/k8s/clusters/cluster%2Fone', { kind: 'k8s-cluster-detail', clusterID: 'cluster/one' }],
     ['/tasks', { kind: 'tasks' }],
+    ['/', { kind: 'overview' }],
+    ['/overview', { kind: 'overview' }],
+    ['/nodes', { kind: 'dashboard' }],
     ['/unknown', { kind: 'dashboard' }],
   ])('parses %s', (pathname, expected) => {
     expect(routeForPath(pathname)).toEqual(expected)

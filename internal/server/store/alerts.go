@@ -278,11 +278,24 @@ func (s *AlertStore) UpdateAlertHistoryMetricValue(id int64, metricValue float64
 
 // GetActiveAlertHistory returns all unresolved alerts (resolved_at IS NULL)
 func (s *AlertStore) GetActiveAlertHistory() ([]AlertHistory, error) {
+	return s.getActiveAlertHistory(false)
+}
+
+// GetEnabledActiveAlertHistory is a read-only view for the overview. Disabled or
+// deleted rules do not count as active, but their history is not changed by GET.
+func (s *AlertStore) GetEnabledActiveAlertHistory() ([]AlertHistory, error) {
+	return s.getActiveAlertHistory(true)
+}
+
+func (s *AlertStore) getActiveAlertHistory(enabledOnly bool) ([]AlertHistory, error) {
 	query := `SELECT h.id, h.rule_id, COALESCE(r.name, h.rule_name), h.node_id, h.node_name, h.metric_field, h.metric_value, h.threshold, h.triggered_at, h.resolved_at, h.notification_sent, COALESCE(h.notification_error, ''), h.notification_attempted_at, h.recovery_notification_sent, COALESCE(h.recovery_notification_error, ''), h.recovery_notification_attempted_at, h.created_at
 		FROM alert_history h
 		LEFT JOIN alert_rules r ON r.id = h.rule_id
-		WHERE h.resolved_at IS NULL
-		ORDER BY h.triggered_at DESC`
+		WHERE h.resolved_at IS NULL`
+	if enabledOnly {
+		query += ` AND r.enabled = TRUE`
+	}
+	query += ` ORDER BY h.triggered_at DESC, h.id DESC`
 	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err

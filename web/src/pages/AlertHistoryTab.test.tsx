@@ -9,6 +9,7 @@ vi.mock('../api/client', () => ({
   deleteAlertHistories: vi.fn(),
   deleteAlertHistory: vi.fn(),
   getAlertHistory: vi.fn(),
+  getActiveAlerts: vi.fn(),
   resolveAlertHistory: vi.fn()
 }))
 
@@ -87,6 +88,8 @@ const deleteAlertHistoriesMock = () =>
 
 describe('AlertHistoryTab', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/alerts')
+    vi.mocked(api.getActiveAlerts).mockResolvedValue({ history: [activeAlert] })
     vi.mocked(api.getAlertHistory).mockResolvedValue({ history: [activeAlert] })
     resolveAlertHistoryMock().mockResolvedValue({ ...activeAlert, resolved_at: '2026-06-25T10:05:00Z' })
     deleteAlertHistoryMock().mockResolvedValue(undefined)
@@ -95,6 +98,17 @@ describe('AlertHistoryTab', () => {
 
   afterEach(() => {
     vi.clearAllMocks()
+  })
+
+  test('opens an active-alert link for the specified node using the complete active query', async () => {
+    window.history.replaceState({}, '', '/alerts?status=active&node=node-1')
+    vi.mocked(api.getActiveAlerts).mockResolvedValue({ history: [activeAlert, { ...activeAlert, id: 99, node_id: 'node-elsewhere', rule_name: 'Elsewhere' }] })
+    render(<AlertHistoryTab nodes={nodes} navigationVersion={1} />)
+    expect(await screen.findByText('CPU High')).toBeInTheDocument()
+    expect(screen.getByLabelText('告警节点筛选')).toHaveValue('node-1')
+    expect(screen.queryByText('Elsewhere')).not.toBeInTheDocument()
+    expect(api.getActiveAlerts).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(api.getAlertHistory).not.toHaveBeenCalled()
   })
 
   test('lets active alerts be manually resolved', async () => {

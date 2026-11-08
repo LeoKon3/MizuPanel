@@ -2,130 +2,152 @@
 
 [返回 README](../README.md) · [English](screenshots.en.md)
 
-以下截图来自当前版本界面。README 首页只展示少量入口图，这里放完整截图集合。
+拍摄版本 **v0.1.33**，日期 **2026-11-09**，统一视口 **1440 × 900**。中英文 README 共用这组当前中文界面的截图，均来自正式构建，不是 `8081` 设计样板或模拟 API 页面。
 
-## 概览
+IP 地址、Provider 地址和私人会话内容已按需遮盖；不展示安装凭据或 kubeconfig 内容。没有为展示效果添加业务数据，空数据、禁用和离线状态均如实保留；各页面仍处于逐步统一视觉的过程中。
 
-<table>
-  <tr>
-    <td width="50%">
-      <a href="../assets/screenshots/dashboard.png"><img src="../assets/screenshots/dashboard.png" alt="概览页面" width="100%" /></a>
-      <br /><sub>1440px 桌面视口下的概览页面。</sub>
-    </td>
-    <td width="50%">
-      <a href="../assets/screenshots/overview.png"><img src="../assets/screenshots/overview.png" alt="1280px 桌面视口下的概览页面" width="100%" /></a>
-      <br /><sub>1280px 桌面视口下的概览页面。</sub>
-    </td>
-  </tr>
-</table>
 
-概览页展示节点状态、Kubernetes 集群状态、活跃告警、资源趋势、服务器状态和快捷操作。
-
-## 应用服务中心
-
-<p align="center">
-  <a href="../assets/screenshots/services.png">
-    <img src="../assets/screenshots/services.png" alt="应用服务中心" width="100%" />
-  </a>
-</p>
-
-应用服务中心把七类现有运维资源聚合为逻辑业务服务，统一展示健康、原因、部署位置、资源规模与近期活动，同时保留到原管理入口的深链。
-
-## 主机与 Agent
+## 概览与明暗主题
 
 <table>
   <tr>
     <td width="50%">
-      <a href="../assets/screenshots/host-detail.png"><img src="../assets/screenshots/host-detail.png" alt="主机详情" width="100%" /></a>
-      <br /><sub>主机详情、指标曲线、Docker 工作区、Systemd、进程、文件与 Agent 管理。</sub>
+      <a href="../assets/screenshots/overview-light.png"><img src="../assets/screenshots/overview-light.png" alt="浅色概览：首页汇总真实状态、需要关注的对象和近期任务。" width="100%" /></a>
+      <br /><sub>浅色概览：首页汇总真实状态、需要关注的对象和近期任务。</sub>
     </td>
     <td width="50%">
-      <a href="../assets/screenshots/add-host.png"><img src="../assets/screenshots/add-host.png" alt="添加服务器" width="100%" /></a>
-      <br /><sub>添加服务器，复制 Linux 或 Windows Agent 安装命令；Agent 会持久化身份并支持连接诊断与安全升级。</sub>
+      <a href="../assets/screenshots/overview-dark.png"><img src="../assets/screenshots/overview-dark.png" alt="同一页面的深色主题，信息结构保持一致。" width="100%" /></a>
+      <br /><sub>同一页面的深色主题，信息结构保持一致。</sub>
     </td>
   </tr>
 </table>
 
-## 任务中心
+概览为默认入口；主机、告警、拨测、应用服务和 K8s 的问题可直接进入对应管理页。没有任务记录时显示真实空状态。
 
-<p align="center">
-  <a href="../assets/screenshots/tasks.png">
-    <img src="../assets/screenshots/tasks.png" alt="任务中心" width="100%" />
-  </a>
-</p>
 
-任务中心统一管理计划任务、脚本库和执行记录，支持在一个或多个 Agent 上执行受限 Shell 自动化。
-
-## Kubernetes
+## 主机工作区
 
 <table>
   <tr>
     <td width="50%">
-      <a href="../assets/screenshots/kubernetes.png"><img src="../assets/screenshots/kubernetes.png" alt="Kubernetes 集群列表" width="100%" /></a>
-      <br /><sub>Kubernetes 集群接入和搜索。</sub>
+      <a href="../assets/screenshots/hosts.png"><img src="../assets/screenshots/hosts.png" alt="独立主机列表：稳定排序、状态与分组筛选、真实资源指标。" width="100%" /></a>
+      <br /><sub>独立主机列表：稳定排序、状态与分组筛选、真实资源指标。</sub>
     </td>
     <td width="50%">
-      <a href="../assets/screenshots/k8s-detail.png"><img src="../assets/screenshots/k8s-detail.png" alt="Kubernetes 详情" width="100%" /></a>
-      <br /><sub>集群详情、资源统计、Namespace、Node、Pod、Workload、Service 和 Ingress。</sub>
+      <a href="../assets/screenshots/host-overview.png"><img src="../assets/screenshots/host-overview.png" alt="全宽主机概览：资源趋势、基础信息、网络与磁盘 I/O。" width="100%" /></a>
+      <br /><sub>全宽主机概览：资源趋势、基础信息、网络与磁盘 I/O。</sub>
     </td>
   </tr>
   <tr>
-    <td colspan="2">
-      <a href="../assets/screenshots/k8s-create-resource.png"><img src="../assets/screenshots/k8s-create-resource.png" alt="创建 Kubernetes 资源" width="100%" /></a>
-      <br /><sub>创建资源，支持 YAML 预览、Dry Run 和多类资源表单。</sub>
+    <td width="100%">
+      <a href="../assets/screenshots/host-processes.png"><img src="../assets/screenshots/host-processes.png" alt="进程分区：搜索、排序和对齐的数值列。" width="100%" /></a>
+      <br /><sub>进程分区：搜索、排序和对齐的数值列。</sub>
     </td>
   </tr>
 </table>
+
+IP 地址已遮盖。截图中的主机名称、状态和指标来自当前环境；没有执行终端命令、重启或其他主机变更。
+
+
+## 应用服务
+
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/application-services.png"><img src="../assets/screenshots/application-services.png" alt="真实空列表：当前环境尚未创建应用服务。" width="100%" /></a>
+      <br /><sub>真实空列表：当前环境尚未创建应用服务。</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/service-editor.png"><img src="../assets/screenshots/service-editor.png" alt="资源分类编辑器：按类型选择、搜索和查看已选清单。" width="100%" /></a>
+      <br /><sub>资源分类编辑器：按类型选择、搜索和查看已选清单。</sub>
+    </td>
+  </tr>
+</table>
+
+这里只打开创建窗口展示布局，没有提交创建或保存。服务详情的排障工作区与统一事件流需在创建逻辑服务后使用；不使用模拟数据冒充已配置服务。
+
 
 ## 告警
 
 <table>
   <tr>
     <td width="50%">
-      <a href="../assets/screenshots/alerts.png"><img src="../assets/screenshots/alerts.png" alt="告警中心" width="100%" /></a>
-      <br /><sub>告警规则、活跃告警和历史告警。</sub>
+      <a href="../assets/screenshots/alert-history.png"><img src="../assets/screenshots/alert-history.png" alt="告警历史与触发、恢复通知状态。" width="100%" /></a>
+      <br /><sub>告警历史与触发、恢复通知状态。</sub>
     </td>
     <td width="50%">
-      <a href="../assets/screenshots/alert-rules.png"><img src="../assets/screenshots/alert-rules.png" alt="告警规则" width="100%" /></a>
-      <br /><sub>告警规则列表和规则管理。</sub>
+      <a href="../assets/screenshots/alert-rule-list.png"><img src="../assets/screenshots/alert-rule-list.png" alt="现有规则列表：截图中的规则处于禁用状态。" width="100%" /></a>
+      <br /><sub>现有规则列表：截图中的规则处于禁用状态。</sub>
     </td>
   </tr>
 </table>
 
-## 服务拨测
+当前记录和规则如实展示；截图期间未启用规则、删除记录或发送通知。
 
-<p align="center">
-  <a href="../assets/screenshots/uptime.png">
-    <img src="../assets/screenshots/uptime.png" alt="服务拨测" width="100%" />
-  </a>
-</p>
 
-服务拨测由 Server 定时或手动检查 HTTP、HTTPS 和 TCP 目标，展示状态、延迟、故障与证书预警。
+## 任务中心与服务拨测
 
-## 操作审计
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/task-center.png"><img src="../assets/screenshots/task-center.png" alt="计划任务、脚本库与执行记录入口；当前没有计划任务。" width="100%" /></a>
+      <br /><sub>计划任务、脚本库与执行记录入口；当前没有计划任务。</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/uptime-monitoring.png"><img src="../assets/screenshots/uptime-monitoring.png" alt="HTTP、HTTPS、TCP 拨测入口；当前没有配置拨测。" width="100%" /></a>
+      <br /><sub>HTTP、HTTPS、TCP 拨测入口；当前没有配置拨测。</sub>
+    </td>
+  </tr>
+</table>
 
-<p align="center">
-  <a href="../assets/screenshots/audit.png">
-    <img src="../assets/screenshots/audit.png" alt="操作审计" width="100%" />
-  </a>
-</p>
+没有为了截图执行脚本、创建计划或触发探测。
 
-审计日志按时间、模块、节点和结果追溯敏感操作，同时避免记录命令、文件内容与凭据等机密信息。
 
-## AI 自然语言运维
+## Kubernetes 与审计
 
-<p align="center">
-  <a href="../assets/screenshots/ai-drawer.png">
-    <img src="../assets/screenshots/ai-drawer.png" alt="AI 运维助手抽屉" width="100%" />
-  </a>
-</p>
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/kubernetes-clusters.png"><img src="../assets/screenshots/kubernetes-clusters.png" alt="集群列表与真实离线原因，节点 IP 已遮盖。" width="100%" /></a>
+      <br /><sub>集群列表与真实离线原因，节点 IP 已遮盖。</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/audit-log.png"><img src="../assets/screenshots/audit-log.png" alt="审计筛选入口，当前时间范围内没有审计记录。" width="100%" /></a>
+      <br /><sub>审计筛选入口，当前时间范围内没有审计记录。</sub>
+    </td>
+  </tr>
+</table>
 
-顶部栏的 AI 运维助手可打开覆盖式右侧抽屉，支持键盘调整宽度、按 Provider 分组切换会话模型和新建会话；查询自动执行，变更操作需人工确认。
+当前 Kubernetes API 不可达，因此不沿用旧版的在线集群详情或资源创建截图。未创建 Kubernetes 资源，也未清理审计日志。
 
-<p align="center">
-  <a href="../assets/screenshots/ai-provider-settings.png">
-    <img src="../assets/screenshots/ai-provider-settings.png" alt="AI 模型配置" width="100%" />
-  </a>
-</p>
 
-系统设置中的 AI 模型配置支持一条 Provider 连接管理多个模型，并提供模型发现、按需导入、逐模型能力检测及默认/回退路由；API Key 加密保存且不回显。
+## 系统设置
+
+<table>
+  <tr>
+    <td width="50%">
+      <a href="../assets/screenshots/settings-general.png"><img src="../assets/screenshots/settings-general.png" alt="常规设置独立页面：指标保留时间与当前版本。" width="100%" /></a>
+      <br /><sub>常规设置独立页面：指标保留时间与当前版本。</sub>
+    </td>
+    <td width="50%">
+      <a href="../assets/screenshots/settings-models.png"><img src="../assets/screenshots/settings-models.png" alt="AI 模型页面：Provider 与子模型，Provider 地址已遮盖。" width="100%" /></a>
+      <br /><sub>AI 模型页面：Provider 与子模型，Provider 地址已遮盖。</sub>
+    </td>
+  </tr>
+</table>
+
+常规设置与 AI 模型是互斥页面。模型页保留连接、能力检测和路由配置；不再展示已移除的 AI 自动执行策略。截图期间未修改配置或检测模型。
+
+
+## AI 运维助手
+
+<table>
+  <tr>
+    <td width="100%">
+      <a href="../assets/screenshots/ai-assistant.png"><img src="../assets/screenshots/ai-assistant.png" alt="按需打开的覆盖式 AI 抽屉；已有会话内容已隐藏。" width="100%" /></a>
+      <br /><sub>按需打开的覆盖式 AI 抽屉；已有会话内容已隐藏。</sub>
+    </td>
+  </tr>
+</table>
+
+只展示抽屉结构、模型选择和输入区，不发送 AI 消息、不执行工具操作。图中的“会话内容已隐藏”是截图脱敏说明，不是产品空状态。

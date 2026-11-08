@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, FolderInput, Loader2, Rocket, Tags, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowRight, FolderInput, Loader2, Rocket, Tags, Terminal, X } from 'lucide-react'
 
 import { createNodeTag, getNodeGroups, getNodeTags, updateBatchNodeMetadata } from '../api/client'
+import { nodeDisplayStatus, nodeStatusLabel } from '../lib/nodeStatus'
 import { formatPercent } from '../lib/format'
 import type { Node, NodeGroup, NodeTag } from '../types'
 import { BatchAgentUpgradeModal } from './BatchAgentUpgradeModal'
@@ -12,13 +13,19 @@ type HostBatchTableProps = {
   nodes: Node[]
   onOpenNode: (node: Node) => void
   onNodesChanged: () => Promise<void> | void
+  workspace?: boolean
+  filterKey?: string
+  scrollTop?: number
+  onScroll?: (top: number) => void
 }
 
 type MetadataModal = 'group' | 'tags'
 
 const tagColors: NodeTag['color'][] = ['green', 'teal', 'blue', 'amber', 'red', 'gray']
 
-export function HostBatchTable({ nodes, onOpenNode, onNodesChanged }: HostBatchTableProps) {
+export function HostBatchTable({ nodes, onOpenNode, onNodesChanged, workspace = false, filterKey, scrollTop = 0, onScroll }: HostBatchTableProps) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const allRef = useRef<HTMLInputElement>(null)
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
   const [modal, setModal] = useState<MetadataModal>()
   const [groups, setGroups] = useState<NodeGroup[]>([])
@@ -40,6 +47,10 @@ export function HostBatchTable({ nodes, onOpenNode, onNodesChanged }: HostBatchT
 
   const selectedNodes = useMemo(() => nodes.filter((node) => selectedIDs.has(node.id)), [nodes, selectedIDs])
   const allSelected = nodes.length > 0 && nodes.every((node) => selectedIDs.has(node.id))
+
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollTop }, [])
+  useEffect(() => { setSelectedIDs(new Set()) }, [filterKey])
+  useEffect(() => { if (allRef.current) allRef.current.indeterminate = selectedIDs.size > 0 && !allSelected }, [selectedIDs, allSelected])
 
   const toggleNode = (nodeID: string) => {
     setSelectedIDs((current) => {
@@ -146,20 +157,25 @@ export function HostBatchTable({ nodes, onOpenNode, onNodesChanged }: HostBatchT
   }
 
   return (
-    <section className="soft-panel min-w-0 overflow-hidden">
-      <div className="flex min-h-14 flex-wrap items-center gap-2 border-b border-border bg-surface/65 px-4 py-3" role="toolbar" aria-label="批量主机操作">
+    <section className={workspace ? "console-host-table min-w-0" : "soft-panel min-w-0 overflow-hidden"}>
+      {(!workspace || selectedIDs.size > 0) && <div className="flex min-h-14 flex-wrap items-center gap-2 border-b border-border bg-surface/65 px-4 py-3" role="toolbar" aria-label="批量主机操作">
         <span className="mr-auto text-xs font-black text-muted-foreground">已选择 <span className="text-foreground">{selectedIDs.size}</span> / 100 台</span>
         <button type="button" disabled={selectedIDs.size === 0} onClick={() => void openModal('group')} className="soft-button inline-flex min-h-9 items-center gap-2 border border-border bg-card px-3 text-xs font-black text-foreground disabled:opacity-45"><FolderInput size={14} />移动分组</button>
         <button type="button" disabled={selectedIDs.size === 0} onClick={() => void openModal('tags')} className="soft-button inline-flex min-h-9 items-center gap-2 border border-border bg-card px-3 text-xs font-black text-foreground disabled:opacity-45"><Tags size={14} />调整标签</button>
         <button type="button" disabled={selectedIDs.size === 0} onClick={() => setUpgradeNodes(selectedNodes)} className="soft-button inline-flex min-h-9 items-center gap-2 bg-primary px-3 text-xs font-black text-primary-foreground disabled:opacity-45"><Rocket size={14} />升级 Agent</button>
-      </div>
+        {workspace && <button type="button" className="console-icon-button" aria-label="取消选择" onClick={() => setSelectedIDs(new Set())}><X size={16} /></button>}
+      </div>}
 
-      <div className="overflow-x-auto">
+      {workspace ? <div className="console-table-scroll" ref={scrollRef} onScroll={event => onScroll?.(event.currentTarget.scrollTop)}>
+        <table className="console-data-table"><thead><tr><th className="check-cell"><input ref={allRef} aria-label="选择当前筛选结果" type="checkbox" checked={allSelected} disabled={!nodes.length} onChange={toggleAll} /></th><th>名称 / 地址</th><th>状态</th><th className="num">CPU</th><th className="num">内存</th><th className="num">磁盘</th><th className="actions-cell">操作</th></tr></thead>
+          <tbody>{nodes.map(node => <ConsoleHostRow key={node.id} node={node} selected={selectedIDs.has(node.id)} onToggle={() => toggleNode(node.id)} onOpen={() => onOpenNode(node)} />)}</tbody>
+        </table>
+      </div> : <div className="overflow-x-auto">
         <table className="soft-table min-w-[980px] w-full text-left">
           <thead><tr><th className="w-12 px-4 py-3"><input aria-label="选择当前筛选结果" type="checkbox" checked={allSelected} onChange={toggleAll} /></th><th className="px-3 py-3">主机</th><th className="px-3 py-3">状态</th><th className="px-3 py-3">分组</th><th className="px-3 py-3">标签</th><th className="px-3 py-3">IP</th><th className="px-3 py-3">CPU / 内存</th><th className="px-3 py-3">Agent</th><th className="w-16 px-3 py-3"><span className="sr-only">详情</span></th></tr></thead>
           <tbody>{nodes.map((node) => <HostBatchRow key={node.id} node={node} selected={selectedIDs.has(node.id)} onToggle={() => toggleNode(node.id)} onOpen={() => onOpenNode(node)} />)}</tbody>
         </table>
-      </div>
+      </div>}
 
       {nodes.length === 0 ? <div className="soft-empty-state px-5 py-12 text-center text-sm font-bold text-muted-foreground">当前筛选条件下没有主机。</div> : null}
       {modal ? <MetadataModal kind={modal} selectedCount={selectedIDs.size} loading={catalogLoading} saving={saving} groups={groups} tags={tags} groupID={groupID} setGroupID={setGroupID} addTagIDs={addTagIDs} removeTagIDs={removeTagIDs} newTagName={newTagName} setNewTagName={setNewTagName} newTagColor={newTagColor} setNewTagColor={setNewTagColor} onTagMode={selectTagMode} onAttachInlineTag={() => void attachInlineTag()} onClose={() => !saving && setModal(undefined)} onSave={() => void (modal === 'group' ? moveGroup() : saveTags())} /> : null}
@@ -167,6 +183,22 @@ export function HostBatchTable({ nodes, onOpenNode, onNodesChanged }: HostBatchT
       {toast ? <Toast message={toast.message} type={toast.type} onClose={() => setToast(undefined)} /> : null}
     </section>
   )
+}
+
+function ConsoleHostRow({ node, selected, onToggle, onOpen }: { node: Node; selected: boolean; onToggle: () => void; onOpen: () => void }) {
+  const status = nodeDisplayStatus(node)
+  const metric = status === 'online' ? node.latest_metric : undefined
+  const name = node.name || node.hostname
+  const terminalEnabled = node.status === 'online' && node.terminal_enabled
+  return <tr className={selected ? 'is-selected' : undefined}>
+    <td className="check-cell"><input type="checkbox" aria-label={`选择 ${name}`} checked={selected} onChange={onToggle} /></td>
+    <td><button type="button" onClick={onOpen} className="console-host-name">{name}</button><div className="console-host-meta"><span>{node.ip || '—'}</span><span>{node.group?.name ?? '未分组'}</span>{(node.tags?.length ?? 0) > 0 && <span title={node.tags?.map(tag => tag.name).join('、')}>{node.tags?.map(tag => tag.name).join(' · ')}</span>}</div></td>
+    <td><span className={`console-status status-${status}`}><i aria-hidden="true" />{nodeStatusLabel(node)}</span></td>
+    <td className="num">{metric ? formatPercent(metric.cpu_usage) : '—'}</td>
+    <td className="num">{metric ? formatPercent(metric.memory_usage) : '—'}</td>
+    <td className={`num ${metric && metric.disk_usage >= 85 ? 'text-warning' : ''}`}>{metric ? formatPercent(metric.disk_usage) : '—'}</td>
+    <td className="actions-cell"><button type="button" aria-label={`打开 ${name} 终端`} title={terminalEnabled ? '打开终端' : node.status !== 'online' ? '主机离线，无法连接' : '该节点未启用终端'} disabled={!terminalEnabled} className="console-button console-ghost" onClick={() => window.open(`/nodes/${encodeURIComponent(node.id)}/terminal`, '_blank', 'noopener,noreferrer')}><Terminal size={15} />终端</button></td>
+  </tr>
 }
 
 function HostBatchRow({ node, selected, onToggle, onOpen }: { node: Node, selected: boolean, onToggle: () => void, onOpen: () => void }) {

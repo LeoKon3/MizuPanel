@@ -1,6 +1,8 @@
+import { useState } from 'react'
+import { Bot, Database, ExternalLink, LoaderCircle, Save } from 'lucide-react'
+
 import { AIProviderSettings } from '../components/ai/AIProviderSettings'
-import { AIControlPlaneSettings } from '../components/ai/AIControlPlaneSettings'
-import type { AIControlSettings, AIControlSettingsUpdate, Node, RangeOption, SettingsResponse, SystemAboutResponse } from '../types'
+import type { RangeOption, SettingsResponse, SystemAboutResponse } from '../types'
 
 const retentionOptions: Array<{ value: RangeOption, label: string }> = [
   { value: '6h', label: '6 小时' },
@@ -9,71 +11,133 @@ const retentionOptions: Array<{ value: RangeOption, label: string }> = [
   { value: '7d', label: '7 天' }
 ]
 
+const settingsPages = [
+  { id: 'settings-general', label: '常规设置', icon: Database },
+  { id: 'settings-ai', label: 'AI 模型', icon: Bot }
+] as const
+
+type SettingsPageID = typeof settingsPages[number]['id']
+
 type SystemSettingsPageProps = {
   settings?: SettingsResponse
   about?: SystemAboutResponse
-  nodes: Node[]
   selectedRetention: RangeOption
   saving: boolean
   message?: string
   error?: string
   onSelectRetention: (retention: RangeOption) => void
   onSave: () => void
-  onSaveAIControl: (update: AIControlSettingsUpdate) => Promise<AIControlSettings>
 }
 
-export function SystemSettingsPage({ settings, about, nodes, selectedRetention, saving, message, error, onSelectRetention, onSave, onSaveAIControl }: SystemSettingsPageProps) {
+export function SystemSettingsPage({ settings, about, selectedRetention, saving, message, error, onSelectRetention, onSave }: SystemSettingsPageProps) {
+  const [activePage, setActivePage] = useState<SettingsPageID>('settings-general')
+
   return (
-    <section aria-label="系统设置" className="soft-panel">
-      <div className="soft-panel-header flex flex-wrap items-center justify-between gap-4 px-5 py-4">
-        <div className="min-w-0">
-          <h2 className="font-display text-2xl font-black text-foreground">系统设置</h2>
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <span className="text-xs font-semibold text-muted-foreground">版本 <strong className="font-mono text-foreground">{about ? `v${about.version}` : '加载中'}</strong></span>
+    <section aria-label="系统设置" className="mx-auto w-full max-w-[1380px]">
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-5 px-1">
+        <h2 className="font-display text-3xl font-black tracking-tight text-foreground">系统设置</h2>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="inline-flex min-h-10 items-center rounded-full border border-border bg-card px-4 text-xs font-semibold text-muted-foreground shadow-sm">
+            版本 <strong className="ml-1.5 font-mono text-foreground">{about ? `v${about.version}` : '加载中'}</strong>
+          </span>
           <a
             href={about?.github_url || 'https://github.com/LeoKon3/MizuPanel'}
             target="_blank"
             rel="noreferrer"
             aria-label="打开 GitHub 仓库"
-            className="soft-button inline-flex h-9 w-9 items-center justify-center border border-border bg-card text-foreground hover:bg-surface focus:outline-none focus:ring-4 focus:ring-primary/20"
+            className="soft-button inline-flex min-h-10 items-center gap-2 rounded-full border border-border bg-card px-4 text-xs font-black text-foreground shadow-sm hover:bg-surface focus:outline-none focus:ring-4 focus:ring-primary/20"
           >
             <GitHubMark className="h-4 w-4" />
+            GitHub
+            <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
           </a>
         </div>
-      </div>
+      </header>
 
-      <section className="border-b border-border bg-surface/35 px-4 py-4 sm:px-5" aria-labelledby="metrics-retention-title">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <h3 id="metrics-retention-title" className="text-base font-black text-foreground">指标保留时间</h3>
-            <span className="soft-chip px-2.5 py-1 text-xs font-black text-muted-foreground">当前 {settings ? retentionLabel(settings.metrics_retention) : '加载中'}</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex flex-wrap gap-1 border border-border bg-card p-1" role="group" aria-label="指标保留时间">
-              {retentionOptions.map((option) => (
+      <div data-testid="settings-layout" className="grid min-w-0 gap-5 xl:grid-cols-[210px_minmax(0,1fr)] xl:items-start">
+        <aside className="xl:sticky xl:top-[76px] xl:self-start">
+          <nav aria-label="设置分类" className="soft-panel flex gap-2 overflow-x-auto p-2 xl:flex-col xl:overflow-visible">
+            {settingsPages.map((page) => {
+              const Icon = page.icon
+              const selected = activePage === page.id
+              return (
                 <button
-                  key={option.value}
+                  key={page.id}
                   type="button"
-                  aria-label={option.label}
-                  aria-pressed={selectedRetention === option.value}
-                  onClick={() => onSelectRetention(option.value)}
-                  className={`soft-button min-h-10 px-3 text-sm font-black focus:outline-none focus:ring-4 focus:ring-primary/20 ${selectedRetention === option.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-card hover:text-foreground'}`}
+                  aria-current={selected ? 'page' : undefined}
+                  aria-controls={`${page.id}-page`}
+                  onClick={() => setActivePage(page.id)}
+                  className={`soft-button flex min-h-12 min-w-[180px] items-center gap-3 rounded-[18px] px-3.5 text-left transition-colors xl:min-w-0 ${selected ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-surface hover:text-foreground'}`}
                 >
-                  {option.label}
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${selected ? 'bg-primary/15' : 'bg-surface'}`}>
+                    <Icon className="h-[18px] w-[18px]" strokeWidth={2} aria-hidden="true" />
+                  </span>
+                  <span className="truncate text-sm font-black">{page.label}</span>
                 </button>
-              ))}
+              )
+            })}
+          </nav>
+        </aside>
+
+        <div className="min-w-0">
+          <section
+            id="settings-general-page"
+            data-testid="settings-general-page"
+            aria-labelledby="settings-general-title"
+            hidden={activePage !== 'settings-general'}
+            className="overflow-hidden rounded-[20px] border border-border bg-card shadow-sm"
+          >
+            <div className="flex items-start gap-3 border-b border-border px-5 py-5 sm:px-6">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-primary/10 text-primary">
+                <Database className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
+              </span>
+              <h3 id="settings-general-title" className="text-lg font-black text-foreground">常规设置</h3>
             </div>
-            <button type="button" onClick={onSave} disabled={saving} className="soft-button min-h-11 shrink-0 bg-primary px-4 text-sm font-black text-primary-foreground shadow-sm hover:brightness-110 focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60">
-              {saving ? '保存中...' : '保存设置'}
-            </button>
-          </div>
+
+            <div className="grid gap-5 px-5 py-5 sm:px-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h4 className="text-sm font-black text-foreground">指标保留时间</h4>
+                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-black text-primary">当前 {settings ? retentionLabel(settings.metrics_retention) : '加载中'}</span>
+              </div>
+              <div className="inline-flex w-fit max-w-full flex-wrap gap-1 rounded-full border border-border bg-surface p-1" role="group" aria-label="指标保留时间">
+                {retentionOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-label={option.label}
+                    aria-pressed={selectedRetention === option.value}
+                    onClick={() => onSelectRetention(option.value)}
+                    className={`soft-button min-h-10 rounded-full px-4 text-sm font-black focus:outline-none focus:ring-4 focus:ring-primary/20 ${selectedRetention === option.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-card hover:text-foreground'}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex min-h-[72px] flex-wrap items-center justify-between gap-3 border-t border-border bg-surface/45 px-5 py-3.5 sm:px-6">
+              <div className="min-w-0" aria-live="polite">
+                {message ? <p role="status" className="text-sm font-black text-success">{message}</p> : null}
+                {error ? <p role="alert" className="text-sm font-black text-danger">{error}</p> : null}
+              </div>
+              <button type="button" onClick={onSave} disabled={saving} className="soft-button inline-flex min-h-11 shrink-0 items-center gap-2 rounded-full bg-primary px-5 text-sm font-black text-primary-foreground shadow-sm hover:brightness-110 focus:outline-none focus:ring-4 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60">
+                {saving ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}
+                {saving ? '保存中...' : '保存设置'}
+              </button>
+            </div>
+          </section>
+
+          <section
+            id="settings-ai-page"
+            data-testid="settings-ai-page"
+            aria-label="AI 模型设置"
+            hidden={activePage !== 'settings-ai'}
+            className="min-w-0"
+          >
+            <AIProviderSettings />
+          </section>
         </div>
-        {message ? <p className="mt-3 text-sm font-black text-success">{message}</p> : null}
-        {error ? <p className="mt-3 text-sm font-black text-danger">{error}</p> : null}
-      </section>
-      <AIControlPlaneSettings policy={settings?.ai_control} nodes={nodes} onSave={onSaveAIControl} />
-      <AIProviderSettings />
+      </div>
     </section>
   )
 }

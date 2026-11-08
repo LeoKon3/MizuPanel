@@ -124,10 +124,7 @@ export function K8sClustersPage({ onConnectCluster, onViewDetail, refreshKey = 0
       )}
 
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-black text-foreground">Kubernetes 集群</h1>
-          <p className="mt-1 text-sm font-semibold text-muted-foreground">管理通过 Agent 节点连接的 K8s 集群</p>
-        </div>
+        <h1 className="text-2xl font-black text-foreground">Kubernetes 集群</h1>
         <button
           type="button"
           onClick={onConnectCluster}

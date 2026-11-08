@@ -1,22 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-label="MizuPanel logo">
-  <title>MizuPanel</title>
-  <defs>
-    <linearGradient id="bg" x1="7" y1="5" x2="34" y2="36" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#34d399"/>
-      <stop offset="0.55" stop-color="#14b8a6"/>
-      <stop offset="1" stop-color="#2563eb"/>
-    </linearGradient>
-    <linearGradient id="line" x1="10" y1="12" x2="30" y2="29" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#dbeafe"/>
-    </linearGradient>
-  </defs>
-  <rect x="2.5" y="2.5" width="35" height="35" rx="11" fill="url(#bg)"/>
-  <path d="M9.5 15.5C14.8 9.8 25.2 9.8 30.5 15.5" stroke="#ffffff" stroke-opacity="0.34" stroke-width="1.6" stroke-linecap="round"/>
-  <path d="M9.5 25.2V14.8c0-1.4 1.75-2 2.63-.92L20 23.2l7.87-9.32c0.88-1.08 2.63-.48 2.63.92v10.4" stroke="url(#line)" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-  <path d="M12 29.5h16" stroke="#ffffff" stroke-opacity="0.38" stroke-width="1.6" stroke-linecap="round"/>
-  <circle cx="10" cy="15" r="2.15" fill="#ecfeff"/>
-  <circle cx="30" cy="15" r="2.15" fill="#ecfeff"/>
-  <circle cx="20" cy="23" r="2.3" fill="#ecfeff"/>
-  <circle cx="20" cy="23" r="4.8" stroke="#ffffff" stroke-opacity="0.24" stroke-width="1.1" fill="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-labelledby="title">
+  <title id="title">MizuPanel</title>
+  <style>
+    .body { fill: #1d252b; }
+    .fold { fill: #1b6c80; }
+    @media (prefers-color-scheme: dark) {
+      .body { fill: #edf0f2; }
+      .fold { fill: #68b8c8; }
+    }
+    @media (forced-colors: active) {
+      .body, .fold { fill: CanvasText; }
+    }
+  </style>
+  <path class="body" d="M3 26V6h5l8 10 8-10h5v20h-5V14l-8 10-8-10v12Z" />
+  <path class="fold" d="M16 16 24 6h5L16 24Z" />
 </svg>

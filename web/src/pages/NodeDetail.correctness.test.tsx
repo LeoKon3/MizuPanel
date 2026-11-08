@@ -87,6 +87,28 @@ describe('NodeDetail node identity correctness', () => {
     expect(screen.queryByText('文件已保存。')).not.toBeInTheDocument()
   })
 
+  test('keeps unsaved file edits until discarded and removes the guard after save', async () => {
+    const onLoadFiles = vi.fn(async (): Promise<FileListResponse> => ({ path: '/', entries: [{ name: 'app.conf', path: '/app.conf', type: 'file', size: 3 }] }))
+    const onReadFile = vi.fn(async (): Promise<FileReadResponse> => ({ path: '/app.conf', content: 'old', editable: true, size: 3 }))
+    const onWriteFile = vi.fn(async () => ({ path: '/app.conf', saved: true }))
+    const registerGuard = vi.fn()
+    render(<NodeDetail {...props(nodeA)} onLoadFiles={onLoadFiles} onReadFile={onReadFile} onWriteFile={onWriteFile} onRegisterLeaveGuard={registerGuard} />)
+    fireEvent.click(screen.getByRole('button', { name: '文件管理' }))
+    fireEvent.click(await screen.findByRole('button', { name: '编辑文件 app.conf' }))
+    fireEvent.change(await screen.findByLabelText('文件内容'), { target: { value: 'unsaved' } })
+    fireEvent.click(screen.getByRole('button', { name: '关闭编辑器' }))
+    expect(screen.getByRole('dialog', { name: '未保存的修改' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '继续编辑' }))
+    expect(screen.getByLabelText('文件内容')).toHaveValue('unsaved')
+    expect(registerGuard.mock.calls[registerGuard.mock.calls.length - 1][0]).toBeTypeOf('function')
+    fireEvent.click(screen.getByRole('button', { name: '保存文件' }))
+    await waitFor(() => expect(registerGuard.mock.calls[registerGuard.mock.calls.length - 1][0]).toBeUndefined())
+    expect(onWriteFile).toHaveBeenCalledWith('node-a', '/app.conf', 'unsaved')
+    fireEvent.click(screen.getByRole('button', { name: '关闭编辑器' }))
+    expect(screen.queryByRole('dialog', { name: '未保存的修改' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('文件内容')).not.toBeInTheDocument()
+  })
+
   test('cancels upgrade polling on node switch and never overlaps status requests', async () => {
     vi.useFakeTimers()
     const diagnostics = {

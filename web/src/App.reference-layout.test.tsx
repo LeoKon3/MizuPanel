@@ -32,6 +32,10 @@ const { createInstallCommandMock } = vi.hoisted(() => ({
 }))
 
 vi.mock('./api/client', () => ({
+  getActiveAlerts: vi.fn(async () => ({ history: [] })),
+  getApplicationServices: vi.fn(async () => ([])),
+  getUptimeMonitors: vi.fn(async () => ({ monitors: [] })),
+  getAutomationRuns: vi.fn(async () => ({ runs: [], next_before_id: null })),
   setUnauthorizedHandler: vi.fn(),
   getAuthSession: vi.fn(async () => ({ auth_enabled: false, authenticated: true, username: '' })),
   createInstallCommand: createInstallCommandMock,
@@ -70,7 +74,7 @@ vi.mock('./api/client', () => ({
           uptime: 90061,
           disk_read_speed: 4096,
           disk_write_speed: 8192,
-          created_at: '2026-05-24T10:00:00Z'
+          created_at: new Date().toISOString()
         }
       },
       {
@@ -116,7 +120,7 @@ vi.mock('./api/client', () => ({
 }))
 
 beforeEach(() => {
-  window.history.replaceState({}, '', '/')
+  window.history.replaceState({}, '', '/nodes')
   window.localStorage.clear()
   createInstallCommandMock.mockReset()
   createInstallCommandMock.mockImplementation(async (platform = 'linux') => ({
@@ -166,22 +170,21 @@ describe('reference-style dashboard layout', () => {
     expect(within(sidebarNavigation).queryByRole('button', { name: '文件管理' })).not.toBeInTheDocument()
     expect(within(sidebarNavigation).queryByRole('button', { name: '终端' })).not.toBeInTheDocument()
     expect(within(screen.getByRole('complementary', { name: 'MizuPanel 侧边栏' })).getByLabelText('MizuPanel logo')).toHaveAttribute('data-testid', 'mizupanel-logo-mark')
-    expect(await screen.findByRole('button', { name: '打开终端' })).toBeEnabled()
-    expect(screen.queryByText('MizuPanel Console')).not.toBeInTheDocument()
-    expect(screen.queryByText('轻量级自托管服务器监控面板')).not.toBeInTheDocument()
-    expect(screen.queryByText('查看节点状态、指标、文件和节点级操作。')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Light' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Dark' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('搜索主机...')).toBeInTheDocument()
     expect(screen.getByText('全部 2')).toBeInTheDocument()
     expect(screen.getByText('在线 1')).toBeInTheDocument()
-    expect(screen.getByText('平均磁盘')).toBeInTheDocument()
-    expect(screen.getByTestId('host-page-container')).toHaveClass('max-w-[1400px]')
-    expect(screen.getByTestId('host-main-grid')).toHaveClass('xl:grid-cols-[320px_minmax(0,1fr)]')
-    expect(screen.getByTestId('host-list-panel')).toHaveClass('xl:w-[320px]')
-    expect(screen.getByTestId('node-detail-charts')).toHaveClass('xl:grid-cols-3')
+    expect(screen.queryByText('平均磁盘')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('host-main-grid')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Oracle SG' })).not.toBeInTheDocument()
+    expect(window.location.pathname).toBe('/nodes')
+    fireEvent.click(screen.getByRole('button', { name: 'Oracle SG' }))
+    expect(await screen.findByRole('button', { name: '打开终端' })).toBeEnabled()
+    expect(screen.queryByPlaceholderText('搜索主机...')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Oracle SG' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Light' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Dark' })).toBeInTheDocument()
     const basicInfo = screen.getByRole('region', { name: '基础信息' })
-    expect(basicInfo).toHaveClass('rounded-[14px]')
+    expect(basicInfo).toHaveClass('console-system-info')
     expect(within(basicInfo).getByText('操作系统')).toBeInTheDocument()
     expect(within(basicInfo).getByText('内核版本')).toBeInTheDocument()
     expect(within(basicInfo).getByText('架构')).toBeInTheDocument()
@@ -191,10 +194,9 @@ describe('reference-style dashboard layout', () => {
     expect(within(basicInfo).getByText('1m 0.10 · 5m 0.20 · 15m 0.30')).toBeInTheDocument()
     expect(within(basicInfo).queryByText('在线用户')).not.toBeInTheDocument()
     expect(within(basicInfo).queryByText('SSH 连接')).not.toBeInTheDocument()
-    const cpuChart = screen.getByRole('region', { name: 'CPU 使用率' })
-    expect(within(cpuChart).getByText('12.5%')).toBeInTheDocument()
-    expect(within(screen.getByRole('region', { name: '内存使用率' })).getByText('50.0%')).toBeInTheDocument()
-    expect(within(screen.getByRole('region', { name: '磁盘使用率' })).getByText('50.0%')).toBeInTheDocument()
+    expect(within(screen.getByRole('button', { name: 'CPU 使用率' })).getByText('12.5%')).toBeInTheDocument()
+    expect(within(screen.getByRole('button', { name: '内存 使用率' })).getByText('50.0%')).toBeInTheDocument()
+    expect(within(screen.getByRole('button', { name: '磁盘 使用率' })).getByText('50.0%')).toBeInTheDocument()
     const diskIOChart = screen.getByRole('region', { name: '磁盘 I/O' })
     expect(within(diskIOChart).getByText('读')).toBeInTheDocument()
     expect(within(diskIOChart).getByText('4.0 KB/s')).toBeInTheDocument()
@@ -229,15 +231,15 @@ describe('reference-style dashboard layout', () => {
     expect(document.documentElement.classList.contains('dark')).toBe(true)
     const sidebar = screen.getByLabelText('MizuPanel 侧边栏')
     expect(sidebar).toHaveAttribute('data-collapsed', 'true')
-    expect(sidebar).toHaveClass('transition-[width]', 'duration-300', 'ease-in-out', 'overflow-hidden')
+    expect(sidebar).toHaveClass('console-sidebar')
     const expandSidebarButton = screen.getByRole('button', { name: '展开侧边栏' })
-    expect(sidebar).not.toContainElement(expandSidebarButton)
-    expect(expandSidebarButton).toHaveClass('absolute', 'right-0', 'translate-x-1/2')
+    expect(sidebar).toContainElement(expandSidebarButton)
+    expect(expandSidebarButton).toHaveClass('console-collapse')
     expect(within(sidebar).getByLabelText('MizuPanel logo')).toHaveAttribute('data-testid', 'mizupanel-logo-mark')
     const collapsedHostButton = within(screen.getByRole('navigation', { name: '侧边导航' })).getByRole('button', { name: '主机' })
     expect(collapsedHostButton).toHaveAttribute('title', '主机')
-    expect(collapsedHostButton).toHaveClass('px-0')
-    expect(screen.getAllByTestId('sidebar-nav-label')[0]).toHaveClass('opacity-0', 'max-w-0')
+    expect(collapsedHostButton).toHaveClass('console-nav-item')
+    expect(screen.queryAllByTestId('sidebar-nav-label')).toHaveLength(0)
 
     fireEvent.change(screen.getByPlaceholderText('搜索主机...'), { target: { value: 'oracle' } })
     fireEvent.click(screen.getByRole('button', { name: 'Light' }))
@@ -248,7 +250,7 @@ describe('reference-style dashboard layout', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '展开侧边栏' }))
     expect(sidebar).toHaveAttribute('data-collapsed', 'false')
-    expect(screen.getAllByTestId('sidebar-nav-label')[0]).toHaveClass('opacity-100', 'max-w-[140px]')
+    expect(screen.getAllByTestId('sidebar-nav-label')[0]).toHaveTextContent('概览')
     expect(window.localStorage.getItem('mizupanel-sidebar-collapsed')).toBe('false')
 
     fireEvent.click(screen.getByRole('button', { name: 'Dark' }))
@@ -281,8 +283,8 @@ describe('reference-style dashboard layout', () => {
     fireEvent.click(within(sidebarNavigation).getByRole('button', { name: '主机' }))
 
     expect(screen.getByPlaceholderText('搜索主机...')).toHaveValue('oracle')
-    expect(screen.getByRole('button', { name: /Oracle SG/ })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Tokyo Backup/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Oracle SG' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Tokyo Backup' })).not.toBeInTheDocument()
   })
 
   test('filters hosts by status and search keyword', async () => {
@@ -290,33 +292,33 @@ describe('reference-style dashboard layout', () => {
 
     await screen.findByText('全部 2')
     expect(screen.getByRole('button', { name: '全部 2' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: /Oracle SG/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Tokyo Backup/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Oracle SG' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tokyo Backup' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '离线 1' }))
 
     expect(screen.getByRole('button', { name: '离线 1' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.queryByRole('button', { name: /Oracle SG/ })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Tokyo Backup/ })).toBeInTheDocument()
-    expect(await screen.findByRole('heading', { name: 'Tokyo Backup' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Oracle SG' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tokyo Backup' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Tokyo Backup' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Oracle SG' })).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText('搜索主机...'), { target: { value: 'oracle' } })
 
-    expect(screen.queryByRole('button', { name: /Tokyo Backup/ })).not.toBeInTheDocument()
-    expect(screen.getByText('未找到匹配主机')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Tokyo Backup' })).not.toBeInTheDocument()
+    expect(screen.getByText('当前筛选条件下没有主机。')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Tokyo Backup' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '在线 1' }))
 
     expect(screen.getByRole('button', { name: '在线 1' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: /Oracle SG/ })).toBeInTheDocument()
-    expect(await screen.findByRole('heading', { name: 'Oracle SG' })).toBeInTheDocument()
-    expect(screen.queryByText('未找到匹配主机')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Oracle SG' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Oracle SG' })).not.toBeInTheDocument()
+    expect(screen.queryByText('当前筛选条件下没有主机。')).not.toBeInTheDocument()
   })
 
   test('reveals, copies, and closes the install command from the filter toolbar add host button', async () => {
-    vi.stubGlobal('location', new URL('http://localhost:5173/nodes/node-1'))
+    vi.stubGlobal('location', new URL('http://localhost:5173/nodes'))
     const writeText = vi.fn(async () => undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
 
@@ -326,8 +328,7 @@ describe('reference-style dashboard layout', () => {
     const sidebarNavigation = screen.getByRole('navigation', { name: '侧边导航' })
     expect(within(sidebarNavigation).queryByRole('button', { name: '添加主机' })).not.toBeInTheDocument()
 
-    const filterToolbar = screen.getByRole('toolbar', { name: '主机筛选与操作' })
-    const addHostButton = within(filterToolbar).getByRole('button', { name: '添加主机' })
+    const addHostButton = screen.getByRole('button', { name: '添加主机' })
     expect(screen.queryByRole('dialog', { name: '添加主机' })).not.toBeInTheDocument()
 
     fireEvent.click(addHostButton)
@@ -371,8 +372,7 @@ describe('reference-style dashboard layout', () => {
     render(<App />)
 
     await screen.findByText('全部 2')
-    const filterToolbar = screen.getByRole('toolbar', { name: '主机筛选与操作' })
-    const addHostButton = within(filterToolbar).getByRole('button', { name: '添加主机' })
+    const addHostButton = screen.getByRole('button', { name: '添加主机' })
     fireEvent.click(addHostButton)
 
     const installDialog = await screen.findByRole('dialog', { name: '添加主机' })
@@ -487,7 +487,7 @@ describe('reference-style dashboard layout', () => {
   })
 
   test('copies with the selected text fallback when clipboard is unavailable', async () => {
-    vi.stubGlobal('location', new URL('http://localhost:5173/nodes/node-1'))
+    vi.stubGlobal('location', new URL('http://localhost:5173/nodes'))
     vi.stubGlobal('navigator', {})
     const execCommand = vi.fn(() => true)
     Object.assign(document, { execCommand })
@@ -507,7 +507,7 @@ describe('reference-style dashboard layout', () => {
   })
 
   test('shows a manual copy warning when all copy paths fail', async () => {
-    vi.stubGlobal('location', new URL('http://localhost:5173/nodes/node-1'))
+    vi.stubGlobal('location', new URL('http://localhost:5173/nodes'))
     vi.stubGlobal('navigator', {})
     Object.assign(document, { execCommand: vi.fn(() => false) })
 

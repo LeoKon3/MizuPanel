@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/mizupanel-banner.svg" alt="MizuPanel banner" width="100%" />
+  <img src="web/public/logo.svg" alt="MizuPanel logo" width="64" height="64" />
 </p>
 
 <h1 align="center">MizuPanel</h1>
@@ -18,12 +18,12 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.28-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.33-14B8A6">
 </p>
 
 <p align="center">
-  <a href="assets/screenshots/dashboard.png">
-    <img src="assets/screenshots/dashboard.png" alt="MizuPanel dashboard" width="92%" />
+  <a href="assets/screenshots/overview-light.png">
+    <img src="assets/screenshots/overview-light.png" alt="MizuPanel overview · v0.1.33" width="92%" />
   </a>
 </p>
 
@@ -34,27 +34,35 @@
 <table>
   <tr>
     <td width="33%">
-      <a href="assets/screenshots/host-detail.png"><img src="assets/screenshots/host-detail.png" alt="Host detail" width="100%" /></a>
+      <a href="assets/screenshots/hosts.png"><img src="assets/screenshots/hosts.png" alt="Host list" width="100%" /></a>
+      <br /><sub>Host list</sub>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/services.png"><img src="assets/screenshots/services.png" alt="Application Service Center" width="100%" /></a>
+      <a href="assets/screenshots/host-overview.png"><img src="assets/screenshots/host-overview.png" alt="Host overview" width="100%" /></a>
+      <br /><sub>Host overview</sub>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/alerts.png"><img src="assets/screenshots/alerts.png" alt="Alerts" width="100%" /></a>
+      <a href="assets/screenshots/service-editor.png"><img src="assets/screenshots/service-editor.png" alt="Application service editor" width="100%" /></a>
+      <br /><sub>Application service editor</sub>
     </td>
   </tr>
   <tr>
     <td width="33%">
-      <a href="assets/screenshots/tasks.png"><img src="assets/screenshots/tasks.png" alt="Task Center" width="100%" /></a>
+      <a href="assets/screenshots/overview-dark.png"><img src="assets/screenshots/overview-dark.png" alt="Overview — dark theme" width="100%" /></a>
+      <br /><sub>Overview — dark theme</sub>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/uptime.png"><img src="assets/screenshots/uptime.png" alt="Uptime monitoring" width="100%" /></a>
+      <a href="assets/screenshots/settings-models.png"><img src="assets/screenshots/settings-models.png" alt="AI model settings" width="100%" /></a>
+      <br /><sub>AI model settings</sub>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/audit.png"><img src="assets/screenshots/audit.png" alt="Audit Trail" width="100%" /></a>
+      <a href="assets/screenshots/ai-assistant.png"><img src="assets/screenshots/ai-assistant.png" alt="AI assistant" width="100%" /></a>
+      <br /><sub>AI assistant</sub>
     </td>
   </tr>
 </table>
+
+Screenshots: **v0.1.33**, captured on **2026-11-09** at 1440 × 900. These are real local pages with the new SVG logo; IP addresses, Provider endpoints, and conversation content are redacted where needed. Empty and offline states are not replaced with mock data. See the [full screenshot gallery](docs/screenshots.en.md).
 
 <p align="center"><strong>Features</strong></p>
 
@@ -94,9 +102,17 @@
   </tr>
 </table>
 
+<strong>Overview And Host Workspace</strong>
+
+The default homepage (`/`) is an operations overview: host availability, unresolved alerts from enabled rules, probe issues, cross-resource attention items, stable host shortcuts, and the latest five task runs from the last 24 hours. Missing, stale, and failed data sources are labeled separately instead of being shown as healthy or zero.
+
+The host list (`/nodes`) remains directly accessible. Hosts keep stable name ordering; details use the full workspace width, with resource trends, processes, Docker/Compose, Systemd, files, logs, and Agent operations in separate sections. Switching hosts preserves the current section while isolating target data, and leaving unsaved file or Compose edits requires confirmation.
+
 <strong>Application Service Center</strong>
 
 The top-level **Application Services** page (`/services`) is a logical operations view over existing resources. A service can link hosts, Compose projects, systemd services, Kubernetes Deployments/StatefulSets/DaemonSets, uptime monitors, alert rules, and scheduled tasks, then aggregate readable reasons, deployment locations, and recent activity into unhealthy, degraded, healthy, or unknown status.
+
+The service list uses stable name sorting and status filters. Details combine current problems, associated resources, and a category-filtered timeline of the latest eight supplied events. The editor supports resource-type switching, search, a cross-category selection list, and unsaved-change protection. Manual health rechecks may run linked probes and send their existing notifications; AI diagnosis prepares a draft without sending it.
 
 Application services never copy or take ownership of the linked resources. The detail page only deep-links into their existing management surfaces, and deleting an application service removes only the logical service and its associations. If an Agent or Kubernetes query fails, other resource results still return while that scope is shown as temporarily unavailable.
 
@@ -142,17 +158,17 @@ Log content is read on demand: it is not written to SQLite, centrally collected,
 
 The top-bar **AI Operations Assistant** opens as an overlay drawer and can expand into the full `/ai` workspace. Each OpenAI Chat Completions compatible Provider stores one Base URL and optional API Key while managing multiple child models. Model IDs can be discovered and selectively imported or added manually, then verified one at a time for chat and tool support. Conversations select a Provider first and then one of its models, persist that model across reloads, and support explicit global default and one-shot pre-tool fallback routing.
 
-The model can only select from a fixed Server-owned operations registry. It can search nodes, Docker, Compose, Systemd, Kubernetes, application-service, task, alert, and uptime resources on demand, inspect direct relationships backed by real identifiers, and retain proposal-time known impact in mutation plans. Incident, alert, node, service, uptime, metric, and bounded-log queries may run automatically. Host reboot, Agent upgrade, Docker/Compose/Systemd state changes, and existing saved-script runs must display their target and impact and receive explicit administrator confirmation. The resource graph is discovery and impact guidance only; it does not alter confirmation, pause, or autonomous execution policy. Arbitrary Shell, file writes/deletes, resource deletion, and Kubernetes writes are not expressible through the registry.
+The model can only select from a fixed Server-owned operations registry. It can search nodes, Docker, Compose, Systemd, Kubernetes, application-service, task, alert, and uptime resources on demand, inspect direct relationships backed by real identifiers, and retain proposal-time known impact in mutation plans. Incident, alert, node, service, uptime, metric, and bounded-log queries may run automatically. Host reboot, Agent upgrade, Docker/Compose/Systemd state changes, and existing saved-script runs must display their target and impact and receive explicit administrator confirmation. The resource graph is discovery and impact guidance only; every mutation requires confirmation in the AI conversation, with no separate autonomous-execution policy settings. Arbitrary Shell, file writes/deletes, resource deletion, and Kubernetes writes are not expressible through the registry.
 
 Provider API Keys are encrypted by the Server using `data/ai.key`; read APIs return neither plaintext nor ciphertext. Fallback applies only once to a transient timeout, rate limit, or upstream-availability failure on the first model call before any tool work. Authentication, protocol, cancellation, and post-tool failures never fall back. Backups and migrations must preserve the database and `ai.key` together. System prompts, raw model responses, raw tool output, and log content are not persisted as conversation history. See the [configuration docs](docs/configuration.en.md) for the complete setup and data boundary.
 
 <strong>Deploy With Docker</strong>
 
-Release images are published on Docker Hub. A target host needs only Docker Engine and Docker Compose—no repository checkout, Go, or Node.js. The repository Compose file pins the immutable `leokon3/mizupanel:0.1.28` image:
+Release images are published on Docker Hub. A target host needs only Docker Engine and Docker Compose—no repository checkout, Go, or Node.js. The repository Compose file pins the immutable `leokon3/mizupanel:0.1.33` image:
 
 ```bash
 mkdir -p mizupanel && cd mizupanel
-curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.28/docker-compose.yml
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.33/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
@@ -212,7 +228,7 @@ Check the Server or installed Agent version without loading configuration:
 
 The `--version` and `-v` aliases produce the same output.
 
-Open `http://your-server-ip:8080`, then click **Add Server** in the Dashboard to copy the Linux or Windows Agent install command.
+Open `http://your-server-ip:8080`, go to **Hosts** (`/nodes`), then click **Add Host** to copy the Linux or Windows Agent install command.
 
 The release package already includes web assets, installer scripts, and Agent downloads. Docker, MySQL, admin auth, systemd hosting, and token details are covered in the [configuration docs](docs/configuration.en.md). More interface previews are available in [screenshots](docs/screenshots.en.md).
 

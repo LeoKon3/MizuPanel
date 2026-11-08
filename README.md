@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/mizupanel-banner.svg" alt="MizuPanel banner" width="100%" />
+  <img src="web/public/logo.svg" alt="MizuPanel logo" width="64" height="64" />
 </p>
 
 <h1 align="center">MizuPanel</h1>
@@ -18,12 +18,12 @@
   <a href="https://vite.dev/"><img alt="Vite" src="https://img.shields.io/badge/Vite-build-646CFF?logo=vite&logoColor=white"></a>
   <a href="https://www.sqlite.org/"><img alt="SQLite" src="https://img.shields.io/badge/SQLite-default-003B57?logo=sqlite&logoColor=white"></a>
   <a href="https://www.docker.com/"><img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.28-14B8A6">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.33-14B8A6">
 </p>
 
 <p align="center">
-  <a href="assets/screenshots/dashboard.png">
-    <img src="assets/screenshots/dashboard.png" alt="MizuPanel dashboard" width="92%" />
+  <a href="assets/screenshots/overview-light.png">
+    <img src="assets/screenshots/overview-light.png" alt="MizuPanel overview · v0.1.33" width="92%" />
   </a>
 </p>
 
@@ -34,27 +34,35 @@
 <table>
   <tr>
     <td width="33%">
-      <a href="assets/screenshots/host-detail.png"><img src="assets/screenshots/host-detail.png" alt="主机详情" width="100%" /></a>
+      <a href="assets/screenshots/hosts.png"><img src="assets/screenshots/hosts.png" alt="主机列表" width="100%" /></a>
+      <br /><sub>主机列表</sub>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/services.png"><img src="assets/screenshots/services.png" alt="应用服务中心" width="100%" /></a>
+      <a href="assets/screenshots/host-overview.png"><img src="assets/screenshots/host-overview.png" alt="主机概览" width="100%" /></a>
+      <br /><sub>主机概览</sub>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/alerts.png"><img src="assets/screenshots/alerts.png" alt="告警中心" width="100%" /></a>
+      <a href="assets/screenshots/service-editor.png"><img src="assets/screenshots/service-editor.png" alt="应用服务编辑器" width="100%" /></a>
+      <br /><sub>应用服务编辑器</sub>
     </td>
   </tr>
   <tr>
     <td width="33%">
-      <a href="assets/screenshots/tasks.png"><img src="assets/screenshots/tasks.png" alt="任务中心" width="100%" /></a>
+      <a href="assets/screenshots/overview-dark.png"><img src="assets/screenshots/overview-dark.png" alt="深色概览" width="100%" /></a>
+      <br /><sub>深色概览</sub>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/uptime.png"><img src="assets/screenshots/uptime.png" alt="服务拨测" width="100%" /></a>
+      <a href="assets/screenshots/settings-models.png"><img src="assets/screenshots/settings-models.png" alt="AI 模型设置" width="100%" /></a>
+      <br /><sub>AI 模型设置</sub>
     </td>
     <td width="33%">
-      <a href="assets/screenshots/audit.png"><img src="assets/screenshots/audit.png" alt="审计日志" width="100%" /></a>
+      <a href="assets/screenshots/ai-assistant.png"><img src="assets/screenshots/ai-assistant.png" alt="AI 运维助手" width="100%" /></a>
+      <br /><sub>AI 运维助手</sub>
     </td>
   </tr>
 </table>
+
+截图版本：**v0.1.33**，拍摄于 **2026-11-09**，视口 1440 × 900。以上为带有新 SVG Logo 的真实本地界面；IP 地址、Provider 地址和会话内容已按需遮盖，空数据与离线状态如实保留。更多页面见 [完整截图](docs/screenshots.md)。
 
 <p align="center"><strong>功能介绍</strong></p>
 
@@ -94,9 +102,17 @@
   </tr>
 </table>
 
+<strong>概览与主机工作区</strong>
+
+默认首页（`/`）先展示主机在线情况、启用规则的未恢复告警、拨测异常、跨资源关注项、主机快捷入口和最近 24 小时的最新 5 条任务记录。未获取、过期和失败的数据来源会独立标注，不会显示为正常或零。
+
+主机列表（`/nodes`）仍可直接访问，按名称稳定排序。详情使用完整工作区宽度，分区提供资源趋势、进程、Docker/Compose、Systemd、文件、日志与 Agent 操作；切换主机保留分区但隔离目标数据，文件和 Compose 的未保存修改会在离开前确认。
+
 <strong>应用服务中心</strong>
 
 Dashboard 顶层的 **应用服务**（`/services`）是现有资源之上的逻辑运维视图。一个服务可以关联节点、Compose 项目、Systemd 服务、Kubernetes Deployment/StatefulSet/DaemonSet、服务拨测、告警规则和计划任务，并按异常、降级、健康、未知四种状态实时聚合可读原因、部署位置和近期活动。
+
+服务列表按名称稳定排序并支持状态筛选；详情合并当前问题、关联资源和按类别筛选后的最新 8 条近期事件。编辑器支持资源类型切换、搜索、跨分类已选清单和未保存保护。手动健康复查可能运行关联拨测并发送既有通知；AI 诊断只准备草稿，不自动发送。
 
 应用服务不会复制或接管原资源。详情页只提供到现有管理入口的深链；删除应用服务只删除逻辑服务和关联记录，不会停止、修改或删除任何原资源。远端 Agent 或 Kubernetes 查询失败时，其余资源仍会返回，失败范围显示为暂不可用。
 
@@ -142,17 +158,17 @@ Dashboard 顶层的 **日志中心**（`/logs`）以一次一个具体目标的�
 
 顶部栏的 **AI 运维助手** 可打开覆盖式右侧抽屉，也可展开到 `/ai` 完整工作台。每个 OpenAI Chat Completions 兼容 Provider 只保存一份 Base URL 和可选 API Key，并可管理多个子模型；可先检测模型列表、按需导入或手动添加，再逐个验证聊天与工具能力。会话中先选 Provider，再选择该 Provider 下的模型；每个会话持久化自己的模型选择，刷新或重新打开旧会话后仍会恢复，也可配置全局默认模型和一次性的前置故障回退模型。
 
-AI 只能调用 Server 内置的固定运维工具。它可以按需搜索节点、Docker、Compose、Systemd、Kubernetes、应用服务、任务、告警和拨测资源，查看基于真实标识的直接关系，并在变更计划中保留提案时的已知影响。故障、告警、节点、服务、拨测、指标和有界日志查询可自动执行；主机重启、Agent 升级、Docker/Compose/Systemd 状态变更和已有脚本执行必须先展示目标与影响，再由管理员在自定义确认窗口中批准。资源图只用于发现和影响提示，不改变确认、暂停和自动执行策略。任意 Shell、文件写删、资源删除和 Kubernetes 写操作不在工具范围内。
+AI 只能调用 Server 内置的固定运维工具。它可以按需搜索节点、Docker、Compose、Systemd、Kubernetes、应用服务、任务、告警和拨测资源，查看基于真实标识的直接关系，并在变更计划中保留提案时的已知影响。故障、告警、节点、服务、拨测、指标和有界日志查询可自动执行；主机重启、Agent 升级、Docker/Compose/Systemd 状态变更和已有脚本执行必须先展示目标与影响，再由管理员在自定义确认窗口中批准。资源图只用于发现和影响提示；所有变更操作均需在 AI 对话中确认，不再提供独立的自动执行策略设置。任意 Shell、文件写删、资源删除和 Kubernetes 写操作不在工具范围内。
 
 Provider API Key 由 Server 使用 `data/ai.key` 加密后保存，读取接口不会返回明文或密文。回退只适用于首次模型调用在任何工具执行前发生的超时、限流或上游不可用，并且只重试一次；认证、协议、取消和工具执行后的错误不会触发回退。备份或迁移时必须同时保留数据库和 `ai.key`。模型提示词、原始响应、工具原始输出和日志内容不会作为会话历史持久化。完整配置与数据边界见 [配置部署文档](docs/configuration.md)。
 
 <strong>Docker 镜像部署</strong>
 
-正式镜像发布在 Docker Hub。目标机只需要 Docker Engine 与 Docker Compose，不需要仓库源码、Go 或 Node.js；仓库 Compose 默认锁定不可变版本 `leokon3/mizupanel:0.1.28`：
+正式镜像发布在 Docker Hub。目标机只需要 Docker Engine 与 Docker Compose，不需要仓库源码、Go 或 Node.js；仓库 Compose 默认锁定不可变版本 `leokon3/mizupanel:0.1.33`：
 
 ```bash
 mkdir -p mizupanel && cd mizupanel
-curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.28/docker-compose.yml
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.33/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
@@ -212,7 +228,7 @@ server:
 
 `--version` 和 `-v` 也支持相同输出。
 
-打开 `http://你的服务器IP:8080`，进入 Dashboard 后点击 **添加服务器**，复制 Linux 或 Windows Agent 安装命令到目标主机执行。
+打开 `http://你的服务器IP:8080`，进入 **主机**（`/nodes`）后点击 **添加主机**，复制 Linux 或 Windows Agent 安装命令到目标主机执行。
 
 发布包内已经包含 Web 静态资源、安装脚本和 Agent 下载文件。Docker、MySQL、管理员认证、systemd 托管和 Token 模型等细节请看 [配置部署文档](docs/configuration.md)，更多界面可以查看 [完整截图](docs/screenshots.md)。
 

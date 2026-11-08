@@ -22,9 +22,7 @@ export function HistoryPage({ nodes, selectedNodeID, metrics, range, settings, o
     <section className="space-y-4" aria-label="历史记录">
       <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-glass">
         <div className="border-b border-border bg-surface px-5 py-5">
-          <p className="text-[11px] font-black uppercase tracking-[0.26em] text-primary">History</p>
-          <h2 className="mt-1 font-display text-3xl font-black tracking-tight text-foreground">指标历史记录</h2>
-          <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-muted-foreground">查看节点 CPU、内存、磁盘、网络和负载的历史采样；当前系统设置最多保留 {rangeLabel(retention)}。</p>
+          <h2 className="font-display text-3xl font-black tracking-tight text-foreground">指标历史记录</h2>
         </div>
 
         <div className="grid gap-4 p-4 xl:grid-cols-[0.34fr_0.66fr]">
@@ -47,10 +45,7 @@ export function HistoryPage({ nodes, selectedNodeID, metrics, range, settings, o
 
           <div className="min-w-0 space-y-4">
             <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="text-xs font-black tracking-[0.18em] text-muted-foreground">当前节点</p>
-                <h3 className="mt-1 text-2xl font-black text-foreground">{selectedNode ? selectedNode.name || selectedNode.hostname : '暂无节点'}</h3>
-              </div>
+              <h3 className="text-2xl font-black text-foreground">{selectedNode ? selectedNode.name || selectedNode.hostname : '暂无节点'}</h3>
               <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-surface p-1">
                 {rangeOptions.map((option) => {
                   const disabled = rangeSeconds[option] > retentionSeconds

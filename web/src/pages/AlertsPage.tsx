@@ -5,25 +5,20 @@ import type { Node } from '../types'
 
 type AlertsPageProps = {
   nodes: Node[]
+  navigationVersion?: number
 }
 
 type TabType = 'history' | 'rules'
 
-export function AlertsPage({ nodes }: AlertsPageProps) {
+export function AlertsPage({ nodes, navigationVersion }: AlertsPageProps) {
   const [activeTab, setActiveTab] = useState<TabType>('history')
 
-  console.log('AlertsPage rendered, nodes:', nodes.length, 'activeTab:', activeTab)
 
   return (
     <div className="space-y-4">
       {/* 页面标题和操作按钮 */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-black text-foreground">告警</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            查看告警记录和配置告警规则
-          </p>
-        </div>
+        <h1 className="text-2xl font-black text-foreground">告警</h1>
       </div>
 
       {/* Tab 标签切换 */}
@@ -62,7 +57,7 @@ export function AlertsPage({ nodes }: AlertsPageProps) {
 
       {/* 标签页内容 */}
       <div>
-        {activeTab === 'history' && <AlertHistoryTab nodes={nodes} />}
+        {activeTab === 'history' && <AlertHistoryTab nodes={nodes} navigationVersion={navigationVersion} />}
         {activeTab === 'rules' && <AlertRulesTab nodes={nodes} />}
       </div>
     </div>

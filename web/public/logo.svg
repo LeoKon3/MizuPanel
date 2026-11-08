@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-labelledby="title">
+  <title id="title">MizuPanel</title>
+  <style>
+    .body { fill: #1d252b; }
+    .fold { fill: #1b6c80; }
+    @media (prefers-color-scheme: dark) {
+      .body { fill: #edf0f2; }
+      .fold { fill: #68b8c8; }
+    }
+    @media (forced-colors: active) {
+      .body, .fold { fill: CanvasText; }
+    }
+  </style>
+  <path class="body" d="M3 26V6h5l8 10 8-10h5v20h-5V14l-8 10-8-10v12Z" />
+  <path class="fold" d="M16 16 24 6h5L16 24Z" />
+</svg>

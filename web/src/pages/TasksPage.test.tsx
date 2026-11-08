@@ -101,6 +101,7 @@ function deferred<Value>() {
 
 describe('TasksPage', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/tasks')
     vi.mocked(api.getAutomationScripts).mockResolvedValue({ scripts: [] })
     vi.mocked(api.getScheduledTasks).mockResolvedValue({ tasks: [] })
     vi.mocked(api.getAutomationRuns).mockResolvedValue({ runs: [], next_before_id: null })
@@ -119,6 +120,20 @@ describe('TasksPage', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.clearAllMocks()
+  })
+
+  test('opens the precise run from an overview deep link without executing anything', async () => {
+    window.history.replaceState({}, '', '/tasks?tab=runs&range=24h&run=11')
+    render(<TasksPage nodes={nodes} navigationVersion={1} />)
+    const dialog = await screen.findByRole('dialog', { name: '执行详情' })
+    await waitFor(() => expect(api.getAutomationRun).toHaveBeenCalledWith(11, expect.any(AbortSignal)))
+    expect(screen.getByRole('tab', { name: '执行记录' })).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(api.getAutomationRuns).toHaveBeenCalled())
+    expect(vi.mocked(api.getAutomationRuns).mock.calls[0][0]?.from).toBeDefined()
+    expect(api.runScheduledTask).not.toHaveBeenCalled()
+    expect(api.runAutomationScript).not.toHaveBeenCalled()
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(window.location.search).not.toContain('run=')
   })
 
   test('renders accessible tabs and bounded empty states', async () => {

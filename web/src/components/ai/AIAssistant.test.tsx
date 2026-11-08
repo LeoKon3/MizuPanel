@@ -137,6 +137,10 @@ function assistant(overrides: Partial<AIAssistantState> = {}): AIAssistantState 
     streamedContent: '',
     context: { page: 'overview' },
     turnResults: {},
+    updateMessageDraft: vi.fn(),
+    prepareDraft: vi.fn(),
+    updateDraft: vi.fn(),
+    clearDraft: vi.fn(),
     openDrawer: vi.fn(),
     closeDrawer: vi.fn(),
     setDrawerWidth: vi.fn(),
@@ -165,6 +169,7 @@ function SharedStateHarness() {
     <>
       <button type="button" onClick={state.openDrawer}>Open assistant</button>
       <button type="button" onClick={() => state.setContext({ page: 'hosts', resource_type: 'node', resource_id: 'node-1' })}>Set node context</button>
+      <button type="button" onClick={() => state.prepareDraft('诊断当前服务', { page: 'services', resource_type: 'application_service', resource_id: 'service-1' }, 'Panel API')}>Prepare diagnosis</button>
       <output data-testid="selected-provider">{state.selectedProviderID}</output>
       <output data-testid="selected-model">{state.selectedModelID}</output>
       <AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />
@@ -205,6 +210,20 @@ function deferred<T>() {
 }
 
 describe('AI assistant', () => {
+  test('keeps diagnosis bound to its service after page context changes and waits for send', async () => {
+    const send = vi.fn()
+    const context = { page: 'services' as const, resource_type: 'application_service' as const, resource_id: 'service-1' }
+    const state = assistant({ send, composerDraft: { id: 1, content: '诊断当前服务', context, label: 'Panel API' } })
+    const view = render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    expect(screen.getByLabelText('发送给 AI 运维助手')).toHaveValue('诊断当前服务')
+    expect(send).not.toHaveBeenCalled()
+    view.rerender(<AIAssistantDrawer assistant={{ ...state, context: { page: 'hosts', resource_type: 'node', resource_id: 'other-node' } }} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    expect(screen.getByText('诊断目标：Panel API')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
+    expect(send).toHaveBeenCalledWith('诊断当前服务', context)
+    expect(state.clearDraft).toHaveBeenCalled()
+  })
+
   beforeEach(() => {
     vi.mocked(api.getAIProviders).mockResolvedValue({ providers })
     vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [] })
@@ -214,6 +233,82 @@ describe('AI assistant', () => {
     vi.restoreAllMocks()
     vi.useRealTimers()
     vi.clearAllMocks()
+  })
+
+  test('keeps edited diagnosis text when the drawer is reopened or moved to the workspace', async () => {
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare diagnosis' }))
+    const drawer = await screen.findByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })
+    await waitFor(() => expect(drawer).toBeEnabled())
+    fireEvent.change(drawer, { target: { value: '只检查服务证书，不要重启' } })
+    expect(screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-workspace' })).toHaveValue('只检查服务证书，不要重启')
+    fireEvent.click(screen.getByRole('button', { name: '关闭 AI 助手' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    expect(screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })).toHaveValue('只检查服务证书，不要重启')
+    expect(api.sendAIMessageStream).not.toHaveBeenCalled()
+  })
+
+  test('sends an edited diagnosis with its captured service context only after explicit submission', async () => {
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation).mockResolvedValue({ conversation, messages: [], tool_calls: [] })
+    vi.mocked(api.sendAIMessageStream).mockResolvedValue({ turn: turn() })
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare diagnosis' }))
+    const composer = await screen.findByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })
+    await waitFor(() => expect(within(screen.getByRole('complementary', { name: 'AI 运维助手' })).getByRole('button', { name: '发送消息' })).toBeEnabled())
+    fireEvent.change(composer, { target: { value: '只诊断证书' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Set node context' }))
+    expect(api.sendAIMessageStream).not.toHaveBeenCalled()
+    fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(api.sendAIMessageStream).toHaveBeenCalledTimes(1))
+    expect(api.sendAIMessageStream).toHaveBeenCalledWith(conversation.id, '只诊断证书', expect.any(AbortSignal), expect.any(Function), expect.objectContaining({
+      context: { page: 'services', resource_type: 'application_service', resource_id: 'service-1' }
+    }))
+    expect(screen.queryByText('诊断目标：Panel API')).not.toBeInTheDocument()
+    expect(composer).toHaveValue('')
+    expect(screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-workspace' })).toHaveValue('')
+  })
+
+  test('does not consume a diagnosis draft on Enter while a model selection is pending', () => {
+    const state = assistant({ selectingModel: true, composerDraft: { id: 1, content: '诊断当前服务', context: { page: 'services', resource_type: 'application_service', resource_id: 'service-1' }, label: 'Panel API' } })
+    render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    const composer = screen.getByLabelText('发送给 AI 运维助手')
+    expect(screen.getByRole('button', { name: '发送消息' })).toBeDisabled()
+    fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(state.send).not.toHaveBeenCalled()
+    expect(state.clearDraft).not.toHaveBeenCalled()
+    expect(composer).toHaveValue('诊断当前服务')
+  })
+
+  test('keeps ordinary drafts and their target across drawer close and workspace navigation', async () => {
+    vi.mocked(api.getAIConversations).mockResolvedValue({ conversations: [conversation] })
+    vi.mocked(api.getAIConversation).mockResolvedValue({ conversation, messages: [], tool_calls: [] })
+    vi.mocked(api.sendAIMessageStream).mockResolvedValue({ turn: turn() })
+    render(<SharedStateHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    const composer = await screen.findByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })
+    await waitFor(() => expect(screen.getByLabelText('选择模型', { selector: '#ai-drawer-model' })).toHaveValue(primaryModel.id))
+    fireEvent.change(composer, { target: { value: '检查内存，不要修改任何配置' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Set node context' }))
+    fireEvent.click(screen.getByRole('button', { name: '关闭 AI 助手' }))
+    expect(screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-workspace' })).toHaveValue('检查内存，不要修改任何配置')
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    expect(screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-drawer' })).toHaveValue('检查内存，不要修改任何配置')
+    expect(api.sendAIMessageStream).not.toHaveBeenCalled()
+    fireEvent.click(within(screen.getByRole('complementary', { name: 'AI 运维助手' })).getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(api.sendAIMessageStream).toHaveBeenCalledTimes(1))
+    expect(api.sendAIMessageStream).toHaveBeenCalledWith(conversation.id, '检查内存，不要修改任何配置', expect.any(AbortSignal), expect.any(Function), expect.objectContaining({ context: { page: 'overview' } }))
+    expect(screen.getByLabelText('发送给 AI 运维助手', { selector: '#ai-composer-workspace' })).toHaveValue('')
+  })
+
+  test('does not submit while a Chinese input composition is being committed', () => {
+    const state = assistant()
+    render(<AIAssistantDrawer assistant={state} onOpenWorkspace={vi.fn()} onOpenSettings={vi.fn()} />)
+    const composer = screen.getByLabelText('发送给 AI 运维助手')
+    fireEvent.change(composer, { target: { value: '检查进程' } })
+    fireEvent.keyDown(composer, { key: 'Enter', isComposing: true })
+    expect(state.send).not.toHaveBeenCalled()
+    expect(composer).toHaveValue('检查进程')
   })
 
   test('shares two-stage Provider and model selection between drawer and workspace', async () => {
@@ -612,7 +707,7 @@ describe('AI assistant', () => {
 
     const planRegion = screen.getByRole('region', { name: 'AI 变更计划' })
     expect(planRegion).toHaveTextContent('Systemd 服务已确认运行')
-    expect(planRegion).toHaveTextContent('策略允许自动执行 · 动作与节点范围已授权 · 终态已验证')
+    expect(planRegion).toHaveTextContent('已执行 · 服务端已授权 · 终态已验证')
     expect(screen.getAllByRole('region', { name: 'AI 变更计划' })).toHaveLength(1)
     expect(screen.queryByRole('button', { name: '检查并确认' })).not.toBeInTheDocument()
   })

@@ -170,10 +170,7 @@ export function AuditPage({ nodes }: AuditPageProps) {
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-black text-foreground">审计日志</h1>
-          <p className="mt-1 text-sm font-semibold text-muted-foreground">追溯敏感操作的发起者、目标与结果；日志不会记录命令、文件内容、凭据或原始请求响应。</p>
-        </div>
+        <h1 className="text-2xl font-black text-foreground">审计日志</h1>
         <div className="flex flex-wrap items-center gap-2">
           <button ref={cleanupTriggerRef} type="button" onClick={() => setCleanupOpen(true)} className="soft-button inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 border border-danger/30 bg-danger/5 px-4 text-sm font-black text-danger hover:bg-danger/10 focus:outline-none focus:ring-4 focus:ring-danger/20">
             <Trash2 size={16} aria-hidden="true" />清理日志
