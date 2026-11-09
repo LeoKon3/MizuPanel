@@ -45,8 +45,8 @@ Run the synchronization guard and release gates before creating the tag:
 ```bash
 go test ./internal/version
 go test ./...
-npm test --prefix web
-npm run build --prefix web
+NODE_ENV=development npm test --prefix web
+NODE_ENV=production npm run build --prefix web
 docker compose config --quiet
 MIZUPANEL_MYSQL_DATABASE=mizupanel \
 MIZUPANEL_MYSQL_USERNAME=mizupanel \
@@ -63,14 +63,15 @@ out the verified commit SHA, so moving a tag cannot change their build input.
 
 ## Published artifacts
 
-After the shared Go/frontend/version verification job succeeds, the workflow
-runs two independent publication jobs:
+After shared Go/frontend/version verification, the workflow builds Linux amd64
+and arm64 packages and images on separate native runners. The image digests are
+merged into one multi-architecture manifest; only after the packages and image
+manifest succeed does the final job create/update the GitHub Release and upload
+both package tarballs. The verified frontend is reused by both build paths.
 
-1. Build and upload the existing Linux amd64 and arm64 GitHub Release packages.
-2. Build one Docker Buildx manifest for `linux/amd64` and `linux/arm64`, then
-   publish `leokon3/mizupanel:<VERSION>`. A formal tag-push run also updates
-   `leokon3/mizupanel:latest`; manual dispatches publish only the immutable
-   SemVer tag so rerunning an older release cannot move `latest` backwards.
+A tag-push run publishes `leokon3/mizupanel:<VERSION>` and updates `latest`.
+Manual dispatches publish only the versioned image, so rerunning an older release
+does not move `latest` backwards.
 
 The SemVer image tag is the production, upgrade, and rollback reference.
 `latest` is only a convenience pointer. Never move a release Git tag or reuse a

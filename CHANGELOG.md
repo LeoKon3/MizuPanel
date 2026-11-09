@@ -2,6 +2,17 @@
 
 All notable changes to MizuPanel will be documented in this file.
 
+## v0.1.34 - 2026-11-09
+
+### Changed
+
+- Rewrote the Chinese and English READMEs around project purpose, core features,
+  a concise Compose quick start, Agent onboarding, and documentation links.
+- Consolidated binary, Docker, Compose, authentication, backup, and upgrade
+  instructions in the deployment guides; simplified the screenshot galleries.
+- Clarified that branch pushes run CI while version-tag pushes publish release
+  packages and multi-architecture images.
+
 ## v0.1.33 - 2026-11-09
 
 ### Changed

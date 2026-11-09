@@ -1,188 +1,249 @@
-# Configuration And Deployment
+# Configuration and deployment
 
 [Back to README](../README.en.md) · [中文](configuration.md)
 
-This page keeps the detailed setup notes out of the README: Docker, release packages, `server.yaml`, Agent installation, authentication, AI Providers, alerting, scheduled tasks, operational auditing, and token behavior.
+## Choose a deployment method
 
-## Docker With SQLite
-
-Release images are published in the public Docker Hub repository `leokon3/mizupanel`. A target host needs only Docker Engine, Docker Compose, and a versioned Compose file—no MizuPanel source checkout, Go, Node.js, or local image build environment. The repository Compose file pins `leokon3/mizupanel:0.1.24` instead of following the moving `latest` tag.
-
-First deployment:
-
-```bash
-mkdir -p mizupanel && cd mizupanel
-curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.24/docker-compose.yml
-docker compose pull
-docker compose up -d
-docker compose logs -f mizupanel
-```
-
-The panel binds to `127.0.0.1:8080` by default. To access it from the server IP or LAN, set the bind address and recreate the container:
-
-```bash
-MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose up -d
-```
-
-The SQLite database persists at `${MIZUPANEL_DATA_DIR:-./data}/mizupanel.db`. After an AI Provider is configured, the same host directory also contains the encryption master key at `ai.key`.
-
-Useful environment variables:
-
-| Variable | Default | Description |
+| Method | Database | Requirements |
 | --- | --- | --- |
-| `MIZUPANEL_IMAGE` | `leokon3/mizupanel:0.1.24` | Complete image reference for a version, mirror, test image, or rollback |
-| `MIZUPANEL_BIND_ADDR` | `127.0.0.1` | Docker port bind address |
-| `MIZUPANEL_PORT` | `8080` | Host port |
-| `MIZUPANEL_DATA_DIR` | `./data` | SQLite database and AI master-key directory |
-| `MIZUPANEL_CONTAINER_NAME` | `mizupanel` | Container name |
-| `MIZUPANEL_AUDIT_RETENTION` | `90d` | Audit-event retention |
-| `MIZUPANEL_AUDIT_CLEANUP_INTERVAL` | `1h` | Expired-event cleanup interval |
-| `MIZUPANEL_TASK_RETENTION` | `30d` | Task-run history retention |
-| `MIZUPANEL_TASK_CLEANUP_INTERVAL` | `1h` | Expired task-run cleanup interval |
+| [Docker Compose (recommended)](#compose) | SQLite | Docker Engine and Compose plugin |
+| [docker run](#docker-run) | SQLite | Docker Engine |
+| [Compose with MySQL](#mysql) | MySQL 8.4 | Docker Engine and Compose plugin |
+| [Binary package](#binary) | SQLite / MySQL | Linux amd64 or arm64 |
 
-`MIZUPANEL_IMAGE` must be a complete image reference, such as `registry.example.com/mirror/mizupanel:0.1.24`. `latest` is for short-lived evaluation only; production, upgrades, and rollback should use an explicit SemVer tag.
+The commands below use `0.1.34`. Verify that the version is available in [Releases](https://github.com/LeoKon3/MizuPanel/releases); a source branch can be ahead of a published release. Keep packages, Compose files, and images on matching versions.
 
-Before every upgrade, back up the complete data directory so `mizupanel.db` and `ai.key` remain together:
+The Server container does not automatically monitor its host. Install an Agent on each managed host. The Server does not need the host Docker socket mounted into it.
 
-```bash
-docker compose stop mizupanel
-tar -czf "mizupanel-sqlite-$(date +%Y%m%d-%H%M%S).tar.gz" "${MIZUPANEL_DATA_DIR:-./data}"
-docker compose start mizupanel
-```
-
-Upgrading to a released version only pulls the image and recreates the container; it never builds locally. Persist the complete image reference in `.env` in the deployment directory so later plain Compose commands cannot fall back to the older default in the Compose file. This example uses the future target `0.1.25`, so replace it with the actual released version:
-
-Set this in `.env`:
-
-```dotenv
-MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.25
-```
-
-Keep any existing bind address and other settings in the file, then run:
-
-```bash
-chmod 600 .env
-docker compose pull mizupanel
-docker compose up -d
-docker compose logs --tail=100 mizupanel
-curl -fsS "http://127.0.0.1:${MIZUPANEL_PORT:-8080}/api/system/about"
-```
-
-If verification fails, change the same line in `.env` to the previous SemVer tag:
-
-```dotenv
-MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.24
-```
-
-Then recreate the container. Restore the pre-upgrade backup if the data also needs to be rolled back:
-
-```bash
-docker compose pull mizupanel
-docker compose up -d
-docker compose logs --tail=100 mizupanel
-```
-
-Use `docker compose down` to stop while preserving data. Do not delete `${MIZUPANEL_DATA_DIR:-./data}` until a usable backup has been confirmed.
-
-## Docker With MySQL
-
-The MySQL deployment needs only the versioned `docker-compose.mysql.yml`. The MySQL Server configuration is included in the MizuPanel image, so `docker/server.mysql.yaml` no longer needs to be downloaded or mounted:
+<a id="compose"></a>
+## Docker Compose with SQLite
 
 ```bash
 mkdir -p mizupanel && cd mizupanel
-curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.24/docker-compose.mysql.yml
-export MIZUPANEL_MYSQL_DATABASE=mizupanel
-export MIZUPANEL_MYSQL_USERNAME=mizupanel
-export MIZUPANEL_MYSQL_PASSWORD='change-this-password'
-export MIZUPANEL_MYSQL_ROOT_PASSWORD='change-this-root-password'
-docker compose -f docker-compose.mysql.yml pull
-docker compose -f docker-compose.mysql.yml up -d
-docker compose -f docker-compose.mysql.yml logs -f mizupanel
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.34/docker-compose.yml
+docker compose up -d
+docker compose logs --tail=100 mizupanel
 ```
 
-All four database variables must be available whenever Compose parses the file. Supply them through a protected deployment environment or a mode-`0600` `.env` file, and never commit that file. To expose the panel on the server IP or LAN:
+Open **http://127.0.0.1:8080** on the Docker host. The default port is local-only. SQLite and the AI key persist in `data/` in the deployment directory.
+
+Check the running version:
 
 ```bash
-MIZUPANEL_BIND_ADDR=0.0.0.0 docker compose -f docker-compose.mysql.yml up -d
+curl -fsS http://127.0.0.1:8080/api/system/about
 ```
 
-MySQL data is stored in the `mizupanel_mizupanel-mysql-data` Docker volume. The AI master key is not stored in MySQL; the MizuPanel container still mounts `${MIZUPANEL_DATA_DIR:-./data}` at `/app/data`. Before upgrading, export MySQL and back up that host directory:
-
-```bash
-docker compose -f docker-compose.mysql.yml exec -T mysql \
-  sh -c 'exec mysqldump --single-transaction -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' \
-  > "mizupanel-mysql-$(date +%Y%m%d-%H%M%S).sql"
-tar -czf "mizupanel-ai-key-$(date +%Y%m%d-%H%M%S).tar.gz" "${MIZUPANEL_DATA_DIR:-./data}"
-```
-
-Keep the MySQL volume in place when upgrading or rolling back the MizuPanel container. Change only `MIZUPANEL_IMAGE` in the protected `.env` and keep all four MySQL variables present:
-
-For an upgrade, `.env` contains at least:
+To customize deployment settings, create `.env` in that directory and always run Compose from there:
 
 ```dotenv
-MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.25
+MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.34
+MIZUPANEL_BIND_ADDR=127.0.0.1
+MIZUPANEL_PORT=8080
+MIZUPANEL_DATA_DIR=./data
+MIZUPANEL_CONTAINER_NAME=mizupanel
+```
+
+Do not commit `.env`. Configure [authentication and remote access](#remote-access) before changing the bind address.
+
+<a id="docker-run"></a>
+## Docker without Compose
+
+Use the same image and persistent data directory:
+
+```bash
+mkdir -p mizupanel/data && cd mizupanel
+docker run -d \
+  --name mizupanel \
+  --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 \
+  --mount type=bind,src="$(pwd)/data",dst=/app/data \
+  leokon3/mizupanel:0.1.34
+
+docker logs --tail=100 mizupanel
+curl -fsS http://127.0.0.1:8080/api/system/about
+```
+
+Use `docker stop mizupanel && docker rm mizupanel` to remove the container while retaining the host `data/` directory. Do not run multiple deployment methods with the same container name or port.
+
+<a id="mysql"></a>
+## Docker Compose with MySQL
+
+Download the MySQL Compose file:
+
+```bash
+mkdir -p mizupanel && cd mizupanel
+curl -fLO https://raw.githubusercontent.com/LeoKon3/MizuPanel/v0.1.34/docker-compose.mysql.yml
+```
+
+Create a mode-`0600` `.env` file and replace both passwords before starting:
+
+```dotenv
+MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.34
+MIZUPANEL_BIND_ADDR=127.0.0.1
+MIZUPANEL_PORT=8080
+MIZUPANEL_DATA_DIR=./data
 MIZUPANEL_MYSQL_DATABASE=mizupanel
 MIZUPANEL_MYSQL_USERNAME=mizupanel
-MIZUPANEL_MYSQL_PASSWORD=change-this-password
-MIZUPANEL_MYSQL_ROOT_PASSWORD=change-this-root-password
+MIZUPANEL_MYSQL_PASSWORD=replace-with-a-long-random-password
+MIZUPANEL_MYSQL_ROOT_PASSWORD=replace-with-a-different-random-password
 ```
-
-Then run:
 
 ```bash
 chmod 600 .env
-docker compose -f docker-compose.mysql.yml pull mizupanel
 docker compose -f docker-compose.mysql.yml up -d
+docker compose -f docker-compose.mysql.yml ps
+docker compose -f docker-compose.mysql.yml logs --tail=100 mizupanel
 ```
 
-For rollback, change only the image line in `.env` to:
+The panel waits for MySQL to become healthy. MySQL is not published on a host port. The database lives in the project-specific `<project>_mizupanel-mysql-data` volume; `data/` stores the AI key. Recreating the panel container preserves both.
 
-```dotenv
-MIZUPANEL_IMAGE=leokon3/mizupanel:0.1.24
-```
+All database variables must remain available when Compose parses the file. After MySQL initializes its volume, changing passwords in `.env` does not update the database accounts; change those credentials separately.
 
-Then run:
+<a id="binary"></a>
+## Binary release package
+
+The Server is available for Linux amd64 and arm64. Choose the matching architecture; Go, Node.js, and Docker are not required:
 
 ```bash
-docker compose -f docker-compose.mysql.yml pull mizupanel
-docker compose -f docker-compose.mysql.yml up -d
-```
-
-Use `docker compose -f docker-compose.mysql.yml down` to stop while preserving data. `docker compose -f docker-compose.mysql.yml down -v` deletes the MySQL volume and must only be used after verifying a backup and intentionally choosing to erase the database.
-
-## Release Package
-
-Build the package for the Server architecture:
-
-```bash
-make package-linux-amd64
-make package-linux-arm64
-```
-
-Generated output:
-
-```text
-dist/
-├── mizupanel-linux-amd64/
-├── mizupanel-linux-amd64.tar.gz
-├── mizupanel-linux-arm64/
-└── mizupanel-linux-arm64.tar.gz
-```
-
-Deploy:
-
-```bash
-tar -xzf dist/mizupanel-linux-amd64.tar.gz
-cd mizupanel-linux-amd64
+# amd64 for x86_64; arm64 for aarch64
+ARCH=amd64
+curl -fLO "https://github.com/LeoKon3/MizuPanel/releases/download/v0.1.34/mizupanel-linux-${ARCH}.tar.gz"
+tar -xzf "mizupanel-linux-${ARCH}.tar.gz"
+cd "mizupanel-linux-${ARCH}"
 cp server.example.yaml server.yaml
+```
+
+Edit `server.yaml` before starting. For local-only use, set:
+
+```yaml
+server:
+  listen: "127.0.0.1:8080"
+  public_url: ""
+  enable_terminal: true
+```
+
+Keep the other configuration sections, then run from the extracted directory:
+
+```bash
 ./mizupanel-server -config server.yaml
 ```
 
-The arm64 Server package needs an arm64 C cross compiler because the Server uses CGO SQLite:
+Open http://127.0.0.1:8080 on the same machine. SQLite defaults to `./data/mizupanel.db`; relative data paths resolve against the working directory. For systemd, set a stable `WorkingDirectory` and adapt the included `systemd/mizupanel-server.service` to your installation path and service user.
+
+Keep the entire package: it contains the Server, web assets, downloadable Agents, and installer scripts. The Server uses CGO and the system C library. If it reports a missing `GLIBC_*` version, use the container image or build on the target distribution; do not replace the system libc. Linux Agents are statically linked. The Windows download is an Agent, not a Windows Server package.
+
+Inspect the version and library requirements:
 
 ```bash
-sudo apt install gcc-aarch64-linux-gnu
+./mizupanel-server --version
+ldd ./mizupanel-server
 ```
+
+<a id="build"></a>
+## Build from source
+
+Install Go as specified in `go.mod`, Node.js 22, npm, and a C compiler. Include frontend development dependencies:
+
+```bash
+npm ci --prefix web --include=dev
+NODE_ENV=production make package-linux-amd64 AMD64_CC=gcc
+```
+
+The package is written to `dist/mizupanel-linux-amd64.tar.gz`. On a native arm64 host:
+
+```bash
+NODE_ENV=production make package-linux-arm64 ARM64_CC=gcc
+```
+
+Cross-compiling the arm64 Server on amd64 requires `aarch64-linux-gnu-gcc` (for example, Debian/Ubuntu's `gcc-aarch64-linux-gnu` package). Do not run both packaging targets in parallel; they share staging directories.
+
+Build a local container image:
+
+```bash
+docker build -t mizupanel:local .
+```
+
+Use `mizupanel:local` in the Docker command, or set `MIZUPANEL_IMAGE=mizupanel:local` in the Compose `.env`.
+
+<a id="remote-access"></a>
+## Remote access and authentication
+
+Compose binds to `127.0.0.1` by default for local use or a reverse proxy on the same host. Remote browsers and Agents need a reachable Server address. A remote host's `127.0.0.1` refers to that host, not to the panel.
+
+1. Enable administrator authentication.
+2. Use an HTTPS reverse proxy that supports WebSocket, or restrict access to a trusted network.
+3. If publishing directly on host interfaces, set `MIZUPANEL_BIND_ADDR=0.0.0.0` and configure the firewall. For a binary deployment, change `server.listen`.
+4. Set `server.public_url` when generated Agent commands need a specific reachable URL. Otherwise it is inferred from the request address.
+
+**Compose's `.env` is not automatically passed into a container.** Authentication settings need an explicit override. Create `compose.auth.yml`:
+
+```yaml
+services:
+  mizupanel:
+    environment:
+      MIZUPANEL_AUTH_ENABLED: "true"
+      MIZUPANEL_ADMIN_USERNAME: ${MIZUPANEL_ADMIN_USERNAME:-admin}
+      MIZUPANEL_ADMIN_PASSWORD: ${MIZUPANEL_ADMIN_PASSWORD:?set MIZUPANEL_ADMIN_PASSWORD}
+```
+
+Add a strong `MIZUPANEL_ADMIN_PASSWORD` to the protected `.env`. Include the override for startup and subsequent upgrades:
+
+```bash
+docker compose -f docker-compose.yml -f compose.auth.yml up -d
+# MySQL: use -f docker-compose.mysql.yml -f compose.auth.yml
+```
+
+For `docker run`, put the same three variables in a mode-`0600` `auth.env` and add `--env-file ./auth.env` when creating the container. Binary deployments can configure `security.admin` or receive the variables from their service manager. Keep passwords out of command history, images, Git, and public logs.
+
+For a custom Server file, start with `docker/server.sqlite.yaml` or `docker/server.mysql.yaml`, retaining `/app/data` paths and the appropriate storage driver. Mount it read-only and set the container command:
+
+```yaml
+services:
+  mizupanel:
+    command: ["/app/mizupanel-server", "--config", "/app/custom.yaml"]
+    volumes:
+      - ./server.yaml:/app/custom.yaml:ro
+```
+
+Once networking and authentication are configured, generate Agent installation commands from **Hosts → Add Host**.
+
+<a id="backup"></a>
+## Backup, upgrade, and rollback
+
+Pin production versions instead of relying on `latest`. Stop writes and take a backup before upgrading. Keep the AI credential key, `ai.key`, together with its database.
+
+SQLite Compose, with the default `./data` directory:
+
+```bash
+docker compose stop mizupanel
+tar -czf "mizupanel-data-$(date +%Y%m%d-%H%M%S).tar.gz" data
+docker compose start mizupanel
+```
+
+MySQL:
+
+```bash
+docker compose -f docker-compose.mysql.yml stop mizupanel
+docker compose -f docker-compose.mysql.yml exec -T mysql \
+  sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" exec mysqldump --single-transaction --no-tablespaces -u"$MYSQL_USER" "$MYSQL_DATABASE"' \
+  > "mizupanel-db-$(date +%Y%m%d-%H%M%S).sql"
+tar -czf "mizupanel-key-$(date +%Y%m%d-%H%M%S).tar.gz" data
+docker compose -f docker-compose.mysql.yml start mizupanel
+```
+
+Include your authentication override in these commands when applicable, and replace `data` with the actual directory if customized.
+
+Set `MIZUPANEL_IMAGE` in `.env` to the new published version, then pull and recreate:
+
+```bash
+docker compose pull mizupanel
+docker compose up -d mizupanel
+curl -fsS "http://127.0.0.1:${MIZUPANEL_PORT:-8080}/api/system/about"
+```
+
+For MySQL, include `-f docker-compose.mysql.yml`. With authentication enabled, verify the version in the signed-in panel or container logs. Rollback requires the old image and a matching pre-upgrade backup; do not assume old code can read a database migrated by a newer version.
+
+`docker compose down` retains named volumes and host data. **`down -v` deletes the MySQL volume**; use it only when intentionally erasing a test environment after confirming backups. Do not use a global `docker system prune --volumes` on an existing deployment.
 
 ## Server Config
 
@@ -258,7 +319,7 @@ server:
 
 ## Admin Authentication
 
-The Dashboard is unauthenticated by default for trusted self-hosted usage. Enable admin authentication before exposing it beyond a trusted network:
+The Dashboard is unauthenticated by default. Enable authentication before remote exposure and restrict network access; see [remote access](#remote-access) for explicitly passing variables through Compose:
 
 ```yaml
 security:
@@ -391,7 +452,7 @@ Events contain only bounded operation categories, actor types, source IPs, expli
 
 ## Agent Install
 
-The recommended path is to click **添加服务器** in the Dashboard and copy the generated Linux or Windows command. The Server generates a short-lived, bootstrap-only `install_token` for each command; its current TTL is 30 minutes.
+The recommended path is to open **Hosts → Add Host** and copy the generated Linux or Windows command. The Server generates a short-lived, bootstrap-only `install_token` for each command; its current TTL is 30 minutes.
 
 Linux example:
 
